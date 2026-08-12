@@ -1,0 +1,12 @@
+.code-review-graph/
+.build/
+.swiftpm/
+ClipnestApp/*.xcodeproj/
+DerivedData/
+# Release pipeline output (scripts/build.sh, sign.sh, notarize.sh,
+# package_dmg.sh) — generated artifacts (.xcarchive, .app, .zip, .dmg,
+# ExportOptions.plist), never committed. See scripts/*.sh (T35-T37).
+build/
+.superpowers/
+archived-images/
+.DS_Store

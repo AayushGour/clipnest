@@ -1,0 +1,24 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/aayushgour/Desktop/harness/tools/code_review_graph/ensure_graph.py --build"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/aayushgour/Desktop/harness/tools/web_search/ensure_searxng.py --stop"
+          }
+        ]
+      }
+    ]
+  }
+}

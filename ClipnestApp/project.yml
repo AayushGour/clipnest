@@ -1,0 +1,82 @@
+name: ClipnestApp
+options:
+  bundleIdPrefix: com.clipnest
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+packages:
+  ClipnestCore:
+    path: ..
+  # Sindre Sorhus, MIT — the one approved third-party dependency for
+  # ClipnestApp per coding-standards.md's Dependency policy. Used only for
+  # global-hotkey registration (plan task T27) + a future Settings recorder
+  # (T28). Pinned to the latest stable *major* verified at implementation
+  # time (2026-08-06) via `git ls-remote --tags` + the GitHub releases API
+  # (an initial `git ls-remote | sort -V | tail` mis-sorted "v1.x" tags
+  # ahead of the unprefixed "3.x" tags the project switched to after 1.17.0
+  # — re-verified against the full, unfiltered tag list before pinning; see
+  # project-context.md D11 for the full trail).
+  KeyboardShortcuts:
+    url: https://github.com/sindresorhus/KeyboardShortcuts
+    from: 3.0.1
+targets:
+  ClipnestApp:
+    type: application
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Sources
+      # Resources (Assets.xcassets — AppIcon + MenuBarIcon) must live under
+      # `sources`, NOT a `resources:` key: XcodeGen has no target-level
+      # `resources` key, so the old `resources:` block was silently ignored
+      # and the asset catalog never compiled (no Assets.car → no app/menu-bar
+      # icon). XcodeGen auto-assigns .xcassets to the asset-compile phase and
+      # leaves the .entitlements file (referenced via CODE_SIGN_ENTITLEMENTS)
+      # out of any build phase.
+      - path: Resources
+    dependencies:
+      - package: ClipnestCore
+        product: ClipnestCore
+      - package: KeyboardShortcuts
+        product: KeyboardShortcuts
+    settings:
+      base:
+        PRODUCT_NAME: Clipnest
+        PRODUCT_BUNDLE_IDENTIFIER: com.clipnest.app
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        SWIFT_VERSION: "6.0"
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_ENTITLEMENTS: Resources/ClipnestApp.entitlements
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_LSUIElement: YES
+        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      configs:
+        # Release-only signing settings for the Developer ID distribution
+        # build (plan T36). Values are parameterized via XcodeGen's ${VAR}
+        # environment-variable expansion (expanded at `xcodegen generate`
+        # time from the shell) and are NEVER hardcoded here — if the env
+        # var is unset, XcodeGen substitutes an empty string, which is fine:
+        # scripts/build.sh's archive step always overrides with
+        # CODE_SIGNING_ALLOWED=NO/CODE_SIGNING_REQUIRED=NO so an unset
+        # value never blocks a build. Set DEVELOPMENT_TEAM (Apple Developer
+        # Team ID) and CODE_SIGN_IDENTITY (e.g. "Developer ID Application")
+        # in your own shell/CI environment before `xcodegen generate` to
+        # produce a Release build pre-configured for real Developer ID
+        # signing. The actual signing step itself lives in scripts/sign.sh,
+        # which takes the full identity string as an argument/env var of
+        # its own — never sourced from this file.
+        Release:
+          CODE_SIGN_STYLE: Manual
+          DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
+          CODE_SIGN_IDENTITY: ${CODE_SIGN_IDENTITY}
+schemes:
+  ClipnestApp:
+    build:
+      targets:
+        ClipnestApp: all
+    run:
+      config: Debug
+    test:
+      config: Debug
