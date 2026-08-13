@@ -52,11 +52,13 @@ public actor SwiftDataSnippetStore: SnippetStore {
   /// see `SwiftDataClipStore.makeTestContainer()`'s doc comment for the
   /// full rationale, which applies identically here.
   public static func makeTestContainer() throws -> ModelContainer {
-    // Explicit Schema + name so SwiftData never falls back to `Bundle.main`
-    // for the store name — see SwiftDataClipStore.makeTestContainer().
+    // Unique throwaway temp-file store, not `isStoredInMemoryOnly`, to dodge
+    // Xcode 16's "Unable to determine Bundle Name" crash in SwiftPM test
+    // bundles — see SwiftDataClipStore.makeTestContainer() for the full why.
     let schema = Schema([SnippetRecord.self])
-    let configuration = ModelConfiguration(
-      "ClipnestSnippetTests", schema: schema, isStoredInMemoryOnly: true)
+    let url = FileManager.default.temporaryDirectory
+      .appendingPathComponent("ClipnestSnippetTest-\(UUID().uuidString).store")
+    let configuration = ModelConfiguration(schema: schema, url: url)
     do {
       return try ModelContainer(for: schema, configurations: configuration)
     } catch {
