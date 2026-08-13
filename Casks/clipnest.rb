@@ -2,7 +2,7 @@ cask "clipnest" do
   # `version` and `sha256` below are rewritten automatically by the Release
   # workflow (.github/workflows/release.yml) on every tagged release — no manual
   # edits needed. `:no_check` is only the pre-first-release placeholder.
-  version "0.1.0"
+  version "0.2.0"
   sha256 :no_check
 
   url "https://github.com/AayushGour/clipnest/releases/download/v#{version}/Clipnest-#{version}.dmg",
