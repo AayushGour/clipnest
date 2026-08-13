@@ -73,9 +73,15 @@ public actor SwiftDataClipStore: ClipStore {
   /// to this file, so this factory (rather than a test-side literal) is the
   /// only way test code can construct a container for it.
   public static func makeTestContainer() throws -> ModelContainer {
-    let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+    // Pass an explicit Schema + name: without them, SwiftData derives the
+    // store name from `Bundle.main`, which has no name inside a SwiftPM test
+    // bundle on CI and crashes with "Unable to determine Bundle Name" — even
+    // for an in-memory store.
+    let schema = Schema([ClipItemRecord.self])
+    let configuration = ModelConfiguration(
+      "ClipnestClipTests", schema: schema, isStoredInMemoryOnly: true)
     do {
-      return try ModelContainer(for: ClipItemRecord.self, configurations: configuration)
+      return try ModelContainer(for: schema, configurations: configuration)
     } catch {
       throw ClipStoreError.ioFailure(underlying: String(describing: error))
     }

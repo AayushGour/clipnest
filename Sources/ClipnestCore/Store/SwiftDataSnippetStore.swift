@@ -52,9 +52,13 @@ public actor SwiftDataSnippetStore: SnippetStore {
   /// see `SwiftDataClipStore.makeTestContainer()`'s doc comment for the
   /// full rationale, which applies identically here.
   public static func makeTestContainer() throws -> ModelContainer {
-    let configuration = ModelConfiguration(isStoredInMemoryOnly: true)
+    // Explicit Schema + name so SwiftData never falls back to `Bundle.main`
+    // for the store name — see SwiftDataClipStore.makeTestContainer().
+    let schema = Schema([SnippetRecord.self])
+    let configuration = ModelConfiguration(
+      "ClipnestSnippetTests", schema: schema, isStoredInMemoryOnly: true)
     do {
-      return try ModelContainer(for: SnippetRecord.self, configurations: configuration)
+      return try ModelContainer(for: schema, configurations: configuration)
     } catch {
       throw SnippetStoreError.ioFailure(underlying: String(describing: error))
     }
