@@ -1,8 +1,13 @@
 name: Release
 
-# Builds Clipnest and publishes a GitHub Release with a .dmg whenever you push
-# a version tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`). The .dmg is
-# what `brew install --cask` and manual downloads pull from.
+# Auto-releases on every push to `main`. Reads MARKETING_VERSION from
+# ClipnestApp/project.yml; if no `v<version>` tag exists yet, it builds
+# Clipnest, publishes a GitHub Release with a .dmg, AND creates the tag on
+# that commit. Bump the version in project.yml (+ Casks/clipnest.rb) and push
+# — that's the whole release ritual. No manual `git tag` needed.
+#
+# Why not a separate tag-push trigger? A tag pushed by GITHUB_TOKEN does NOT
+# re-trigger `on: push: tags` workflows, so we tag + release in one run instead.
 #
 # Signing/notarization is OPTIONAL: if the Developer ID secrets below are set,
 # the .dmg is signed + notarized (Gatekeeper-clean). If not, it still builds
@@ -17,15 +22,47 @@ name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    branches: [main]
+  workflow_dispatch: {}
 
 permissions:
-  contents: write   # needed to create the Release
+  contents: write   # needed to create the Release + tag
 
 jobs:
+  # Cheap gate: figure out the version and whether it's already been released.
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      should_release: ${{ steps.v.outputs.should_release }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version + check for existing tag
+        id: v
+        run: |
+          set -euo pipefail
+          VERSION="$(grep -E '^\s*MARKETING_VERSION:' ClipnestApp/project.yml \
+            | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not read MARKETING_VERSION from ClipnestApp/project.yml"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if git ls-remote --exit-code --tags origin "refs/tags/v${VERSION}" >/dev/null 2>&1; then
+            echo "Tag v${VERSION} already exists — nothing to release."
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Version v${VERSION} not released yet — will build + tag."
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+          fi
+
   release:
+    needs: check
+    if: ${{ needs.check.outputs.should_release == 'true' }}
     runs-on: macos-14
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -81,18 +118,18 @@ jobs:
       - name: Name the DMG with the version
         id: dmg
         run: |
-          VERSION="${GITHUB_REF_NAME#v}"
           OUT="build/Clipnest-${VERSION}.dmg"
           mv build/Clipnest.dmg "$OUT"
           echo "path=$OUT" >> "$GITHUB_OUTPUT"
           echo "sha256=$(shasum -a 256 "$OUT" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
 
-      - name: Create GitHub Release
+      - name: Create GitHub Release (creates tag v$VERSION on this commit)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "${{ steps.dmg.outputs.path }}" \
-            --title "Clipnest $GITHUB_REF_NAME" \
+          gh release create "v${VERSION}" "${{ steps.dmg.outputs.path }}" \
+            --title "Clipnest v${VERSION}" \
+            --target "$GITHUB_SHA" \
             --generate-notes \
             --notes "**SHA-256:** \`${{ steps.dmg.outputs.sha256 }}\`"
 
@@ -101,12 +138,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          VERSION="${GITHUB_REF_NAME#v}"
           SHA="${{ steps.dmg.outputs.sha256 }}"
           BRANCH="$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)"
-          # The build ran on a detached tag checkout — move to the default
-          # branch to commit the cask bump (tag builds don't re-trigger this
-          # workflow, so there's no loop).
           git fetch origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
           git checkout -B "$BRANCH" "origin/${BRANCH}"
           sed -i '' -E "s/^  version \".*\"/  version \"${VERSION}\"/" Casks/clipnest.rb
@@ -119,4 +152,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Casks/clipnest.rb
           git commit -m "cask: clipnest ${VERSION}"
+          # Pushed by GITHUB_TOKEN → does not re-trigger this workflow (and even
+          # if it did, the tag now exists, so `check` would skip). No loop.
           git push origin "HEAD:${BRANCH}"
