@@ -3,7 +3,7 @@ cask "clipnest" do
   # workflow (.github/workflows/release.yml) on every tagged release — no manual
   # edits needed. `:no_check` is only the pre-first-release placeholder.
   version "0.5.0"
-  sha256 :no_check
+  sha256 "ed20b73fb4253ba0058d584250d30b3ca6057bd271bf9f3b5ec0d8476f0b7605"
 
   url "https://github.com/AayushGour/clipnest/releases/download/v#{version}/Clipnest-#{version}.dmg",
       verified: "github.com/AayushGour/clipnest/"
