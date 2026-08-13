@@ -98,9 +98,13 @@ public actor SwiftDataClipStore: ClipStore {
   /// production code, which always uses `makeProductionContainer()`'s fixed
   /// path under `~/Library/Application Support/Clipnest`.
   public static func makeContainerForTesting(at url: URL) throws -> ModelContainer {
-    let configuration = ModelConfiguration(url: url)
+    // Explicit Schema so SwiftData doesn't infer the model via `Bundle.main` —
+    // that inference crashes ("Unable to determine Bundle Name") in a SwiftPM
+    // test bundle on Xcode 16.2. See makeTestContainer() for the full why.
+    let schema = Schema([ClipItemRecord.self])
+    let configuration = ModelConfiguration(schema: schema, url: url)
     do {
-      return try ModelContainer(for: ClipItemRecord.self, configurations: configuration)
+      return try ModelContainer(for: schema, configurations: configuration)
     } catch {
       throw ClipStoreError.ioFailure(underlying: String(describing: error))
     }

@@ -70,9 +70,12 @@ public actor SwiftDataSnippetStore: SnippetStore {
   /// explicit `url` — see `SwiftDataClipStore.makeContainerForTesting(at:)`'s
   /// doc comment for the full rationale, which applies identically here.
   public static func makeContainerForTesting(at url: URL) throws -> ModelContainer {
-    let configuration = ModelConfiguration(url: url)
+    // Explicit Schema to dodge the Xcode 16.2 "Unable to determine Bundle
+    // Name" crash from bundle-based model inference — see makeTestContainer().
+    let schema = Schema([SnippetRecord.self])
+    let configuration = ModelConfiguration(schema: schema, url: url)
     do {
-      return try ModelContainer(for: SnippetRecord.self, configurations: configuration)
+      return try ModelContainer(for: schema, configurations: configuration)
     } catch {
       throw SnippetStoreError.ioFailure(underlying: String(describing: error))
     }
