@@ -63,6 +63,9 @@ jobs:
     runs-on: macos-14
     env:
       VERSION: ${{ needs.check.outputs.version }}
+      # `secrets` can't be referenced in a step `if:`, but it CAN in job env.
+      # Hoist the presence check here, then test env.HAS_SIGNING in the step.
+      HAS_SIGNING: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -84,7 +87,7 @@ jobs:
         run: scripts/build.sh
 
       - name: Sign + notarize (only if Developer ID secrets are present)
-        if: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 != '' }}
+        if: ${{ env.HAS_SIGNING == 'true' }}
         env:
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
           MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
