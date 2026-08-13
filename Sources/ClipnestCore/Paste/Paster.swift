@@ -58,6 +58,12 @@ public protocol PasteboardWriting: Sendable {
   func writeRichText(rtf: Data, plain: String)
 }
 
+// `PasteboardWriting` refines `Sendable`, but `NSPasteboard` is an AppKit type
+// declared in another module, so Swift 6 requires the Sendable conformance be
+// spelled out as `@retroactive @unchecked` in a standalone extension. NSPasteboard
+// is a thread-safe system singleton, so `@unchecked` is sound here.
+extension NSPasteboard: @retroactive @unchecked Sendable {}
+
 extension NSPasteboard: PasteboardWriting {
   public func writeString(_ string: String, forType type: NSPasteboard.PasteboardType) {
     clearContents()
