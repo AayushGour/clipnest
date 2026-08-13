@@ -1,0 +1,122 @@
+name: Release
+
+# Builds Clipnest and publishes a GitHub Release with a .dmg whenever you push
+# a version tag (e.g. `git tag v0.1.0 && git push origin v0.1.0`). The .dmg is
+# what `brew install --cask` and manual downloads pull from.
+#
+# Signing/notarization is OPTIONAL: if the Developer ID secrets below are set,
+# the .dmg is signed + notarized (Gatekeeper-clean). If not, it still builds
+# and releases an UNSIGNED .dmg — usable, but users must right-click → Open on
+# first launch (or run `xattr -dr com.apple.quarantine /Applications/Clipnest.app`).
+#
+# To enable signing, add these repo secrets (Settings → Secrets → Actions):
+#   MACOS_CERTIFICATE_P12_BASE64  – base64 of your "Developer ID Application" .p12
+#   MACOS_CERTIFICATE_PASSWORD    – the .p12 export password
+#   CODESIGN_IDENTITY             – e.g. "Developer ID Application: Your Name (TEAMID)"
+#   NOTARY_APPLE_ID / NOTARY_TEAM_ID / NOTARY_PASSWORD – for notarytool
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write   # needed to create the Release
+
+jobs:
+  release:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode (Swift 6)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install build tools
+        run: brew install xcodegen create-dmg
+
+      - name: Run core tests
+        run: swift test
+
+      - name: Build app
+        env:
+          # If set, project.yml's Release config uses it for a developer-id export.
+          DEVELOPMENT_TEAM: ${{ secrets.NOTARY_TEAM_ID }}
+        run: scripts/build.sh
+
+      - name: Sign + notarize (only if Developer ID secrets are present)
+        if: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 != '' }}
+        env:
+          MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          CODESIGN_IDENTITY: ${{ secrets.CODESIGN_IDENTITY }}
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          # Import the signing cert into a temporary keychain.
+          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
+          KEYCHAIN_PW="$(uuidgen)"
+          security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
+          echo "$MACOS_CERTIFICATE_P12_BASE64" | base64 --decode > "$RUNNER_TEMP/cert.p12"
+          security import "$RUNNER_TEMP/cert.p12" -k "$KEYCHAIN" \
+            -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PW" "$KEYCHAIN"
+          security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
+          # Notary keychain profile for scripts/notarize.sh.
+          xcrun notarytool store-credentials clipnest-notary \
+            --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" \
+            --keychain "$KEYCHAIN"
+          scripts/sign.sh "$CODESIGN_IDENTITY"
+          scripts/notarize.sh clipnest-notary
+
+      - name: Package DMG
+        run: scripts/package_dmg.sh
+
+      - name: Name the DMG with the version
+        id: dmg
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          OUT="build/Clipnest-${VERSION}.dmg"
+          mv build/Clipnest.dmg "$OUT"
+          echo "path=$OUT" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(shasum -a 256 "$OUT" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" "${{ steps.dmg.outputs.path }}" \
+            --title "Clipnest $GITHUB_REF_NAME" \
+            --generate-notes \
+            --notes "**SHA-256:** \`${{ steps.dmg.outputs.sha256 }}\`"
+
+      - name: Auto-update Homebrew cask (version + sha256)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME#v}"
+          SHA="${{ steps.dmg.outputs.sha256 }}"
+          BRANCH="$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)"
+          # The build ran on a detached tag checkout — move to the default
+          # branch to commit the cask bump (tag builds don't re-trigger this
+          # workflow, so there's no loop).
+          git fetch origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
+          git checkout -B "$BRANCH" "origin/${BRANCH}"
+          sed -i '' -E "s/^  version \".*\"/  version \"${VERSION}\"/" Casks/clipnest.rb
+          sed -i '' -E "s|^  sha256 .*|  sha256 \"${SHA}\"|" Casks/clipnest.rb
+          if git diff --quiet Casks/clipnest.rb; then
+            echo "Cask already current — nothing to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/clipnest.rb
+          git commit -m "cask: clipnest ${VERSION}"
+          git push origin "HEAD:${BRANCH}"

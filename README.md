@@ -71,9 +71,20 @@ Your clipboard is some of the most sensitive data on your machine — passwords,
 
 ## Install
 
-### Download (recommended)
+### Homebrew (recommended)
 
-Grab the latest signed, notarized `.dmg` from the [**Releases**](../../releases) page, drag Clipnest to your Applications folder, and launch it. *(The release pipeline that builds, signs, and notarizes that `.dmg` is documented in [Release](#release) — the first signed build depends on the maintainer's own Apple Developer account being wired up.)*
+```bash
+brew tap aayushgour/clipnest https://github.com/AayushGour/clipnest
+brew install --cask clipnest
+```
+
+Later, `brew upgrade --cask clipnest` updates it.
+
+### Download the `.dmg`
+
+Grab the latest `.dmg` from the [**Releases**](../../releases) page, open it, and drag Clipnest to your Applications folder.
+
+> **First launch:** until the app is signed with an Apple Developer ID and notarized, macOS Gatekeeper flags it as from an "unidentified developer." Right-click Clipnest → **Open** once, or run `xattr -dr com.apple.quarantine /Applications/Clipnest.app`. Wire a Developer ID into the [release workflow](.github/workflows/release.yml) and builds become notarized, so this step disappears.
 
 ### Build from source
 
@@ -99,6 +110,23 @@ open DerivedData/Build/Products/Debug/Clipnest.app   # if built with -derivedDat
 ```
 
 On first launch, grant Clipnest **Accessibility** access (System Settings → Privacy & Security → Accessibility) so it can paste into other apps and expand snippets. Everything else works without it. Because unsigned dev builds get a fresh code identity each rebuild, macOS may ask you to re-grant Accessibility after rebuilding.
+
+## Uninstall
+
+```bash
+# Homebrew
+brew uninstall --cask clipnest          # removes the app
+brew uninstall --zap --cask clipnest    # also deletes local history, snippets & preferences
+```
+
+Installed the `.dmg` manually? Drag **Clipnest** from Applications to the Trash, then (optionally) remove its local data:
+
+```bash
+rm -rf ~/Library/Application\ Support/Clipnest \
+       ~/Library/Preferences/com.clipnest.app.plist
+```
+
+Everything Clipnest stores is local, so removing those two paths leaves nothing behind.
 
 ## Usage
 
