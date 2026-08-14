@@ -8,11 +8,13 @@ cask "clipnest" do
   url "https://github.com/AayushGour/clipnest/releases/download/v#{version}/Clipnest-#{version}.dmg",
       verified: "github.com/AayushGour/clipnest/"
   name "Clipnest"
-  desc "Fast, private, native clipboard manager for macOS"
+  desc "Fast, private, native clipboard manager"
   homepage "https://github.com/AayushGour/clipnest"
 
   # Clipnest is a menu-bar app; no auto-update yet, so no `livecheck`/`auto_updates`.
-  depends_on macos: ">= :sonoma"
+  # Bare `:sonoma` means "Sonoma or newer" — the `">= :sonoma"` string form is
+  # deprecated by Homebrew.
+  depends_on macos: :sonoma
 
   app "Clipnest.app"
 
@@ -22,8 +24,23 @@ cask "clipnest" do
   # local history, snippets, and preferences below.
   zap trash: [
     "~/Library/Application Support/Clipnest",
-    "~/Library/Preferences/com.clipnest.app.plist",
     "~/Library/Caches/com.clipnest.app",
     "~/Library/HTTPStorages/com.clipnest.app",
+    "~/Library/Preferences/com.clipnest.app.plist",
   ]
+
+  # Clipnest isn't signed with an Apple Developer ID yet, so macOS Gatekeeper
+  # quarantines it on install and blocks first launch. Tell the user how to
+  # allow it (there is no `brew trust` command — this is the real step).
+  caveats <<~EOS
+    Clipnest is not yet notarized, so macOS Gatekeeper will block it on first
+    launch ("unidentified developer" / "damaged"). To allow it, clear the
+    quarantine attribute:
+
+      xattr -dr com.apple.quarantine /Applications/Clipnest.app
+
+    Or skip quarantine at install time instead:
+
+      brew install --cask --no-quarantine clipnest
+  EOS
 end

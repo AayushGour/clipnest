@@ -75,10 +75,23 @@ Your clipboard is some of the most sensitive data on your machine — passwords,
 
 ```bash
 brew tap aayushgour/clipnest https://github.com/AayushGour/clipnest
-brew install --cask clipnest
+brew install --cask --no-quarantine clipnest
 ```
 
 Later, `brew upgrade --cask clipnest` updates it.
+
+> **Why `--no-quarantine`?** Clipnest isn't notarized with an Apple Developer ID
+> yet, so without this flag macOS Gatekeeper blocks first launch ("unidentified
+> developer" / "damaged"). There is **no `brew trust` command** — `--no-quarantine`
+> (or the `xattr` step below) is the actual fix. If you already installed without
+> it, clear the quarantine attribute once:
+>
+> ```bash
+> xattr -dr com.apple.quarantine /Applications/Clipnest.app
+> ```
+>
+> Once a Developer ID is wired into the [release workflow](.github/workflows/release.yml),
+> builds are notarized and this step disappears.
 
 ### Download the `.dmg`
 
