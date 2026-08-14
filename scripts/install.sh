@@ -21,12 +21,17 @@ APP="Clipnest.app"
 DEST="/Applications"
 
 echo "==> Finding the latest Clipnest release…"
-DMG_URL="$(
-  curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
-    | grep -o '"browser_download_url": *"[^"]*\.dmg"' \
-    | head -1 \
-    | sed -E 's/.*"(https[^"]+)"/\1/'
-)"
+# Fetch first, parse second: if `curl` itself fails, `set -e` kills us right
+# here with curl's own error — that's fine, it's loud. But the *parsing*
+# pipeline below must NOT be allowed to kill the script via set -e/pipefail
+# when grep simply finds no match (e.g. a release with no .dmg asset) — that
+# is exactly the silent-death bug this script used to have. So the parse is
+# suffixed with `|| true` and its result is checked with an explicit guard.
+RELEASE_JSON="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")"
+DMG_URL="$(printf '%s' "${RELEASE_JSON}" \
+  | grep -o '"browser_download_url": *"[^"]*\.dmg"' \
+  | head -1 \
+  | sed -E 's/.*"(https[^"]+)"/\1/' || true)"
 if [ -z "${DMG_URL}" ]; then
   echo "error: no .dmg asset found on the latest release of ${REPO}" >&2
   exit 1
@@ -35,7 +40,9 @@ fi
 TMP="$(mktemp -d)"
 MNT=""
 cleanup() {
-  [ -n "${MNT}" ] && hdiutil detach "${MNT}" -quiet 2>/dev/null || true
+  if [ -n "${MNT}" ]; then
+    hdiutil detach "${MNT}" -quiet 2>/dev/null || true
+  fi
   rm -rf "${TMP}"
 }
 trap cleanup EXIT
@@ -44,9 +51,18 @@ echo "==> Downloading ${DMG_URL##*/} (via curl — no quarantine flag)…"
 curl -fL "${DMG_URL}" -o "${TMP}/Clipnest.dmg"
 
 echo "==> Mounting…"
-MNT="$(hdiutil attach "${TMP}/Clipnest.dmg" -nobrowse -quiet | grep -o '/Volumes/[^[:cntrl:]]*' | tail -1)"
+# NOTE: `-quiet` here was the root cause of a silent-exit bug — it suppresses
+# ALL of hdiutil's stdout (the mount table), so the grep below always came up
+# empty, grep exited 1, and under `set -euo pipefail` that killed the script
+# at this assignment line — BEFORE the `[ -z "${MNT}" ]` guard below ever ran.
+# Fix: capture the (now non-empty) attach output first, parse it second, and
+# never let the parse pipeline itself trigger set -e (see `|| true` above).
+ATTACH_OUT="$(hdiutil attach "${TMP}/Clipnest.dmg" -nobrowse -noverify -noautoopen)"
+MNT="$(printf '%s' "${ATTACH_OUT}" | grep -oE '/Volumes/.+$' | tail -1 || true)"
 if [ -z "${MNT}" ] || [ ! -d "${MNT}/${APP}" ]; then
-  echo "error: could not mount the DMG or find ${APP} inside it" >&2
+  echo "error: mounted the DMG but couldn't find ${APP} inside it" >&2
+  echo "--- hdiutil attach output ---" >&2
+  echo "${ATTACH_OUT}" >&2
   exit 1
 fi
 
@@ -56,7 +72,13 @@ cp -R "${MNT}/${APP}" "${DEST}/"
 # Belt-and-suspenders: strip quarantine in case a previous browser download set it.
 xattr -dr com.apple.quarantine "${DEST}/${APP}" 2>/dev/null || true
 
+if [ ! -d "${DEST}/${APP}" ]; then
+  echo "error: install failed — ${DEST}/${APP} does not exist after copy" >&2
+  exit 1
+fi
+INSTALLED_VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "${DEST}/${APP}/Contents/Info.plist" 2>/dev/null || echo 'unknown')"
+
 echo "==> Launching Clipnest…"
 open "${DEST}/${APP}"
 
-echo "Done. Clipnest is in ${DEST} and running in your menu bar (⌥⌘V to open the picker)."
+echo "Done. Clipnest ${INSTALLED_VERSION} is in ${DEST} and running in your menu bar (⌥⌘V to open the picker)."

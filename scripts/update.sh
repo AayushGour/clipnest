@@ -27,7 +27,12 @@ INSTALLED="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "${AP
 
 echo "==> Checking latest release…"
 RELEASE_JSON="$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest")"
-LATEST="$(printf '%s' "${RELEASE_JSON}" | grep -o '"tag_name": *"[^"]*"' | head -1 | sed -E 's/.*"([^"]+)"/\1/')"
+# Parse pipelines that end in `grep -o` must never be allowed to kill the
+# script via set -e/pipefail on a simple "no match" — grep exiting 1 there is
+# an expected, recoverable outcome (e.g. a malformed release), not a fatal
+# error, and it must reach the explicit guard below instead of dying silently
+# mid-assignment (this was the exact shape of the mount-parsing bug).
+LATEST="$(printf '%s' "${RELEASE_JSON}" | grep -o '"tag_name": *"[^"]*"' | head -1 | sed -E 's/.*"([^"]+)"/\1/' || true)"
 LATEST="${LATEST#v}"
 if [ -z "${LATEST}" ]; then
   echo "error: could not determine the latest release version" >&2
@@ -40,7 +45,7 @@ if [ "${INSTALLED}" = "${LATEST}" ]; then
   exit 0
 fi
 
-DMG_URL="$(printf '%s' "${RELEASE_JSON}" | grep -o '"browser_download_url": *"[^"]*\.dmg"' | head -1 | sed -E 's/.*"(https[^"]+)"/\1/')"
+DMG_URL="$(printf '%s' "${RELEASE_JSON}" | grep -o '"browser_download_url": *"[^"]*\.dmg"' | head -1 | sed -E 's/.*"(https[^"]+)"/\1/' || true)"
 if [ -z "${DMG_URL}" ]; then
   echo "error: no .dmg asset found on the latest release" >&2
   exit 1
@@ -49,7 +54,9 @@ fi
 TMP="$(mktemp -d)"
 MNT=""
 cleanup() {
-  [ -n "${MNT}" ] && hdiutil detach "${MNT}" -quiet 2>/dev/null || true
+  if [ -n "${MNT}" ]; then
+    hdiutil detach "${MNT}" -quiet 2>/dev/null || true
+  fi
   rm -rf "${TMP}"
 }
 trap cleanup EXIT
@@ -58,9 +65,18 @@ echo "==> Downloading ${DMG_URL##*/} (via curl — no quarantine flag)…"
 curl -fL "${DMG_URL}" -o "${TMP}/Clipnest.dmg"
 
 echo "==> Mounting…"
-MNT="$(hdiutil attach "${TMP}/Clipnest.dmg" -nobrowse -quiet | grep -o '/Volumes/[^[:cntrl:]]*' | tail -1)"
+# NOTE: `-quiet` here was the root cause of a silent-exit bug — it suppresses
+# ALL of hdiutil's stdout (the mount table), so the grep below always came up
+# empty, grep exited 1, and under `set -euo pipefail` that killed the script
+# at this assignment line — BEFORE the `[ -z "${MNT}" ]` guard below ever ran.
+# Fix: capture the (now non-empty) attach output first, parse it second, and
+# never let the parse pipeline itself trigger set -e (see `|| true` above).
+ATTACH_OUT="$(hdiutil attach "${TMP}/Clipnest.dmg" -nobrowse -noverify -noautoopen)"
+MNT="$(printf '%s' "${ATTACH_OUT}" | grep -oE '/Volumes/.+$' | tail -1 || true)"
 if [ -z "${MNT}" ] || [ ! -d "${MNT}/${APP}" ]; then
-  echo "error: could not mount the DMG or find ${APP} inside it" >&2
+  echo "error: mounted the DMG but couldn't find ${APP} inside it" >&2
+  echo "--- hdiutil attach output ---" >&2
+  echo "${ATTACH_OUT}" >&2
   exit 1
 fi
 
@@ -73,6 +89,16 @@ rm -rf "${APP_PATH}"
 cp -R "${MNT}/${APP}" "${DEST}/"
 xattr -dr com.apple.quarantine "${APP_PATH}" 2>/dev/null || true
 
+if [ ! -d "${APP_PATH}" ]; then
+  echo "error: update failed — ${APP_PATH} does not exist after copy" >&2
+  exit 1
+fi
+NEW_VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "${APP_PATH}/Contents/Info.plist" 2>/dev/null || echo 'unknown')"
+if [ "${NEW_VERSION}" != "${LATEST}" ]; then
+  echo "error: post-update version (${NEW_VERSION}) does not match expected latest (${LATEST})" >&2
+  exit 1
+fi
+
 echo "==> Relaunching Clipnest…"
 open "${APP_PATH}"
-echo "Updated to ${LATEST}."
+echo "Updated to ${NEW_VERSION}."

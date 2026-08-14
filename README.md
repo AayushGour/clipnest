@@ -71,18 +71,14 @@ Your clipboard is some of the most sensitive data on your machine — passwords,
 
 ## Install
 
-### Install (recommended)
+Run this in Terminal:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash
 ```
 
-Downloads the latest release with `curl` and installs Clipnest into
-`/Applications`. Because `curl` (unlike a browser or AirDrop) never sets the
-`com.apple.quarantine` flag, macOS Gatekeeper doesn't show the "Apple could not
-verify … is free of malware" dialog — the app just launches. No Homebrew, no
-Apple Developer ID needed. (Clipnest is ad-hoc signed, which is all macOS needs
-to run an un-quarantined app.)
+Clipnest installs into your Applications folder and launches. Look for its icon
+in the menu bar, then press **⌥⌘V** to open the picker.
 
 ### Update
 
@@ -90,33 +86,13 @@ to run an un-quarantined app.)
 curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/update.sh | bash
 ```
 
-Checks the latest release and, if it's newer than your installed copy, downloads
-and swaps it in (quitting and relaunching Clipnest). Same "curl sets no
-quarantine flag" benefit as the installer.
-
-### Homebrew
-
-```bash
-brew tap aayushgour/clipnest https://github.com/AayushGour/clipnest
-brew install --cask clipnest
-```
-
-`brew upgrade --cask clipnest` updates it. Clipnest isn't notarized yet, so a
-Homebrew or browser download is quarantined and macOS blocks first launch — clear
-it once with `xattr -dr com.apple.quarantine /Applications/Clipnest.app`, or just
-use the curl installer above, which avoids the quarantine flag entirely.
-
-### Download the `.dmg`
-
-Grab the latest `.dmg` from the [**Releases**](../../releases) page, open it, and drag Clipnest to your Applications folder.
-
-> **First launch:** until the app is signed with an Apple Developer ID and notarized, macOS Gatekeeper flags it as from an "unidentified developer." Right-click Clipnest → **Open** once, or run `xattr -dr com.apple.quarantine /Applications/Clipnest.app`. Wire a Developer ID into the [release workflow](.github/workflows/release.yml) and builds become notarized, so this step disappears.
+Updates Clipnest to the latest version, if a newer one is available.
 
 ### Build from source
 
 ```bash
-# 1. Tooling (one-time)
-brew install xcodegen        # requires Xcode 16+ installed
+# 1. Tooling (one-time): install XcodeGen — see
+#    https://github.com/yonaskolb/XcodeGen#installing  (requires Xcode 16+)
 
 # 2. Clone
 git clone https://github.com/<your-username>/clipnest.git
@@ -139,13 +115,7 @@ On first launch, grant Clipnest **Accessibility** access (System Settings → Pr
 
 ## Uninstall
 
-```bash
-# Homebrew
-brew uninstall --cask clipnest          # removes the app
-brew uninstall --zap --cask clipnest    # also deletes local history, snippets & preferences
-```
-
-Installed the `.dmg` manually? Drag **Clipnest** from Applications to the Trash, then (optionally) remove its local data:
+Drag **Clipnest** from Applications to the Trash. To also remove its local data:
 
 ```bash
 rm -rf ~/Library/Application\ Support/Clipnest \
@@ -221,14 +191,13 @@ Clipnest is intentionally boring in the best way — a small, well-tested native
 │       └── UI/Picker/          # PickerPanel/View/ViewModel, rows, previews, snippet editor
 ├── assets/clipnest-icons/      # Source logo/icon SVGs (master + treatments)
 ├── .github/workflows/          # release.yml — auto-release on push to main (macos-26)
-├── Casks/clipnest.rb           # Homebrew cask (version + sha256 auto-bumped by release)
-├── scripts/                    # build / sign / notarize / package-dmg (used by release.yml + runnable locally)
+├── scripts/                    # install / update (curl), build / sign / notarize / package-dmg
 └── docs/                       # architecture, features, usage, API reference + review reports
 ```
 
 ## Release
 
-Releases are **automated** via GitHub Actions ([`release.yml`](.github/workflows/release.yml)). To ship a version: bump `MARKETING_VERSION` in `ClipnestApp/project.yml` (and `version` in [`Casks/clipnest.rb`](Casks/clipnest.rb)) and push to `main`. The workflow reads the version and, if no matching `v<version>` tag exists yet, builds Clipnest, publishes a GitHub [Release](../../releases) with a `.dmg`, creates the tag on that commit, and auto-bumps the Homebrew cask's `sha256`. No manual `git tag` needed.
+Releases are **automated** via GitHub Actions ([`release.yml`](.github/workflows/release.yml)). To ship a version: bump `MARKETING_VERSION` in `ClipnestApp/project.yml` and push to `main`. The workflow reads the version and, if no matching `v<version>` tag exists yet, builds Clipnest, publishes a GitHub [Release](../../releases) with a `.dmg`, and creates the tag on that commit. No manual `git tag` needed.
 
 > The release job runs on the **`macos-26`** runner (Xcode 26) — required, because on Xcode 16.x SwiftData crashes under `swift test` with `Unable to determine Bundle Name` in a hostless package test target.
 >
