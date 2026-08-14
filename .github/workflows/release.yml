@@ -80,6 +80,13 @@ jobs:
         with:
           xcode-version: 'latest-stable'   # resolves to Xcode 26.6 on macos-26
 
+      - name: Lint (swift-format, strict)
+        # Gate: zero lint errors on Core, Tests, and the App target before we
+        # build or ship. swift-format ships with the Xcode toolchain — no install.
+        run: |
+          swift format lint --recursive --strict Sources Tests
+          swift format lint --recursive --strict ClipnestApp/Sources
+
       - name: Install build tools
         run: brew install xcodegen create-dmg
 

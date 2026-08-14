@@ -62,6 +62,9 @@ public protocol PasteboardWriting: Sendable {
 // declared in another module, so Swift 6 requires the Sendable conformance be
 // spelled out as `@retroactive @unchecked` in a standalone extension. NSPasteboard
 // is a thread-safe system singleton, so `@unchecked` is sound here.
+// The retroactive conformance is required by the language here, so silence the
+// lint rule that would otherwise flag it.
+// swift-format-ignore: AvoidRetroactiveConformances
 extension NSPasteboard: @retroactive @unchecked Sendable {}
 
 extension NSPasteboard: PasteboardWriting {

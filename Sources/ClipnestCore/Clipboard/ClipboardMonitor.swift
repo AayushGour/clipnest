@@ -227,7 +227,20 @@ public final class ClipboardMonitor {
 
     let blobPath: String?
     do {
-      blobPath = try result.rawData.map { try blobStore.write($0) }
+      if let rawData = result.rawData {
+        // Off the main actor: `BlobStore` is `Sendable` and `write(_:)` is
+        // pure filesystem I/O, so a large payload's disk write can't block
+        // the UI here — same `Task.detached(priority: .utility)` pattern
+        // already used for off-main blob reads (`ItemPreview.AsyncBlobImage`,
+        // `ItemRow.load()`). Copied into a local `let` first so the closure
+        // captures the `Sendable` `BlobStore` value, not `self`.
+        let blobStore = self.blobStore
+        blobPath = try await Task.detached(priority: .utility) {
+          try blobStore.write(rawData)
+        }.value
+      } else {
+        blobPath = nil
+      }
     } catch {
       // A blob write failure means this capture cannot be safely stored
       // (a dangling blobPath is worse than not capturing this cycle) — same

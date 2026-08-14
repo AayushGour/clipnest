@@ -55,8 +55,9 @@
 // old in-memory filter's 120ms, since every keystroke's requery is now a
 // real store round-trip, not a pure CPU filter pass); tab switches and
 // kind-filter (chip) changes requery immediately, no debounce. A single
-// generation counter per pipeline (`rowsGeneration`/`snippetsGeneration`)
-// guarantees latest-request-wins even when multiple async triggers race
+// generation counter per pipeline (each pipeline's own `PagedQuery.generation`
+// — see `PagedQuery.swift`) guarantees latest-request-wins even when
+// multiple async triggers race
 // (e.g. a debounce resolving while a mutation-triggered window refresh is
 // also in flight) — whichever requery *started* most recently is the only
 // one ever allowed to land in `rows`/`snippetRows`.
@@ -114,8 +115,10 @@
 // it for match-highlighting/empty-state messaging — see `ItemRow`/
 // `SnippetRow`'s `query:` parameter and `PickerView`'s `emptyStateMessage`/
 // `snippetsEmptyState`, all unchanged) — it's now written in exactly one
-// place, at the tail of `runRowsFirstPageQuery`/`runSnippetsFirstPageQuery`,
-// once a query for that text has actually landed. The live-but-not-yet-
+// place, in `onFirstPageQueryLanded(text:)` (called via `PagedQuery`'s
+// `onLanded` closure at the tail of a landed first-page query — see
+// `PagedQuery.runFirstPage`), once a query for that text has actually
+// landed. The live-but-not-yet-
 // queried text lives separately, in `currentSearchText`. `query`'s own
 // `didSet` now only reacts to a `kindFilter` change (a chip click) — a
 // text-only change reaches it exactly once, internally, when the above
@@ -134,6 +137,20 @@
 // out of scope for this fix (see the routing spec's item 7) and those
 // already have their own non-jarring `.softReconcile`/`.selectNear`
 // behavior that a loader flash would only interrupt.
+//
+// DRY follow-up (review #6): the Rows and Snippets query pipelines below
+// used to each carry their own copy of the debounce/cancel scheduling, the
+// generation-counter race guard, page-state bookkeeping, flush-before-
+// commit, and load-more bail logic — ~250 duplicated lines differing only
+// in element type, the actual store fetch call, the target `@Published`
+// array, and the selection-policy applier. That shared shape is now
+// `PagedQuery<Element>` (see `PagedQuery.swift`); `rowsQuery`/`snippetsQuery`
+// below are its two instances, and every method in the "Rows" and
+// "Snippets" sections is a thin wrapper supplying that pipeline's differing
+// bits as closures. `rows`/`snippetRows` (the actual `@Published` arrays
+// `PickerView` binds to) deliberately stay stored directly on this type
+// rather than moving into `PagedQuery` — see that file's top doc comment
+// for why.
 
 import AppKit
 import ClipnestCore
@@ -163,9 +180,9 @@ final class PickerViewModel: ObservableObject {
   private static let searchDebounce = Duration.milliseconds(400)
 
   /// The *applied* query — `text` is the text a store query has actually
-  /// run for (only ever written by this file, at the tail of
-  /// `runRowsFirstPageQuery`/`runSnippetsFirstPageQuery`, once that query's
-  /// result has landed); `kindFilter` is still the live, directly-bound chip
+  /// run for (only ever written by this file, in
+  /// `onFirstPageQueryLanded(text:)`, once that query's result has landed —
+  /// see that method's doc comment); `kindFilter` is still the live, directly-bound chip
   /// selection (`PickerView`'s `TypeFilterChips(selection:
   /// $viewModel.query.kindFilter)`). See this file's top "Search-debounce +
   /// loader fix" doc comment for why `text` and the *live* field contents
@@ -213,8 +230,8 @@ final class PickerViewModel: ObservableObject {
 
   /// The current *window* of History/Pinned rows loaded from `ClipStore` —
   /// NOT the whole table (see this file's top doc comment). History/Pinned
-  /// share this one array + its paging state (`rowsPage`) since only one of
-  /// the two is ever visible at a time.
+  /// share this one array + its paging state (`rowsQuery.page`) since only
+  /// one of the two is ever visible at a time.
   @Published private(set) var rows: [ClipItem] = []
   @Published var selectedItemID: ClipItem.ID?
   /// The item whose preview should currently show (hover takes priority over
@@ -341,54 +358,20 @@ final class PickerViewModel: ObservableObject {
   /// popover (or back) without it closing underfoot.
   private static let previewCloseGrace = Duration.milliseconds(250)
 
-  /// Paging state for one query pipeline (`rows` or `snippetRows`):
-  /// `offset` is where the *next* page starts, `hasMore` is whether the
-  /// last page came back full (`count == Self.pageSize`) — a short page
-  /// means the store has nothing left to give for the current text/kind/
-  /// scope. Shared shape for both pipelines rather than four loose
-  /// properties, per coding-standards.md's DRY rule.
-  private struct PageState {
-    var offset = 0
-    var hasMore = true
-  }
-  private var rowsPage = PageState()
-  private var snippetsPage = PageState()
-
-  /// Bumped by every operation that's about to (re)populate `rows` from the
-  /// store — first-page requeries (search/tab/kind/live-capture/flush) and
-  /// mutation-triggered window refreshes (pin/delete) alike, via
-  /// `beginNewRowsGeneration()`. Each such operation captures the *new*
-  /// value right after bumping and only applies its result if the
-  /// generation is still current once its `await` returns — so however many
-  /// of these race, only the most recently *started* one's result is ever
-  /// applied to `rows`. `loadMoreRows()` captures the generation active on
-  /// the window it's extending (without bumping it, since it appends rather
-  /// than replaces) and discards its appended page if a newer generation
-  /// has since reset `rows` out from under it.
-  private var rowsGeneration = 0
-  private var snippetsGeneration = 0
-
-  /// The in-flight/pending first-page requery for `rows`, if any — used
-  /// only to know whether `flushPendingRowsQuery()` has anything to flush,
-  /// and to cancel a still-sleeping debounced requery the moment a newer
-  /// trigger supersedes it (a courtesy — `rowsGeneration` alone already
-  /// guarantees correctness even if this weren't cancelled in time).
-  /// Self-nils once its own requery lands.
-  private var rowsQueryTask: Task<Void, Never>?
-  private var snippetsQueryTask: Task<Void, Never>?
-  /// The in-flight "load next page" fetch, if any — separate from
-  /// `rowsQueryTask` because it appends rather than replaces. Cancelled
-  /// (not awaited) by `beginNewRowsGeneration()` whenever a first-page
-  /// requery supersedes it, since its eventual result would no longer make
-  /// sense appended to a freshly-replaced `rows`.
-  private var loadMoreRowsTask: Task<Void, Never>?
-  private var loadMoreSnippetsTask: Task<Void, Never>?
+  /// The Rows (History/Pinned) and Snippets paged-query pipelines — see this
+  /// file's top "DRY follow-up" doc comment and `PagedQuery.swift`. Each
+  /// owns its own paging/generation/task-lifecycle state; the observed item
+  /// arrays (`rows`/`snippetRows`) stay on this type (see below).
+  private let rowsQuery = PagedQuery<ClipItem>(pageSize: PickerViewModel.pageSize)
+  private let snippetsQuery = PagedQuery<Snippet>(pageSize: PickerViewModel.pageSize)
 
   /// The three ways a completed query's result settles selection — mirrors
   /// what the pre-T50 design's `SelectionPolicy` did against an in-memory
   /// filter result; unchanged in spirit, just now applied to a store query
-  /// result instead.
-  private enum SelectionPolicy {
+  /// result instead. Internal (not `private`) since `PagedQuery` — a
+  /// separate type — takes this as a parameter type; still module-private in
+  /// effect, only referenced from this file and `PagedQuery.swift`.
+  enum SelectionPolicy {
     /// Selects the new first result unconditionally — search-text change,
     /// tab switch, a fresh `willShow()`, or a flush.
     case hardReset
@@ -458,14 +441,8 @@ final class PickerViewModel: ObservableObject {
   /// `@Published` state.
   func didHide() {
     isVisible = false
-    rowsQueryTask?.cancel()
-    rowsQueryTask = nil
-    snippetsQueryTask?.cancel()
-    snippetsQueryTask = nil
-    loadMoreRowsTask?.cancel()
-    loadMoreRowsTask = nil
-    loadMoreSnippetsTask?.cancel()
-    loadMoreSnippetsTask = nil
+    rowsQuery.cancelAll()
+    snippetsQuery.cancelAll()
     previewTask?.cancel()
     previewTask = nil
     hoveredItemID = nil
@@ -531,8 +508,9 @@ final class PickerViewModel: ObservableObject {
   /// (`searchTextChanged(_:)`, `debounced: true`), a tab switch, and a
   /// kind-filter chip click (the latter two `debounced: false` — see
   /// `activeTab`'s and `query`'s `didSet`s). Always flips `isSearching` on
-  /// immediately; `runRowsFirstPageQuery`/`runSnippetsFirstPageQuery` flips
-  /// it back off once the result actually lands, so the loader shows for
+  /// immediately; `onFirstPageQueryLanded(text:)` flips it back off once the
+  /// result actually lands (called via `PagedQuery`'s `onLanded` closure —
+  /// see `PagedQuery.runFirstPage`), so the loader shows for
   /// the debounce wait (typing) or just the brief real store round-trip
   /// (tab switch/kind-filter, which skip the debounce sleep but still incur
   /// a real `await`).
@@ -551,67 +529,62 @@ final class PickerViewModel: ObservableObject {
     isSearching = true
     switch activeTab {
     case .history, .pinned:
-      snippetsQueryTask?.cancel()
-      snippetsQueryTask = nil
+      snippetsQuery.cancelPendingQuery()
       scheduleRowsQuery(policy, text: currentSearchText, debounced: debounced)
     case .snippets:
-      rowsQueryTask?.cancel()
-      rowsQueryTask = nil
+      rowsQuery.cancelPendingQuery()
       scheduleSnippetsQuery(policy, text: currentSearchText, debounced: debounced)
     }
   }
 
   // MARK: - Rows (History/Pinned) query pipeline
+  //
+  // Every method below is a thin `rowsQuery` (`PagedQuery<ClipItem>`)
+  // wrapper — see `PagedQuery.swift` for the shared debounce/generation/
+  // load-more mechanics these delegate to. `kind`/`scope` are captured into
+  // local `let`s *here*, synchronously, before handing them to `rowsQuery` —
+  // i.e. snapshotted at schedule time, per this file's top "Search-debounce
+  // + loader fix" doc comment, never re-read live once a debounced/in-
+  // flight fetch actually runs. `fetchRowsPage` is the one place the actual
+  // `ClipStore.query` call lives, reused by all four methods that need it.
+
+  /// The one place `ClipStore.query(...)`'s throws are absorbed to `[]` —
+  /// shared by every Rows pipeline method that fetches a page.
+  private func fetchRowsPage(
+    text: String, kind: ItemKind?, scope: ClipScope, offset: Int, limit: Int
+  ) async -> [ClipItem] {
+    (try? await clipStore.query(text: text, kind: kind, scope: scope, offset: offset, limit: limit))
+      ?? []
+  }
+
+  /// Shared by both pipelines' first-page landings — syncs the *applied*
+  /// query text to what was actually just queried (see `query`'s doc
+  /// comment) and clears the loader now that a result has landed.
+  private func onFirstPageQueryLanded(text: String) {
+    query.text = text
+    isSearching = false
+  }
 
   /// Cancels any pending/in-flight first-page rows requery and starts a
   /// fresh one — either after `Self.searchDebounce` (typing) or immediately
-  /// (every other trigger). See `rowsQueryTask`'s doc comment.
+  /// (every other trigger). See `PagedQuery.scheduleFirstPage`'s doc
+  /// comment.
   private func scheduleRowsQuery(_ policy: SelectionPolicy, text: String, debounced: Bool) {
-    rowsQueryTask?.cancel()
-    let snapshotText = text
-    let snapshotKind = query.kindFilter
-    let snapshotTab = activeTab
-    rowsQueryTask = Task { [weak self] in
-      guard let self else { return }
-      if debounced {
-        try? await Task.sleep(for: Self.searchDebounce)
-        if Task.isCancelled { return }
-      }
-      await self.runRowsFirstPageQuery(
-        text: snapshotText, kind: snapshotKind, tab: snapshotTab, policy: policy)
-      self.rowsQueryTask = nil
-    }
-  }
-
-  /// Bumps `rowsGeneration` and cancels any in-flight load-more (its result
-  /// would no longer make sense appended to a freshly-replaced `rows`).
-  /// Called by every operation that's about to reassign `rows` wholesale —
-  /// see `rowsGeneration`'s doc comment.
-  private func beginNewRowsGeneration() -> Int {
-    rowsGeneration += 1
-    loadMoreRowsTask?.cancel()
-    loadMoreRowsTask = nil
-    return rowsGeneration
-  }
-
-  private func runRowsFirstPageQuery(
-    text: String, kind: ItemKind?, tab: PickerTab, policy: SelectionPolicy
-  ) async {
-    let generation = beginNewRowsGeneration()
-    let scope: ClipScope = tab == .pinned ? .pinned : .history
-    let result =
-      (try? await clipStore.query(
-        text: text, kind: kind, scope: scope, offset: 0, limit: Self.pageSize)) ?? []
-    guard generation == rowsGeneration else { return }
-    rows = result
-    rowsPage = PageState(offset: result.count, hasMore: result.count == Self.pageSize)
-    // Sync the *applied* query text to what was actually just queried (see
-    // `query`'s doc comment) and clear the loader now that a result has
-    // landed — the one place both happen, shared by the scheduled-query
-    // path and the flush-before-commit path below.
-    query.text = text
-    isSearching = false
-    applyRowsSelectionPolicy(policy, result: result)
+    let kind = query.kindFilter
+    let scope: ClipScope = activeTab == .pinned ? .pinned : .history
+    rowsQuery.scheduleFirstPage(
+      text: text, debounced: debounced, debounce: Self.searchDebounce, policy: policy,
+      fetch: { [weak self] in
+        await self?.fetchRowsPage(
+          text: text, kind: kind, scope: scope, offset: 0, limit: Self.pageSize)
+          ?? []
+      },
+      setItems: { [weak self] in self?.rows = $0 },
+      applySelection: { [weak self] policy, result in
+        self?.applyRowsSelectionPolicy(policy, result: result)
+      },
+      onLanded: { [weak self] text in self?.onFirstPageQueryLanded(text: text) }
+    )
   }
 
   /// "Flushes" a pending rows requery before a commit action reads
@@ -621,15 +594,25 @@ final class PickerViewModel: ObservableObject {
   /// comment. Queries against `currentSearchText` (the live field
   /// contents), not the possibly-still-stale `query.text`, so a commit
   /// action fired right after typing always acts on the row matching what's
-  /// actually in the search field. A `nil` `rowsQueryTask` means nothing is
-  /// pending (every non-debounced trigger self-nils it once its requery
-  /// lands) — a correct no-op in that case.
+  /// actually in the search field. See `PagedQuery.flushPending`'s doc
+  /// comment for the no-op-when-nothing-pending behavior.
   private func flushPendingRowsQuery() async {
-    guard rowsQueryTask != nil else { return }
-    rowsQueryTask?.cancel()
-    rowsQueryTask = nil
-    await runRowsFirstPageQuery(
-      text: currentSearchText, kind: query.kindFilter, tab: activeTab, policy: .hardReset)
+    let text = currentSearchText
+    let kind = query.kindFilter
+    let scope: ClipScope = activeTab == .pinned ? .pinned : .history
+    await rowsQuery.flushPending(
+      text: text,
+      fetch: { [weak self] in
+        await self?.fetchRowsPage(
+          text: text, kind: kind, scope: scope, offset: 0, limit: Self.pageSize)
+          ?? []
+      },
+      setItems: { [weak self] in self?.rows = $0 },
+      applySelection: { [weak self] policy, result in
+        self?.applyRowsSelectionPolicy(policy, result: result)
+      },
+      onLanded: { [weak self] text in self?.onFirstPageQueryLanded(text: text) }
+    )
   }
 
   /// Re-queries `rows` from offset 0 up through the currently-loaded window
@@ -637,123 +620,98 @@ final class PickerViewModel: ObservableObject {
   /// delete) so the visible list reflects the change without collapsing
   /// back to a single page if the user had scrolled further.
   private func refreshRowsWindow(policy: SelectionPolicy) async {
-    let generation = beginNewRowsGeneration()
-    let windowSize = max(rows.count, Self.pageSize)
-    let scope: ClipScope = activeTab == .pinned ? .pinned : .history
-    let result =
-      (try? await clipStore.query(
-        text: query.text, kind: query.kindFilter, scope: scope, offset: 0, limit: windowSize)) ?? []
-    guard generation == rowsGeneration else { return }
-    rows = result
-    rowsPage = PageState(offset: result.count, hasMore: result.count == windowSize)
-    applyRowsSelectionPolicy(policy, result: result)
-  }
-
-  private func loadMoreRows() {
-    // Also bails while a first-page requery is pending/in-flight
-    // (`rowsQueryTask != nil`): `rowsPage.offset` was computed for the
-    // window `rows` currently shows, which that pending requery (always a
-    // `.hardReset` — every trigger reaching `scheduleRowsQuery` is
-    // search/tab/kind-driven) is about to wholesale-replace and scroll back
-    // to the top anyway. Appending yet another page of the *soon-to-be-
-    // replaced* window (fetched against `query.text`, the still-old applied
-    // text — see that property's doc comment for why it no longer moves
-    // until the pending requery itself lands) would be pointless UI churn
-    // at best. Harmless to skip.
-    guard rowsPage.hasMore, loadMoreRowsTask == nil, rowsQueryTask == nil else { return }
-    let generation = rowsGeneration
-    let offset = rowsPage.offset
     let text = query.text
     let kind = query.kindFilter
     let scope: ClipScope = activeTab == .pinned ? .pinned : .history
-    loadMoreRowsTask = Task { [weak self] in
-      guard let self else { return }
-      let nextPage =
-        (try? await self.clipStore.query(
-          text: text, kind: kind, scope: scope, offset: offset, limit: Self.pageSize)) ?? []
-      guard !Task.isCancelled, generation == self.rowsGeneration else { return }
-      self.rows.append(contentsOf: nextPage)
-      self.rowsPage = PageState(
-        offset: offset + nextPage.count, hasMore: nextPage.count == Self.pageSize)
-      self.loadMoreRowsTask = nil
-    }
+    await rowsQuery.refreshWindow(
+      policy: policy, currentCount: rows.count,
+      fetch: { [weak self] limit in
+        await self?.fetchRowsPage(text: text, kind: kind, scope: scope, offset: 0, limit: limit)
+          ?? []
+      },
+      setItems: { [weak self] in self?.rows = $0 },
+      applySelection: { [weak self] policy, result in
+        self?.applyRowsSelectionPolicy(policy, result: result)
+      }
+    )
+  }
+
+  private func loadMoreRows() {
+    let text = query.text
+    let kind = query.kindFilter
+    let scope: ClipScope = activeTab == .pinned ? .pinned : .history
+    rowsQuery.loadMore(
+      fetch: { [weak self] offset, limit in
+        await self?.fetchRowsPage(
+          text: text, kind: kind, scope: scope, offset: offset, limit: limit)
+          ?? []
+      },
+      appendItems: { [weak self] in self?.rows.append(contentsOf: $0) }
+    )
   }
 
   // MARK: - Snippets query pipeline (mirrors Rows above)
 
+  /// The one place `SnippetStore.query(...)`'s throws are absorbed to `[]` —
+  /// see `fetchRowsPage`'s matching doc comment.
+  private func fetchSnippetsPage(text: String, offset: Int, limit: Int) async -> [Snippet] {
+    (try? await snippetStore.query(text: text, offset: offset, limit: limit)) ?? []
+  }
+
   private func scheduleSnippetsQuery(_ policy: SelectionPolicy, text: String, debounced: Bool) {
-    snippetsQueryTask?.cancel()
-    let snapshotText = text
-    snippetsQueryTask = Task { [weak self] in
-      guard let self else { return }
-      if debounced {
-        try? await Task.sleep(for: Self.searchDebounce)
-        if Task.isCancelled { return }
-      }
-      await self.runSnippetsFirstPageQuery(text: snapshotText, policy: policy)
-      self.snippetsQueryTask = nil
-    }
-  }
-
-  private func beginNewSnippetsGeneration() -> Int {
-    snippetsGeneration += 1
-    loadMoreSnippetsTask?.cancel()
-    loadMoreSnippetsTask = nil
-    return snippetsGeneration
-  }
-
-  private func runSnippetsFirstPageQuery(text: String, policy: SelectionPolicy) async {
-    let generation = beginNewSnippetsGeneration()
-    let result = (try? await snippetStore.query(text: text, offset: 0, limit: Self.pageSize)) ?? []
-    guard generation == snippetsGeneration else { return }
-    snippetRows = result
-    snippetsPage = PageState(offset: result.count, hasMore: result.count == Self.pageSize)
-    // See `runRowsFirstPageQuery`'s matching lines' doc comment.
-    query.text = text
-    isSearching = false
-    applySnippetsSelectionPolicy(policy, result: result)
+    snippetsQuery.scheduleFirstPage(
+      text: text, debounced: debounced, debounce: Self.searchDebounce, policy: policy,
+      fetch: { [weak self] in
+        await self?.fetchSnippetsPage(text: text, offset: 0, limit: Self.pageSize) ?? []
+      },
+      setItems: { [weak self] in self?.snippetRows = $0 },
+      applySelection: { [weak self] policy, result in
+        self?.applySnippetsSelectionPolicy(policy, result: result)
+      },
+      onLanded: { [weak self] text in self?.onFirstPageQueryLanded(text: text) }
+    )
   }
 
   /// See `flushPendingRowsQuery`'s doc comment — mirrors it for the
   /// Snippets pipeline, including querying against the live
   /// `currentSearchText` rather than the possibly-stale `query.text`.
   private func flushPendingSnippetsQuery() async {
-    guard snippetsQueryTask != nil else { return }
-    snippetsQueryTask?.cancel()
-    snippetsQueryTask = nil
-    await runSnippetsFirstPageQuery(text: currentSearchText, policy: .hardReset)
+    let text = currentSearchText
+    await snippetsQuery.flushPending(
+      text: text,
+      fetch: { [weak self] in
+        await self?.fetchSnippetsPage(text: text, offset: 0, limit: Self.pageSize) ?? []
+      },
+      setItems: { [weak self] in self?.snippetRows = $0 },
+      applySelection: { [weak self] policy, result in
+        self?.applySnippetsSelectionPolicy(policy, result: result)
+      },
+      onLanded: { [weak self] text in self?.onFirstPageQueryLanded(text: text) }
+    )
   }
 
   private func refreshSnippetsWindow(policy: SelectionPolicy) async {
-    let generation = beginNewSnippetsGeneration()
-    let windowSize = max(snippetRows.count, Self.pageSize)
-    let result =
-      (try? await snippetStore.query(text: query.text, offset: 0, limit: windowSize)) ?? []
-    guard generation == snippetsGeneration else { return }
-    snippetRows = result
-    snippetsPage = PageState(offset: result.count, hasMore: result.count == windowSize)
-    applySnippetsSelectionPolicy(policy, result: result)
+    let text = query.text
+    await snippetsQuery.refreshWindow(
+      policy: policy, currentCount: snippetRows.count,
+      fetch: { [weak self] limit in
+        await self?.fetchSnippetsPage(text: text, offset: 0, limit: limit) ?? []
+      },
+      setItems: { [weak self] in self?.snippetRows = $0 },
+      applySelection: { [weak self] policy, result in
+        self?.applySnippetsSelectionPolicy(policy, result: result)
+      }
+    )
   }
 
   private func loadMoreSnippets() {
-    // See `loadMoreRows()`'s doc comment — same "bail while a first-page
-    // requery is pending" reasoning, mirrored for the Snippets pipeline.
-    guard snippetsPage.hasMore, loadMoreSnippetsTask == nil, snippetsQueryTask == nil else {
-      return
-    }
-    let generation = snippetsGeneration
-    let offset = snippetsPage.offset
     let text = query.text
-    loadMoreSnippetsTask = Task { [weak self] in
-      guard let self else { return }
-      let nextPage =
-        (try? await self.snippetStore.query(text: text, offset: offset, limit: Self.pageSize)) ?? []
-      guard !Task.isCancelled, generation == self.snippetsGeneration else { return }
-      self.snippetRows.append(contentsOf: nextPage)
-      self.snippetsPage = PageState(
-        offset: offset + nextPage.count, hasMore: nextPage.count == Self.pageSize)
-      self.loadMoreSnippetsTask = nil
-    }
+    snippetsQuery.loadMore(
+      fetch: { [weak self] offset, limit in
+        await self?.fetchSnippetsPage(text: text, offset: offset, limit: limit) ?? []
+      },
+      appendItems: { [weak self] in self?.snippetRows.append(contentsOf: $0) }
+    )
   }
 
   // MARK: - Infinite scroll (T51/T52)
@@ -895,9 +853,11 @@ final class PickerViewModel: ObservableObject {
   /// `apply*SelectionPolicy` methods (DRY per coding-standards.md) rather
   /// than duplicating the bump in each. Deliberately private and called only
   /// from those two methods: they're reached solely by the async query
-  /// pipeline (`runRowsFirstPageQuery`/`refreshRowsWindow`/
-  /// `runSnippetsFirstPageQuery`/`refreshSnippetsWindow`), never by a manual
-  /// row click or `moveSelection(by:)` (both write `selectedItemID`/
+  /// pipeline, as the `applySelection` closure `PagedQuery.runFirstPage`/
+  /// `PagedQuery.refreshWindow` invoke once a result lands (see
+  /// `scheduleRowsQuery`/`refreshRowsWindow`/`scheduleSnippetsQuery`/
+  /// `refreshSnippetsWindow`'s wiring), never by a manual row click or
+  /// `moveSelection(by:)` (both write `selectedItemID`/
   /// `selectedSnippetID` directly) — so this can never re-steal focus from a
   /// row the user explicitly selected.
   private func reassertSearchFieldFocus() {

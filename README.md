@@ -66,7 +66,7 @@ Your clipboard is some of the most sensitive data on your machine — passwords,
 
 - macOS 14 (Sonoma) or later
 - Apple Silicon or Intel
-- Xcode 16+ (Swift 6 toolchain) to build from source
+- Xcode 16+ (Swift 6 toolchain) to build the app — but **Xcode 26+ to run `swift test`**: the SwiftData test suite crashes on Xcode 16.x with `Unable to determine Bundle Name` in a hostless package test target, so CI (and the release build) run on Xcode 26.
 - **Accessibility** permission (optional) — only needed for pasting into other apps and snippet expansion; capturing and searching work without it.
 
 ## Install
@@ -96,7 +96,7 @@ brew install xcodegen        # requires Xcode 16+ installed
 git clone https://github.com/<your-username>/clipnest.git
 cd clipnest
 
-# 3. Test the core logic (no Xcode project needed — pure Swift package)
+# 3. Test the core logic (pure Swift package, no Xcode project needed — needs Xcode 26+; see Requirements)
 swift test
 
 # 4. Generate the Xcode project and build the app
@@ -166,7 +166,13 @@ Clipnest is intentionally boring in the best way — a small, well-tested native
 - **Focus-safe UI:** the picker is a non-activating `NSPanel` so it never steals keyboard focus from the app you were using; the preview popover is a separate non-key panel beside it.
 - **One dependency:** [`KeyboardShortcuts`](https://github.com/sindresorhus/KeyboardShortcuts) (MIT) for global-hotkey registration. Everything else is system frameworks.
 
-Extending Clipnest or building your own frontend on top of `ClipnestCore`? See **[`docs/API.md`](docs/API.md)** for the public API reference.
+**Documentation:**
+
+- **[`docs/architecture.md`](docs/architecture.md)** — system architecture, module reference, data-flow & concurrency diagrams.
+- **[`docs/features.md`](docs/features.md)** — how each feature is implemented, file-by-file.
+- **[`docs/usage.md`](docs/usage.md)** — full end-user guide.
+- **[`docs/API.md`](docs/API.md)** — public `ClipnestCore` API reference. _(Being refreshed — parts lag the current code; `docs/features.md` is the accurate source for now.)_
+- **[`docs/review/`](docs/review/)** — architecture / code / implementation review reports.
 
 ### Project structure
 
@@ -188,13 +194,21 @@ Extending Clipnest or building your own frontend on top of `ClipnestCore`? See *
 │       ├── System/             # HotkeyManager, PermissionsManager, AX + clipboard selection replacers
 │       └── UI/Picker/          # PickerPanel/View/ViewModel, rows, previews, snippet editor
 ├── assets/clipnest-icons/      # Source logo/icon SVGs (master + treatments)
-├── scripts/                    # build / sign / notarize / package-dmg (release pipeline)
-└── docs/                       # API reference + design specs & implementation plans
+├── .github/workflows/          # release.yml — auto-release on push to main (macos-26)
+├── Casks/clipnest.rb           # Homebrew cask (version + sha256 auto-bumped by release)
+├── scripts/                    # build / sign / notarize / package-dmg (used by release.yml + runnable locally)
+└── docs/                       # architecture, features, usage, API reference + review reports
 ```
 
 ## Release
 
-The `.dmg` on the [Releases](../../releases) page is produced by four small, chained shell scripts in [`scripts/`](scripts/) — no CI platform, just local scripts anyone with a Developer ID can run:
+Releases are **automated** via GitHub Actions ([`release.yml`](.github/workflows/release.yml)). To ship a version: bump `MARKETING_VERSION` in `ClipnestApp/project.yml` (and `version` in [`Casks/clipnest.rb`](Casks/clipnest.rb)) and push to `main`. The workflow reads the version and, if no matching `v<version>` tag exists yet, builds Clipnest, publishes a GitHub [Release](../../releases) with a `.dmg`, creates the tag on that commit, and auto-bumps the Homebrew cask's `sha256`. No manual `git tag` needed.
+
+> The release job runs on the **`macos-26`** runner (Xcode 26) — required, because on Xcode 16.x SwiftData crashes under `swift test` with `Unable to determine Bundle Name` in a hostless package test target.
+>
+> Signing/notarization is **optional**: set the `MACOS_CERTIFICATE_*` / `NOTARY_*` repo secrets (see the workflow header) and releases become Gatekeeper-clean; without them the `.dmg` still builds, just unsigned.
+
+Under the hood the workflow chains the same four shell scripts in [`scripts/`](scripts/), which you can also run locally with a Developer ID:
 
 ```bash
 scripts/build.sh                 # xcodegen generate → xcodebuild archive → exports Clipnest.app to build/

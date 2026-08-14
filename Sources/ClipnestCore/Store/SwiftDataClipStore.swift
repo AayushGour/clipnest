@@ -73,17 +73,15 @@ public actor SwiftDataClipStore: ClipStore {
   /// to this file, so this factory (rather than a test-side literal) is the
   /// only way test code can construct a container for it.
   public static func makeTestContainer() throws -> ModelContainer {
-    // Xcode 16's SwiftData can't create an `isStoredInMemoryOnly` store inside
-    // a SwiftPM test bundle: it derives the store name from `Bundle.main`,
-    // which is nameless there, and hard-crashes with "Unable to determine
-    // Bundle Name" (CI runs Xcode 16.2; newer toolchains don't hit this). Back
-    // the test store with a unique throwaway temp file instead — the explicit
-    // URL gives SwiftData the name it needs, stays isolated per container, and
-    // never touches the real Application Support store.
+    // In-memory test store — never touches the real Application Support store
+    // and leaves nothing on disk. The explicit `Schema` keeps SwiftData from
+    // inferring the model (and a store name) from `Bundle.main`. `swift test`
+    // runs on the release job's Xcode 26 toolchain (see
+    // `.github/workflows/release.yml`), where in-memory SwiftData works; the
+    // older Xcode 16.x "Unable to determine Bundle Name" crash was resolved by
+    // that runner, not by any workaround here.
     let schema = Schema([ClipItemRecord.self])
-    let url = FileManager.default.temporaryDirectory
-      .appendingPathComponent("ClipnestClipTest-\(UUID().uuidString).store")
-    let configuration = ModelConfiguration(schema: schema, url: url)
+    let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
     do {
       return try ModelContainer(for: schema, configurations: configuration)
     } catch {
@@ -98,9 +96,8 @@ public actor SwiftDataClipStore: ClipStore {
   /// production code, which always uses `makeProductionContainer()`'s fixed
   /// path under `~/Library/Application Support/Clipnest`.
   public static func makeContainerForTesting(at url: URL) throws -> ModelContainer {
-    // Explicit Schema so SwiftData doesn't infer the model via `Bundle.main` —
-    // that inference crashes ("Unable to determine Bundle Name") in a SwiftPM
-    // test bundle on Xcode 16.2. See makeTestContainer() for the full why.
+    // Explicit Schema so SwiftData maps the model directly rather than
+    // inferring it via `Bundle.main`. See makeTestContainer().
     let schema = Schema([ClipItemRecord.self])
     let configuration = ModelConfiguration(schema: schema, url: url)
     do {

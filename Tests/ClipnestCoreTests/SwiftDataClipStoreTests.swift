@@ -581,10 +581,10 @@ struct SwiftDataClipStoreTests {
     // Swift symbol, since both are `private` to their own file) drives a
     // *real* Core Data lightweight migration below, not just a same-schema
     // reopen.
-    // Explicit Schema built from the test-local `ClipItemRecord` — its simple
-    // name still drives the same Core Data entity, so the migration below is
-    // unchanged, but SwiftData no longer infers the model via `Bundle.main`
-    // (which crashes in a SwiftPM test bundle on Xcode 16.2).
+    // Explicit Schema built from the test-local `ClipItemRecord`: its simple
+    // name drives the same Core Data entity, so the reopen below is a real
+    // lightweight migration, and SwiftData maps the model directly instead of
+    // inferring it via `Bundle.main`.
     let legacySchema = Schema([ClipItemRecord.self])
     let legacyConfiguration = ModelConfiguration(schema: legacySchema, url: fileURL)
     let legacyContainer = try ModelContainer(

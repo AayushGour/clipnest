@@ -306,8 +306,8 @@ struct SwiftDataSnippetStoreTests {
     // that exact simple name drives a real Core Data lightweight migration
     // below, not just a same-schema reopen.
     // Explicit Schema from the test-local `SnippetRecord` (same simple name,
-    // same entity, same migration) so SwiftData skips bundle-based model
-    // inference, which crashes on Xcode 16.2 in a SwiftPM test bundle.
+    // same entity, same migration) so SwiftData maps the model directly rather
+    // than inferring it via `Bundle.main`.
     let legacySchema = Schema([SnippetRecord.self])
     let legacyConfiguration = ModelConfiguration(schema: legacySchema, url: fileURL)
     let legacyContainer = try ModelContainer(
