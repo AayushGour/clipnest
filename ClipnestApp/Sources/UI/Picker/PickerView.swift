@@ -92,6 +92,10 @@ struct PickerView: View {
   /// always instant regardless of DB-query latency. See this file's top
   /// "Search-debounce + loader fix" doc comment.
   @State private var searchText: String = ""
+  /// Drives the "Update Clipnest?" confirmation dialog triggered by tapping
+  /// the version label in `shortcutHintBar` — see that property's doc
+  /// comment.
+  @State private var showUpdateConfirm = false
 
   var body: some View {
     VStack(spacing: 0) {
@@ -266,15 +270,47 @@ struct PickerView: View {
   /// list above it. Tab-aware: History/Pinned show the pin/save shortcuts,
   /// Snippets shows the new-snippet and ⌥⌘E replace-selection (snippet
   /// expansion) shortcuts instead — everything else is identical across tabs.
+  ///
+  /// Self-update (approved feature): the trailing edge also shows the
+  /// running app version (`viewModel.appVersion`, e.g. `v0.5.0`) as a
+  /// clickable, muted control — same size/weight as the hints so it reads as
+  /// part of the footer rather than a competing element. Tapping it shows a
+  /// confirmation before doing anything; confirming calls
+  /// `viewModel.requestAppUpdate()`, an injected closure the composition
+  /// root wires to `AppUpdater.runUpdate()` — this view never touches
+  /// `NSWorkspace`/AppKit directly, same as `dismiss`/`presentSnippetEditor`
+  /// (see this file's top doc comment). `Spacer(minLength: 8)` keeps the
+  /// version from ever crowding the hints; both sides keep `lineLimit(1)` so
+  /// neither wraps or grows the bar's height.
   private var shortcutHintBar: some View {
-    Text(shortcutHints)
-      .font(.caption2)
-      .foregroundStyle(.secondary)
-      .lineLimit(1)
-      .truncationMode(.tail)
-      .frame(maxWidth: .infinity, alignment: .leading)
-      .padding(.horizontal, 10)
-      .padding(.vertical, 6)
+    HStack(spacing: 0) {
+      Text(shortcutHints)
+        .font(.caption2)
+        .foregroundStyle(.secondary)
+        .lineLimit(1)
+        .truncationMode(.tail)
+      Spacer(minLength: 8)
+      Button {
+        showUpdateConfirm = true
+      } label: {
+        Text("v\(viewModel.appVersion)")
+          .font(.caption2)
+          .foregroundStyle(.secondary)
+          .lineLimit(1)
+      }
+      .buttonStyle(.plain)
+      .help("Check for updates")
+    }
+    .padding(.horizontal, 10)
+    .padding(.vertical, 6)
+    .confirmationDialog(
+      "Update Clipnest?", isPresented: $showUpdateConfirm, titleVisibility: .visible
+    ) {
+      Button("Update") { viewModel.requestAppUpdate() }
+      Button("Cancel", role: .cancel) {}
+    } message: {
+      Text("Opens Terminal to download the latest version and relaunch Clipnest.")
+    }
   }
 
   private var shortcutHints: String {

@@ -71,40 +71,40 @@ Your clipboard is some of the most sensitive data on your machine — passwords,
 
 ## Install
 
-### One-line install (no Homebrew, no Gatekeeper prompt)
+### Install (recommended)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash
 ```
 
-This downloads the latest release with `curl` and copies Clipnest into
+Downloads the latest release with `curl` and installs Clipnest into
 `/Applications`. Because `curl` (unlike a browser or AirDrop) never sets the
 `com.apple.quarantine` flag, macOS Gatekeeper doesn't show the "Apple could not
 verify … is free of malware" dialog — the app just launches. No Homebrew, no
 Apple Developer ID needed. (Clipnest is ad-hoc signed, which is all macOS needs
 to run an un-quarantined app.)
 
-### Homebrew (recommended)
+### Update
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/update.sh | bash
+```
+
+Checks the latest release and, if it's newer than your installed copy, downloads
+and swaps it in (quitting and relaunching Clipnest). Same "curl sets no
+quarantine flag" benefit as the installer.
+
+### Homebrew
 
 ```bash
 brew tap aayushgour/clipnest https://github.com/AayushGour/clipnest
-brew install --cask --no-quarantine clipnest
+brew install --cask clipnest
 ```
 
-Later, `brew upgrade --cask clipnest` updates it.
-
-> **Why `--no-quarantine`?** Clipnest isn't notarized with an Apple Developer ID
-> yet, so without this flag macOS Gatekeeper blocks first launch ("unidentified
-> developer" / "damaged"). There is **no `brew trust` command** — `--no-quarantine`
-> (or the `xattr` step below) is the actual fix. If you already installed without
-> it, clear the quarantine attribute once:
->
-> ```bash
-> xattr -dr com.apple.quarantine /Applications/Clipnest.app
-> ```
->
-> Once a Developer ID is wired into the [release workflow](.github/workflows/release.yml),
-> builds are notarized and this step disappears.
+`brew upgrade --cask clipnest` updates it. Clipnest isn't notarized yet, so a
+Homebrew or browser download is quarantined and macOS blocks first launch — clear
+it once with `xattr -dr com.apple.quarantine /Applications/Clipnest.app`, or just
+use the curl installer above, which avoids the quarantine flag entirely.
 
 ### Download the `.dmg`
 

@@ -312,6 +312,22 @@ final class PickerViewModel: ObservableObject {
   /// without the composition root's controller.
   var updatePreview: (ClipItem?) -> Void = { _ in }
 
+  /// Set by the composition root (see `AppEnvironment`) to
+  /// `AppUpdater.currentVersion`. Shown by `PickerView.shortcutHintBar` as
+  /// `v<appVersion>`. Defaults to empty so this type stays usable in
+  /// previews/tests without the composition root.
+  var appVersion: String = ""
+
+  /// Set by the composition root (see `AppEnvironment`) to
+  /// `AppUpdater.runUpdate`. Called by `PickerView` once the user confirms
+  /// the update `.confirmationDialog` triggered by tapping the version
+  /// label. Kept as an injected closure — same pattern as `dismiss`/
+  /// `presentSnippetEditor`/`updatePreview` — so this view model (and
+  /// `PickerView`) never touch `NSWorkspace`/AppKit directly; defaults to a
+  /// no-op so this type stays usable in previews/tests without the
+  /// composition root.
+  var requestAppUpdate: () -> Void = {}
+
   private let clipStore: any ClipStore
   private let snippetStore: any SnippetStore
   private let pasteboard: any PasteboardWriting

@@ -2,7 +2,7 @@ cask "clipnest" do
   # `version` and `sha256` below are rewritten automatically by the Release
   # workflow (.github/workflows/release.yml) on every tagged release — no manual
   # edits needed. `:no_check` is only the pre-first-release placeholder.
-  version "0.5.0"
+  version "0.6.0"
   sha256 "ed20b73fb4253ba0058d584250d30b3ca6057bd271bf9f3b5ec0d8476f0b7605"
 
   url "https://github.com/AayushGour/clipnest/releases/download/v#{version}/Clipnest-#{version}.dmg",
@@ -33,14 +33,15 @@ cask "clipnest" do
   # quarantines it on install and blocks first launch. Tell the user how to
   # allow it (there is no `brew trust` command — this is the real step).
   caveats <<~EOS
-    Clipnest is not yet notarized, so macOS Gatekeeper will block it on first
-    launch ("unidentified developer" / "damaged"). To allow it, clear the
-    quarantine attribute:
+    Clipnest is not yet notarized, so macOS Gatekeeper will block a Homebrew or
+    browser download on first launch ("Apple could not verify … is free of
+    malware"). Clear the quarantine attribute once:
 
       xattr -dr com.apple.quarantine /Applications/Clipnest.app
 
-    Or skip quarantine at install time instead:
+    Or install/update with the curl script instead, which avoids the quarantine
+    flag entirely:
 
-      brew install --cask --no-quarantine clipnest
+      curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash
   EOS
 end

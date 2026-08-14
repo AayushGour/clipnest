@@ -149,6 +149,12 @@ final class AppEnvironment {
     // exist yet while that content is being built. See
     // `PickerViewModel.dismiss`'s doc comment.
     viewModel.dismiss = { [weak panel] in panel?.hide() }
+    // Self-update (approved feature): the version label in
+    // `PickerView.shortcutHintBar` and the update it triggers on click —
+    // see `AppUpdater`'s doc comment for why this stays network-free in-app
+    // (shells out to the public curl updater via Terminal instead).
+    viewModel.appVersion = AppUpdater.currentVersion
+    viewModel.requestAppUpdate = { AppUpdater.runUpdate() }
     panel.onWillShow = { [weak viewModel] in viewModel?.willShow() }
     panel.onDidHide = { [weak viewModel, weak itemPreviewController] in
       viewModel?.didHide()
