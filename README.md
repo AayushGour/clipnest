@@ -71,6 +71,19 @@ Your clipboard is some of the most sensitive data on your machine — passwords,
 
 ## Install
 
+### One-line install (no Homebrew, no Gatekeeper prompt)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash
+```
+
+This downloads the latest release with `curl` and copies Clipnest into
+`/Applications`. Because `curl` (unlike a browser or AirDrop) never sets the
+`com.apple.quarantine` flag, macOS Gatekeeper doesn't show the "Apple could not
+verify … is free of malware" dialog — the app just launches. No Homebrew, no
+Apple Developer ID needed. (Clipnest is ad-hoc signed, which is all macOS needs
+to run an un-quarantined app.)
+
 ### Homebrew (recommended)
 
 ```bash
