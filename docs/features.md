@@ -320,11 +320,13 @@ through the monitor".
 
 **What it does.** Durable, on-disk storage for clipboard history and
 snippets (SwiftData), plus content-addressed disk storage for large payloads
-(`BlobStore`), plus configurable retention that never touches pinned items.
+(`BlobStore`), plus configurable retention that never touches pinned items,
+plus self-healing recovery from a corrupt/unreadable store file.
 
 **Key files**
 - `Sources/ClipnestCore/Store/SwiftDataClipStore.swift` (whole file — store + private `ClipItemRecord` `@Model`)
 - `Sources/ClipnestCore/Store/SwiftDataSnippetStore.swift` (whole file — store + private `SnippetRecord` `@Model`)
+- `Sources/ClipnestCore/Store/ModelContainerRecovery.swift:60-93` (`openWithRecovery`) — corrupt-store recovery, shared by both stores' `makeProductionContainer()`
 - `Sources/ClipnestCore/Store/BlobStore.swift:24-131`
 - `Sources/ClipnestCore/Store/ClipStore.swift:9-20` (`RetentionCap`), `:97-110` (`deleteBlobs`)
 - `Sources/ClipnestCore/Store/InMemoryClipStore.swift` / `InMemorySnippetStore.swift` — canonical test doubles
@@ -343,23 +345,56 @@ crosses either protocol boundary.
 
 Production containers live at `~/Library/Application
 Support/Clipnest/ClipItems.store` and `.../Snippets.store`
-(`SwiftDataClipStore.swift:48-68`, `SwiftDataSnippetStore.swift:28-49`) — the
+(`SwiftDataClipStore.swift:48-79`, `SwiftDataSnippetStore.swift:28-57`) — the
 same base directory family as `BlobStore.defaultBaseDirectory()`
 (`BlobStore.swift:52-58`). `makeTestContainer()` builds a plain in-memory
 `ModelConfiguration(schema:isStoredInMemoryOnly: true)` against an
-**explicit `Schema`** — not a temp file (`SwiftDataClipStore.swift:75-90`,
-mirrored at `SwiftDataSnippetStore.swift:54-65`). The explicit `Schema` is
+**explicit `Schema`** — not a temp file (`SwiftDataClipStore.swift:86-101`,
+mirrored at `SwiftDataSnippetStore.swift:62-73`). The explicit `Schema` is
 what keeps SwiftData from inferring the model (and a store name) from
 `Bundle.main`; the older "Unable to determine Bundle Name" crash that made
 in-memory containers unsafe for a hostless SwiftPM test bundle was specific
 to Xcode 16.2, and CI's `swift test` step already runs on Xcode 26 (see
 `docs/architecture.md`'s CI section), so that workaround is no longer needed
 here. `makeContainerForTesting(at:)`
-(`SwiftDataClipStore.swift:98-108`, mirrored at `SwiftDataSnippetStore.swift:70-80`)
+(`SwiftDataClipStore.swift:109-119`, mirrored at `SwiftDataSnippetStore.swift:78-88`)
 is unchanged and still builds a real on-disk container at an explicit
 temp-file `url` — not to dodge a toolchain bug, but because its migration
 tests specifically need a genuine store file to prove an in-place SwiftData
 migration.
+
+**How it works — corrupt-store recovery.** Both `makeProductionContainer()`s
+route the actual `ModelContainer(...)` construction through
+`ModelContainerRecovery.openWithRecovery(storeURL:logger:fileManager:makeContainer:)`
+(`Sources/ClipnestCore/Store/ModelContainerRecovery.swift:60-93`) instead of
+calling `ModelContainer(...)` directly. Lightweight migration (the
+`normalizedText` case below) still runs inside the first, successful call to
+`makeContainer()` and is unaffected by this — only a genuine open/migration
+*failure* (corrupt bytes, a truncated file, a foreign format) reaches the
+recovery path. On that failure, `openWithRecovery` renames `storeURL` and its
+`-wal`/`-shm` sidecars (a stale WAL could otherwise re-corrupt the fresh store
+on first checkpoint) aside to sibling `<name>.corrupt-<timestamp>` backups
+(`ModelContainerRecovery.swift:95-120`), logs only the backup's file name —
+never store contents — via the calling store's own `Logger`, then calls
+`makeContainer()` a second time, which (with nothing left at `storeURL`)
+creates a fresh empty store. Only a second failure (e.g. an unwritable
+directory) still propagates as `ClipStoreError.ioFailure`/
+`SnippetStoreError.ioFailure`. `makeRecoveringContainerForTesting(at:)`
+(`SwiftDataClipStore.swift:132-144`, mirrored at
+`SwiftDataSnippetStore.swift:97-109`) exercises this exact path against an
+explicit test `url` instead of the fixed production path, deliberately
+separate from `makeContainerForTesting(at:)` above, which must stay
+recovery-free so the pre-`normalizedText` migration tests keep proving a
+legitimately-migratable store is upgraded, not backed up/wiped.
+
+Before this existed, any `ModelContainer` construction failure — corrupt
+store file, disk full, permissions — propagated straight through
+`SwiftDataClipStore.makeProductionContainer()`/`SwiftDataSnippetStore
+.makeProductionContainer()` to `AppEnvironment.init()` to `AppDelegate
+.applicationDidFinishLaunching`, which logged (metadata only) and called
+`NSApplication.shared.terminate(nil)` — the app simply refused to launch
+again, with no in-app recovery. Now that same failure costs a one-time
+history/snippet reset instead of an unrecoverable launch loop.
 
 **How it works — the migration-safety pattern (`normalizedText`).**
 `ClipItemRecord.normalizedText` (`SwiftDataClipStore.swift:368-393`) and
@@ -462,33 +497,47 @@ of `cap`.
 - Deleting an item that has no blob (`blobPath == nil`) never touches `BlobStore`.
 - A record persisted with empty `normalizedText` (simulating pre-migration data) becomes matchable again after the next store `init`.
 - A real pre-`normalizedText` on-disk store file migrates in place without throwing.
+- A corrupt/unreadable on-disk store file no longer crashes launch — `ModelContainerRecovery` backs it up (with sidecars) and opens a fresh, empty, writable store instead.
 
 **Tests.**
 `Tests/ClipnestCoreTests/BlobStoreTests.swift` — round-trip, dedup-on-write,
 idempotent delete, `.notFound` on missing read.
 `Tests/ClipnestCoreTests/ClipStoreTests.swift` and
 `SwiftDataClipStoreTests.swift` (parallel suites, `.serialized` on the
-SwiftData one) — dedup, pin/unpin, delete+blob cleanup, `clearHistory`,
-`enforceRetention` (`.maxCount`/`.maxAge`, pinned-exclusion), `query`
-filtering. Migration-specific: `SwiftDataClipStoreTests.swift:546` "A record
-persisted with empty normalizedText ... is backfilled by init and becomes
-matchable by query" and `:568` "A store file written before normalizedText
-existed migrates in-place without throwing ... and the migrated row is
-backfilled and matchable" (constructs a *real* pre-fix on-disk store file via
-a test-local legacy `ClipItemRecord` schema and reopens it with the current
-schema — a genuine Core Data lightweight migration, not just a same-schema
-reopen). `SwiftDataSnippetStoreTests.swift:272`/`:293` mirror these for
-snippets.
+SwiftData one, both delegating their shared scenarios to
+`ClipStoreContractTests.swift`) — dedup, pin/unpin, delete+blob cleanup,
+`clearHistory`, `enforceRetention` (`.maxCount`/`.maxAge`, pinned-exclusion),
+`query` filtering.
+Migration-specific: `SwiftDataClipStoreTests.swift:283`
+"A record persisted with empty normalizedText ... is backfilled by init and
+becomes matchable by query" and `:307` "A store file written before
+normalizedText existed migrates in-place without throwing ... and the
+migrated row is backfilled and matchable" (constructs a *real* pre-fix
+on-disk store file via a test-local legacy `ClipItemRecord` schema and
+reopens it with the current schema — a genuine Core Data lightweight
+migration, not just a same-schema reopen). `SwiftDataSnippetStoreTests.swift:184`/`:206`
+mirror these for snippets. Corrupt-store-recovery-specific:
+`SwiftDataClipStoreTests.swift:401` "corrupt store file recovers to a fresh,
+empty, writable container" and `:429` "corrupt store file is backed up, not
+deleted" (impl-specific, so they stay in this file rather than the shared
+contract suite); `SwiftDataSnippetStoreTests.swift:287`/`:312` mirror these
+for snippets.
 
 **Gotchas / constraints**
 - Any future non-optional `@Model` attribute added to `ClipItemRecord`/
   `SnippetRecord` **must** ship with a default value, or every existing
-  user's app will crash on next launch (134110). Optional attributes don't
-  need this.
+  user's on-disk store fails to migrate (134110). Optional attributes don't
+  need this. Since `ModelContainerRecovery` now wraps `makeProductionContainer()`,
+  that failure no longer crashes launch — it's indistinguishable from a
+  corrupt store, so the existing store is backed up and every user's
+  history/snippets are silently reset on their next launch after the update
+  ships. Quieter than a launch crash, but still real, avoidable data loss —
+  the rule still stands with no exceptions.
 - `ClipItemRecord`/`SnippetRecord` are `private` to their files — test code
   can only construct/inspect them through the explicit test-only factory
   methods each store exposes (`makeTestContainer`, `makeContainerForTesting
-  (at:)`, `insertRecordWithEmptyNormalizedTextForTesting`).
+  (at:)`, `makeRecoveringContainerForTesting(at:)`,
+  `insertRecordWithEmptyNormalizedTextForTesting`).
 - No `#Index`/`#Unique` on the query-relevant fields — deployment target
   (macOS 14) predates those macros; don't add them without also raising the
   target (a logged architect decision per coding-standards.md).
@@ -531,9 +580,9 @@ and `InMemoryClipStore.swift:45-70`):
 enough); `keyword` is never checked by `query` (the picker's form has no
 control for it — see [§9](#9-snippets)).
 
-`fetchAll(matching:)` (`ClipStore.swift:42-49`) is intentionally unbounded
-and ignores its `query:` parameter entirely — kept only for source
-compatibility with older callers/tests. All real, user-facing filtering
+`fetchAll()` (`ClipStore.swift:42-48`) is intentionally unbounded and
+unfiltered — the whole-table accessor kept for tests/future export. All
+real, user-facing filtering
 goes through `query(...)`.
 
 **How it works — highlighting.**
@@ -568,8 +617,8 @@ case-insensitive` (`:114`), `query matches by body, case-insensitive`
 `query never checks keyword` (`:151`).
 
 **Gotchas / constraints**
-- `fetchAll(matching:)` is unbounded — never call it from anything
-  user-facing; it exists only for legacy source compatibility.
+- `fetchAll()` is unbounded — never call it from anything user-facing;
+  it's the whole-table accessor for tests/export only.
 - Search matching is substring, not fuzzy/token-based — no ranking beyond
   scope's fixed sort order.
 
@@ -724,8 +773,12 @@ both call `selectHighlighted()`, so there's no double-paste risk.
 - A live capture landing while the picker is open → only requeries if visible **and** History is active (Pinned/Snippets can't contain a fresh, always-unpinned item).
 - Empty result sets → dedicated empty-state views per tab, distinguishing "no history yet" from "no matches for <query>".
 
-**Tests.** None — `ClipnestApp` (the App/UI target) has no automated test
-target; see [Testing strategy](#testing-strategy).
+**Tests.** `PickerView`/`PickerPanel`'s SwiftUI/AppKit rendering and keyboard
+handling have no automated test. `resolvedSelection(_:currentID:result:)`'s
+three `SelectionPolicy` branches (`.hardReset`/`.softReconcile`/`.selectNear`)
+are covered by `PickerViewModelResolvedSelectionTests` in `ClipnestApp/Tests/
+ClipnestAppTests/PickerViewModelTests.swift` — see
+[Testing strategy](#testing-strategy).
 
 **Gotchas / constraints**
 - `PickerViewModel` deliberately never eagerly loads all history — always
@@ -835,7 +888,10 @@ no-target, propagates a genuine `PasteError`, rich-text writes both RTF and
 plain representations (`:214`). `Tests/ClipnestCoreTests/
 FrontmostAppTrackerTests.swift` — record/consume, last-recorded-wins,
 consume-clears. `PickerViewModel`'s decision logic
-(`pasteContent(for:plainText:)`) has no dedicated App-target test — see
+(`pasteContent(for:plainText:)`) now has a dedicated App-target test suite,
+`PickerViewModelPasteContentTests` in `ClipnestApp/Tests/ClipnestAppTests/
+PickerViewModelTests.swift` (one test per `ItemKind`/`plainText` branch,
+including the missing/legacy-blob fallback cases) — see
 [Testing strategy](#testing-strategy).
 
 **Gotchas / constraints**
@@ -1084,9 +1140,15 @@ constructs the single `AppEnvironment` (`try AppEnvironment()`), and calls
 `environment.startCapture()` + `environment.registerHotkey()`. If
 `AppEnvironment.init()` throws — the only realistic cause is the on-disk
 SwiftData container failing to come up, see [§5](#5-persistence)'s migration-crash
-discussion — there's no safe partially-initialized fallback: the error is
-logged (metadata only, `.fault` level) and the app terminates
-(`:30-37`).
+and corrupt-store-recovery discussions — there's no safe partially-initialized
+fallback: the error is logged (metadata only, `.fault` level) and the app
+terminates (`:30-37`). Since `ModelContainerRecovery` now backs `makeProductionContainer()`
+(see [§5](#5-persistence)), a corrupt store or a failed migration no longer
+reaches this path at all — it's absorbed by one retry against a fresh store
+inside `SwiftDataClipStore`/`SwiftDataSnippetStore` before `AppEnvironment.init()`
+ever sees it. What still reaches here (and still terminates) is a
+*second*, genuinely unrecoverable failure — e.g. an unwritable Application
+Support directory.
 
 `AppEnvironment.init()` (`AppEnvironment.swift:76-248`) builds the entire
 graph in dependency order:
@@ -1185,19 +1247,18 @@ in-memory-equivalent container).
 documented above. `Tests/ClipnestCoreTests/TestSupport/ImageFixtures.swift`
 provides shared test image bytes.
 
-**The `ClipnestApp` (App/UI) target has no automated tests.** Everything in
+**The `ClipnestApp` (App/UI) target now has a thin, deliberately-scoped slice of automated tests — not full coverage.** `ClipnestAppTests` (the `ClipnestAppTests` target in `ClipnestApp/project.yml`, Swift Testing, hosted inside `Clipnest.app` via `TEST_HOST`/`BUNDLE_LOADER`) adds 44 `@Test` functions under `ClipnestApp/Tests/ClipnestAppTests/`: `WindowPlacementTests.swift` (9 tests, `clampedOrigin`/`pairLayout` geometry), `PickerViewModelTests.swift` (28 tests, `pasteContent(for:plainText:)`'s per-kind mapping and `resolvedSelection(_:currentID:result:)`'s three `SelectionPolicy` branches), and `ItemKind+SFSymbolTests.swift` (7 tests, the icon-symbol mapping). These are exactly the pure-logic/geometry pieces that need no live `NSWindow`/AppKit — `pasteContent(for:plainText:)` in particular now has a dedicated App-target unit test of its own, closing the specific gap the next paragraph used to describe.
+
+Everything else in
 [§7 (picker UI)](#7-the-picker-ui), [§10 (hotkey)](#10-global-hotkey),
 [§11 (permissions)](#11-permissions), and [§12 (lifecycle/DI)](#12-app-lifecycle--di) — `PickerView`,
 `PickerViewModel`'s SwiftUI-facing behavior, `PickerPanel`, `ItemRow`/
 `SnippetRow`, `ItemPreviewController`, `SnippetEditorWindow`,
 `HotkeyManager`, `PermissionsManager`, `AppDelegate`/`AppEnvironment` — is
-verified only by manual runtime checks (see individual "Manual-only" notes
+still verified only by manual runtime checks (see individual "Manual-only" notes
 in `.claude/project-context.md`'s decision log, e.g. D13's flagged
-end-to-end paste verification). `PickerViewModel`'s pure *decision* logic
-that doesn't touch AppKit (e.g. `pasteContent(for:plainText:)`'s per-kind
-mapping) is exercised indirectly by `ClipnestCoreTests` covering the
-`ClipnestCore` types it calls into (`Paster`, `BlobStore`), but has no
-dedicated App-target unit test of its own. When changing anything under
+end-to-end paste verification). When changing anything under
 `ClipnestApp/Sources/`, treat a real `xcodebuild`/manual run as the
-verification step, not `swift test` (which only builds/runs
-`ClipnestCoreTests`).
+verification step for SwiftUI/AppKit behavior: `swift test` still only
+builds/runs `ClipnestCoreTests`; `ClipnestAppTests` runs via `xcodebuild test`
+against the XcodeGen-generated `.xcodeproj`, not `swift test`.

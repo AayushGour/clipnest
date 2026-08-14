@@ -47,6 +47,13 @@ struct AXSelectedTextAccessor: SelectedTextAccessing {
     // null-check, so a `.success` result with a nil out-value would crash
     // (EXC_BAD_ACCESS) if passed straight through.
     guard let focused, CFGetTypeID(focused) == AXUIElementGetTypeID() else { return nil }
+    // `focused` is verified above to be an `AXUIElement` via `CFGetTypeID`, so
+    // this cast cannot fail. `as!` is the *only* option the language allows for
+    // bridging a `CFTypeRef` to a concrete CoreFoundation type: `as?` is a hard
+    // compile error ("conditional downcast to CoreFoundation type … will always
+    // succeed"), and `unsafeBitCast`/`unsafeDowncast` are strictly less safe.
+    // This is the one sanctioned force-cast exception to coding-standards.md —
+    // a post-`CFGetTypeID`-verified CF bridge that provably never traps.
     return focused as! AXUIElement
   }
 }

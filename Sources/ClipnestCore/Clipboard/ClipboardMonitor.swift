@@ -57,7 +57,7 @@ public final class ClipboardMonitor {
   public static let defaultPollInterval: TimeInterval = 0.4
 
   private nonisolated static let logger = Logger(
-    subsystem: "com.clipnest.app", category: "ClipboardMonitor")
+    subsystem: ClipnestLog.subsystem, category: "ClipboardMonitor")
 
   /// Default `CaptureFailureHandler`: logs metadata only (the error case name)
   /// via `os.Logger` — never the clipboard content that triggered the attempt.

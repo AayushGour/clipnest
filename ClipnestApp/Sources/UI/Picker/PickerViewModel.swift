@@ -19,7 +19,7 @@
 // deliberately-not-fixed gap: "`ClipStore.fetchAll` has no result cap,
 // re-fetches the entire history table every ~0.4s poll"): this file used to
 // hold the ENTIRE history (`allItems: [ClipItem]`) in memory, re-fetched via
-// `ClipStore.fetchAll(matching:)` on an ~0.4s `Timer`-backed poll loop, and
+// `ClipStore.fetchAll` on an ~0.4s `Timer`-backed poll loop, and
 // filtered/sorted it client-side via `SearchFilter`/`SnippetSearchFilter` on
 // every search-text/tab change. That's gone. `ClipStore.query(...)`/
 // `SnippetStore.query(...)` (T49/T50) now do ALL filtering + sorting +
@@ -164,7 +164,7 @@ import os
 /// comment for the T50/T51 windowed-query design.
 @MainActor
 final class PickerViewModel: ObservableObject {
-  private static let logger = Logger(subsystem: "com.clipnest.app", category: "PickerViewModel")
+  private static let logger = Logger(subsystem: ClipnestLog.subsystem, category: "PickerViewModel")
 
   /// How many rows/snippets a single `query(...)` call fetches — both the
   /// initial page and every subsequent `loadMoreIfNeeded()` page. Large
@@ -812,7 +812,12 @@ final class PickerViewModel: ObservableObject {
   /// `clampedIndex<Element: Identifiable>` precedent. Returns the id to
   /// select (`nil` if `result` is empty) and whether `scrollToTopToken`
   /// should bump.
-  private func resolvedSelection<Element: Identifiable>(
+  // Deliberately not `private` — same rationale as `pasteContent`'s doc
+  // comment above: this is the exact selection-policy decision logic
+  // (`.hardReset`/`.softReconcile`/`.selectNear`) the reviews flagged as
+  // untested, and `@testable import` cannot reach a `private` member. See
+  // `PickerViewModelTests.swift`.
+  func resolvedSelection<Element: Identifiable>(
     _ policy: SelectionPolicy, currentID: Element.ID?, result: [Element]
   ) -> (id: Element.ID?, scrollToTop: Bool) {
     switch policy {
@@ -889,7 +894,17 @@ final class PickerViewModel: ObservableObject {
   /// back to plain `previewText` rather than no-op. `.image` reads its
   /// bytes from `BlobStore` via `blobPath`. `.file` re-offers the original
   /// file via `fileReference`.
-  private func pasteContent(for item: ClipItem, plainText: Bool) -> PasteContent? {
+  // Deliberately not `private` (unlike everything else in this file's
+  // "Selecting" section): `@testable import` only elevates `internal`
+  // symbols to be visible outside the module, never `private`/
+  // `fileprivate` ones — a `private` `pasteContent` would be permanently
+  // unreachable from `ClipnestAppTests` regardless of `@testable import`.
+  // This is the exact pure decision logic the architecture/implementation
+  // reviews flagged as untested (plain vs. formatted paste), so it's
+  // widened to the module's default `internal` access — still invisible
+  // outside `ClipnestApp`, just no longer invisible to this module's own
+  // test target. See `PickerViewModelTests.swift`.
+  func pasteContent(for item: ClipItem, plainText: Bool) -> PasteContent? {
     if plainText {
       // Strip: paste the plain form for any text-bearing kind.
       switch item.kind {

@@ -263,9 +263,9 @@ struct PickerView: View {
 
   /// T23 fix round: an always-visible (not hover-revealed) footer of
   /// keyboard-shortcut hints, muted/small so it doesn't compete with the
-  /// list above it. Tab-aware: History/Pinned show the pin shortcut,
-  /// Snippets shows the new-snippet shortcut instead — everything else is
-  /// identical across tabs.
+  /// list above it. Tab-aware: History/Pinned show the pin/save shortcuts,
+  /// Snippets shows the new-snippet and ⌥⌘E replace-selection (snippet
+  /// expansion) shortcuts instead — everything else is identical across tabs.
   private var shortcutHintBar: some View {
     Text(shortcutHints)
       .font(.caption2)
@@ -283,7 +283,7 @@ struct PickerView: View {
     case .history, .pinned:
       parts += ["⌘P pin", "⌘S save", "⌘⌫ delete"]
     case .snippets:
-      parts += ["⌘N new", "⌘⌫ delete"]
+      parts += ["⌘N new", "⌥⌘E replace", "⌘⌫ delete"]
     }
     parts += ["⌘1/2/3 tabs", "esc close"]
     return parts.joined(separator: " · ")

@@ -9,13 +9,14 @@
 // `AppEnvironment.swift`.
 
 import AppKit
+import ClipnestCore
 import os
 
 /// Bridges Clipnest's SwiftUI `App` to AppKit lifecycle events that SwiftUI's
 /// `App` protocol doesn't expose directly (activation policy, app launch).
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
-  private static let logger = Logger(subsystem: "com.clipnest.app", category: "AppDelegate")
+  private static let logger = Logger(subsystem: ClipnestLog.subsystem, category: "AppDelegate")
 
   private(set) var environment: AppEnvironment?
 

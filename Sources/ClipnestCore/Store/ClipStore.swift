@@ -40,13 +40,11 @@ public protocol ClipStore: Sendable {
   func insertOrBumpDuplicate(_ item: ClipItem) async throws -> ClipItem
 
   /// Returns EVERY item, newest-first by `createdAt` — unbounded, no
-  /// filtering or paging. `query` is accepted but always ignored (kept only
-  /// for source compatibility with existing callers/tests, per T6's
-  /// original acceptance criteria). The picker no longer calls this method
-  /// — `query(text:kind:scope:offset:limit:)` (T49) does real, bounded
-  /// filtering/sorting/pagination in the store instead; prefer that for
-  /// anything user-facing.
-  func fetchAll(matching query: SearchQuery?) async throws -> [ClipItem]
+  /// filtering or paging. The picker never calls this;
+  /// `query(text:kind:scope:offset:limit:)` (T49) does real, bounded
+  /// filtering/sorting/pagination in the store instead — prefer that for
+  /// anything user-facing. Kept for whole-table access (tests, future export).
+  func fetchAll() async throws -> [ClipItem]
 
   /// Returns only pinned items, newest-first by `createdAt` — backs the
   /// Pinned tab (plan task T22/T23).

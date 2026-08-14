@@ -26,7 +26,7 @@ import os
 /// is main-actor-isolated (callers get a plain, non-`unsafe` stored property).
 @MainActor
 public final class SnippetExpander {
-  private static let logger = Logger(subsystem: "com.clipnest.app", category: "SnippetExpander")
+  private static let logger = Logger(subsystem: ClipnestLog.subsystem, category: "SnippetExpander")
 
   private let snippetStore: any SnippetStore
   private let selectedText: any SelectedTextAccessing

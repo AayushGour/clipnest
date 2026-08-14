@@ -78,7 +78,7 @@ private actor ThrowingClipStore: ClipStore {
     throw ClipStoreError.ioFailure(underlying: "simulated disk failure")
   }
 
-  func fetchAll(matching query: SearchQuery?) async throws -> [ClipItem] { [] }
+  func fetchAll() async throws -> [ClipItem] { [] }
   func fetchPinned() async throws -> [ClipItem] { [] }
   func query(
     text: String, kind: ItemKind?, scope: ClipScope, offset: Int, limit: Int
@@ -140,7 +140,7 @@ struct ClipboardMonitorTests {
     #expect(captured?.previewText == "hello clipboard")
     #expect(captured?.sourceBundleID == "com.apple.TextEdit")
 
-    let all = try await store.fetchAll(matching: nil)
+    let all = try await store.fetchAll()
     #expect(all.count == 1)
   }
 
@@ -199,7 +199,7 @@ struct ClipboardMonitorTests {
     let result = await monitor.checkNow()
 
     #expect(result == nil)
-    let all = try await store.fetchAll(matching: nil)
+    let all = try await store.fetchAll()
     #expect(all.isEmpty)
   }
 
@@ -213,7 +213,7 @@ struct ClipboardMonitorTests {
     let result = await monitor.checkNow()
 
     #expect(result == nil)
-    let all = try await store.fetchAll(matching: nil)
+    let all = try await store.fetchAll()
     #expect(all.isEmpty)
   }
 
@@ -229,7 +229,7 @@ struct ClipboardMonitorTests {
 
     #expect(result == nil)
     #expect(monitor.isPaused == true)
-    let all = try await store.fetchAll(matching: nil)
+    let all = try await store.fetchAll()
     #expect(all.isEmpty)
   }
 
@@ -248,7 +248,7 @@ struct ClipboardMonitorTests {
     let result = await monitor.checkNow()
 
     #expect(result?.previewText == "captured now")
-    let all = try await store.fetchAll(matching: nil)
+    let all = try await store.fetchAll()
     #expect(all.count == 1)
   }
 
@@ -268,7 +268,7 @@ struct ClipboardMonitorTests {
     let ignoredResult = await monitor.checkNow()
 
     #expect(ignoredResult == nil)
-    let afterIgnored = try await store.fetchAll(matching: nil)
+    let afterIgnored = try await store.fetchAll()
     #expect(afterIgnored.isEmpty)
 
     // A subsequent, real external copy is captured normally — the
@@ -277,7 +277,7 @@ struct ClipboardMonitorTests {
     let capturedResult = await monitor.checkNow()
 
     #expect(capturedResult?.previewText == "a real external copy")
-    let afterReal = try await store.fetchAll(matching: nil)
+    let afterReal = try await store.fetchAll()
     #expect(afterReal.count == 1)
   }
 
@@ -312,7 +312,7 @@ struct ClipboardMonitorTests {
     pasteboard.simulateCopy(text: "same content")
     _ = await monitor.checkNow()
 
-    let all = try await store.fetchAll(matching: nil)
+    let all = try await store.fetchAll()
     #expect(all.count == 1)
   }
 
@@ -356,7 +356,7 @@ struct ClipboardMonitorTests {
     pasteboard.simulateImageCopy(data: imageData)
     _ = await monitor.checkNow()
 
-    let all = try await store.fetchAll(matching: nil)
+    let all = try await store.fetchAll()
     #expect(all.count == 1)
 
     let blobsDirectory = baseDirectory.appendingPathComponent(BlobStore.blobsDirectoryName)

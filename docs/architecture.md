@@ -162,6 +162,7 @@ Note: `docs/API.md` also documents an in-memory `SearchFilter`/`SnippetSearchFil
 | `SnippetStore` (protocol) | `Store/SnippetStore.swift:16-45` | CRUD + query over snippets. |
 | `SwiftDataClipStore` | `Store/SwiftDataClipStore.swift:22-473` | Production `ClipStore`, SwiftData-backed. |
 | `SwiftDataSnippetStore` | `Store/SwiftDataSnippetStore.swift:9-298` | Production `SnippetStore`, SwiftData-backed. |
+| `ModelContainerRecovery` | `Store/ModelContainerRecovery.swift:21-121` | Corrupt-store recovery shared by both SwiftData stores' `makeProductionContainer()` — see [§5](#5-persistence--data-model). |
 | `InMemoryClipStore` | `Store/InMemoryClipStore.swift:14-119` | Canonical store for `ClipnestCoreTests`; also directly usable for an ephemeral store. |
 | `InMemorySnippetStore` | `Store/InMemorySnippetStore.swift:12-77` | Same, for snippets. |
 | `BlobStore` | `Store/BlobStore.swift:24-130` | Content-addressed disk storage for large payloads (`.image`, `.richText`). |
@@ -171,7 +172,7 @@ Note: `docs/API.md` also documents an in-memory `SearchFilter`/`SnippetSearchFil
 ```swift
 public protocol ClipStore: Sendable {
   func insertOrBumpDuplicate(_ item: ClipItem) async throws -> ClipItem
-  func fetchAll(matching query: SearchQuery?) async throws -> [ClipItem]      // unfiltered, kept for source compat
+  func fetchAll() async throws -> [ClipItem]                                  // every item, unfiltered — not the picker's path
   func fetchPinned() async throws -> [ClipItem]
   func query(text: String, kind: ItemKind?, scope: ClipScope,
              offset: Int, limit: Int) async throws -> [ClipItem]              // real filter+sort+page
@@ -182,7 +183,14 @@ public protocol ClipStore: Sendable {
 }
 ```
 
-> **Note on `docs/API.md`:** that document (last updated before the T49–T51 windowed-query work) documents `fetchAll(matching:)` as the picker's real query path and does not mention `ClipStore.query(text:kind:scope:offset:limit:)`/`ClipScope`. `fetchAll` is still real and still unfiltered by design (`Store/ClipStore.swift:42-49`), but it is **no longer what the picker calls** — `PickerViewModel` calls `query(...)` exclusively, funneled through two small per-pipeline helpers that are now the only places `clipStore.query(...)`/`snippetStore.query(...)` are actually invoked (`fetchRowsPage`/`fetchSnippetsPage`, `ClipnestApp/Sources/UI/Picker/PickerViewModel.swift:553-558, 657-659`). This document reflects the current call graph; treat `docs/API.md`'s Store section as describing the pre-virtualization design.
+> **Note on the picker's query path:** `PickerViewModel` calls
+> `ClipStore.query(...)`/`SnippetStore.query(...)` exclusively — funneled
+> through two small per-pipeline helpers (`fetchRowsPage`/`fetchSnippetsPage`,
+> `ClipnestApp/Sources/UI/Picker/PickerViewModel.swift`) that are the only
+> places the store `query(...)` methods are actually invoked. `fetchAll()`
+> remains as the unbounded whole-table accessor (tests/export), never the
+> picker's path. See [`docs/API.md`](API.md) for the full `ClipStore` /
+> `SnippetStore` reference.
 
 `query(...)` does case-insensitive substring matching on `previewText` AND'd with an optional exact `ItemKind` match, scoped to `.history` (unpinned, `createdAt` descending) or `.pinned` (pinned, `pinnedAt` ascending), with `offset`/`limit` windowing (`Store/ClipStore.swift:55-67`). Both `SwiftDataClipStore` (`Store/SwiftDataClipStore.swift:217-241`, via a `#Predicate` over a precomputed `normalizedText` field) and `InMemoryClipStore` (`Store/InMemoryClipStore.swift:45-70`) implement it identically in effect.
 
@@ -418,6 +426,8 @@ Clipnest splits persistence into two tiers, both rooted at `BlobStore.defaultBas
 
 **Retention:** `ClipStore.enforceRetention(cap:)` exists and is fully implemented/tested (`RetentionCap.maxCount`/`.maxAge`, never touching pinned items) but — as noted in [§3.1](#store) — has **no call site anywhere in `ClipnestApp`**. History currently grows without bound until manually deleted; automatic retention is an unshipped extension point (see [§10](#10-extension-points--known-constraints)).
 
+**Corrupt-store recovery:** both `SwiftDataClipStore.makeProductionContainer()` and `SwiftDataSnippetStore.makeProductionContainer()` route the actual `ModelContainer(...)` construction through `ModelContainerRecovery.openWithRecovery(storeURL:logger:fileManager:makeContainer:)` (`Sources/ClipnestCore/Store/ModelContainerRecovery.swift:60-93`; call sites at `SwiftDataClipStore.swift:62-79`, `SwiftDataSnippetStore.swift:40-57`) rather than calling `ModelContainer(...)` directly. Lightweight migration (see the rule below) still happens on the first, successful open and is unaffected — only a genuine open/migration failure (corrupt bytes, a truncated file, a foreign format) reaches the recovery path: the store file and its `-wal`/`-shm` sidecars are renamed aside to sibling `<name>.corrupt-<timestamp>` backups, logged (the backup's file name only, never store contents), and `makeContainer()` is retried once against the now-cleared path, producing a fresh empty store. Before this existed, that same failure propagated straight through `AppEnvironment.init` to `AppDelegate.applicationDidFinishLaunching`, which just terminated the app (see [§12](#12-app-lifecycle--di)) with no recovery path; now it costs a one-time history reset instead of an unrecoverable launch crash.
+
 ### Migration-safety rule (binding on every future `@Model` schema change)
 
 This is the single most consequential persistence rule in the codebase, established from a real production incident (`.claude/project-context.md`, decision D28):
@@ -486,6 +496,7 @@ Wiring order in `AppEnvironment.init()` (`ClipnestApp/Sources/App/AppEnvironment
 **Targets:**
 - `ClipnestCore` — plain SPM library + test target, defined in root `Package.swift` (`Package.swift:5-14`). Built/tested with bare `swift build`/`swift test`, no Xcode project needed.
 - `ClipnestApp` — an XcodeGen-generated `.xcodeproj`, defined by `ClipnestApp/project.yml`. The `.xcodeproj` itself is generated (and gitignored), never hand-edited; `project.yml` is the source of truth. It depends on `ClipnestCore` via a local SPM path (`ClipnestApp/project.yml:8-9`) and `KeyboardShortcuts` via a pinned remote SPM dependency (`project.yml:19-21`).
+- `ClipnestAppTests` — Swift Testing unit-test target for `ClipnestApp`'s own App-layer code (`ClipnestApp/project.yml:81-108`), hosted inside `Clipnest.app` (`TEST_HOST`/`BUNDLE_LOADER` set explicitly, since XcodeGen's auto-derived host path assumes the target name matches `PRODUCT_NAME`, which it doesn't here). 44 tests under `ClipnestApp/Tests/ClipnestAppTests/` cover `WindowPlacement` geometry, `PickerViewModel`'s pure decision logic (`pasteContent(for:plainText:)`, `resolvedSelection(...)`), and `ItemKind+SFSymbol` — see `docs/features.md`'s Testing strategy section for what's still manual-only (SwiftUI rendering, real pasteboard/AX).
 
 **The release pipeline is four small, chained shell scripts** (`scripts/`), each independently runnable, each failing loudly (`set -euo pipefail` + explicit `fail()` on missing preconditions):
 
@@ -533,7 +544,7 @@ Because CI already standardizes on Xcode 26, `SwiftDataClipStore.makeTestContain
 | `CoreGraphics` | Both targets | `CGEvent`/`CGEventSource` for synthesizing ⌘V/⌘C keystrokes, posted through the global HID event tap (`CGEventSynthesizer`, `ClipboardSelectionReplacer`). |
 | `CryptoKit` | `ClipnestCore` (`Store/BlobStore.swift`) | SHA-256 content hashing for blob paths and `ClipItem.contentHash`. |
 | `UniformTypeIdentifiers` | `ClipnestApp` (`ItemRow.swift`) | Pure type→icon lookup (`NSWorkspace.shared.icon(for: UTType)`) for `.file` row thumbnails — deliberately not `icon(forFile:)`, which touches the real file and can trigger a TCC prompt/hang for protected folders. |
-| `os` (`os.Logger`) | Both targets | The only logging mechanism used anywhere — metadata-only per the privacy rules in [§1](#1-overview). |
+| `os` (`os.Logger`) | Both targets | The only logging mechanism used anywhere — metadata-only per the privacy rules in [§1](#1-overview). Every `Logger(subsystem:category:)` call site (6 across both targets) shares one subsystem string via `ClipnestLog.subsystem` (`Sources/ClipnestCore/Logging.swift:7-11`) rather than repeating the `"com.clipnest.app"` literal. |
 
 ---
 
@@ -549,4 +560,4 @@ Because CI already standardizes on Xcode 26, `SwiftDataClipStore.makeTestContain
 - **Deployment floor is macOS 14.0**, pinned in three places that must move together (`Package.swift:6`, `ClipnestApp/project.yml:5,26`, `.claude/coding-standards.md`) — never lowered without a logged architect decision, since it's the binding constraint for SwiftData itself. It also rules out `#Index`/`#Unique` on the SwiftData `@Model` entities' `normalizedText` fields (those macros require macOS 15+); query cost is bounded instead via `FetchDescriptor.fetchOffset`/`fetchLimit` (`Sources/ClipnestCore/Store/SwiftDataClipStore.swift:356-361`).
 - **Exactly one third-party dependency, reviewed as a standing policy** (`.claude/coding-standards.md`, Dependency policy) — any new `import` outside the system-framework list in [§9](#9-external-dependencies) is treated as a review blocker, not a nit.
 - **`docs/API.md` currently describes a slightly earlier state of `ClipStore`/`Search`** (documents `fetchAll`-driven search and a `SearchFilter`/`SnippetSearchFilter` pair that no longer exist) than the DB-virtualized `query(...)`-driven design this document describes — see the note in [§3.1 Store](#store) and [§3.1 Search](#search). A future pass to reconcile `docs/API.md` with the current `ClipStore`/`SnippetStore` protocol shape (adding `query`/`ClipScope`, removing `SearchFilter`) would close that gap.
-- **No automated tests for `ClipnestApp`.** Per `.claude/coding-standards.md`'s "UI kept thin... light smoke tests only" and the project's actual practice (confirmed by `project-context.md`'s D18: "this project has no App-level test target wired into `swift test`"), essentially all unit-test coverage (176 `@Test` functions) lives in `ClipnestCoreTests`; picker/view-model-level UI behavior is verified manually.
+- **`ClipnestApp` now has a thin slice of automated coverage, not full coverage.** `ClipnestAppTests` (`ClipnestApp/project.yml:81-108`) — 44 `@Test` functions under `ClipnestApp/Tests/ClipnestAppTests/` — covers `WindowPlacement` geometry, `PickerViewModel`'s pure decision logic (`pasteContent(for:plainText:)`, `resolvedSelection(...)`), and `ItemKind+SFSymbol`. The bulk of picker/view-model-level UI behavior (SwiftUI rendering, `PickerPanel`, `AppEnvironment`/`AppDelegate`, real Accessibility/pasteboard behavior) is still verified manually only, per `.claude/coding-standards.md`'s "UI kept thin... light smoke tests only." `ClipnestCoreTests` remains the bulk of the suite (180 `@Test` functions).

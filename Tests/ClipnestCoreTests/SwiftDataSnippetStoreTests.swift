@@ -5,9 +5,14 @@ import Testing
 @testable import ClipnestCore
 
 /// Same behavioral contract as `SnippetStoreTests` (`InMemorySnippetStore`),
-/// run against `SwiftDataSnippetStore` instead. Every container here is
-/// `isStoredInMemoryOnly: true`; this suite never touches the real
-/// `~/Library/Application Support/Clipnest`, per coding-standards.md.
+/// run against `SwiftDataSnippetStore` instead. Every scenario shared with
+/// `SnippetStoreTests` is defined once in `SnippetStoreContractTests.swift`;
+/// this file wires that contract to `SwiftDataSnippetStore`'s construction,
+/// then adds this conformance's own impl-specific tests below
+/// (`swiftDataFindByKeyword`, sync-after-update, migration-crash fix,
+/// corrupt-store recovery). Every container here is `isStoredInMemoryOnly:
+/// true`; this suite never touches the real `~/Library/Application
+/// Support/Clipnest`, per coding-standards.md.
 ///
 /// `.serialized`: the migration-crash fix's tests below deliberately declare
 /// a test-local `SnippetRecord` `@Model` sharing the *exact* simple name of
@@ -24,15 +29,6 @@ import Testing
 @Suite("SwiftDataSnippetStore", .serialized)
 struct SwiftDataSnippetStoreTests {
 
-  private func makeSnippet(
-    title: String = "Title",
-    body: String = "Body",
-    keyword: String? = nil,
-    createdAt: Date = Date()
-  ) -> Snippet {
-    Snippet(title: title, body: body, keyword: keyword, createdAt: createdAt)
-  }
-
   private func makeStore() throws -> SwiftDataSnippetStore {
     let container = try SwiftDataSnippetStore.makeTestContainer()
     return SwiftDataSnippetStore(modelContainer: container)
@@ -40,201 +36,114 @@ struct SwiftDataSnippetStoreTests {
 
   @Test("create stores the snippet and returns it")
   func createStoresSnippet() async throws {
-    let store = try makeStore()
-    let snippet = makeSnippet(title: "Greeting", body: "Hello!")
-
-    let created = try await store.create(snippet)
-
-    #expect(created.id == snippet.id)
-    let all = try await store.fetchAll()
-    #expect(all.count == 1)
-    #expect(all.first?.title == "Greeting")
+    try await SnippetStoreContractTests.createStoresSnippet {
+      try makeStore()
+    }
   }
 
   @Test("update changes title/body/keyword and leaves createdAt untouched")
   func updateChangesFields() async throws {
-    let store = try makeStore()
-    let createdAt = Date(timeIntervalSince1970: 1_000)
-    let snippet = makeSnippet(title: "Old", body: "Old body", createdAt: createdAt)
-    _ = try await store.create(snippet)
-
-    let updated = try await store.update(
-      snippet.id, title: "New", body: "New body", keyword: "new-kw")
-
-    #expect(updated.title == "New")
-    #expect(updated.body == "New body")
-    #expect(updated.keyword == "new-kw")
-    #expect(updated.createdAt == createdAt)
-    #expect(updated.id == snippet.id)
+    try await SnippetStoreContractTests.updateChangesFields {
+      try makeStore()
+    }
   }
 
   @Test("update on an unknown id throws .notFound")
   func updateUnknownIDThrows() async throws {
-    let store = try makeStore()
-
-    await #expect(throws: SnippetStoreError.notFound) {
-      try await store.update(UUID(), title: "x", body: "y", keyword: nil)
+    try await SnippetStoreContractTests.updateUnknownIDThrows {
+      try makeStore()
     }
   }
 
   @Test("delete removes exactly the targeted snippet")
   func deleteRemovesExactlyOneSnippet() async throws {
-    let store = try makeStore()
-    let keep = try await store.create(makeSnippet(title: "Keep"))
-    let remove = try await store.create(makeSnippet(title: "Remove"))
-
-    try await store.delete(remove.id)
-
-    let all = try await store.fetchAll()
-    #expect(all.count == 1)
-    #expect(all.first?.id == keep.id)
+    try await SnippetStoreContractTests.deleteRemovesExactlyOneSnippet {
+      try makeStore()
+    }
   }
 
   @Test("delete on an unknown id throws .notFound")
   func deleteUnknownIDThrows() async throws {
-    let store = try makeStore()
-
-    await #expect(throws: SnippetStoreError.notFound) {
-      try await store.delete(UUID())
+    try await SnippetStoreContractTests.deleteUnknownIDThrows {
+      try makeStore()
     }
   }
 
   @Test("fetchAll returns snippets newest-first by createdAt")
   func fetchAllOrdersNewestFirst() async throws {
-    let store = try makeStore()
-    let older = makeSnippet(title: "Older", createdAt: Date(timeIntervalSince1970: 1_000))
-    let newer = makeSnippet(title: "Newer", createdAt: Date(timeIntervalSince1970: 2_000))
-    _ = try await store.create(older)
-    _ = try await store.create(newer)
-
-    let all = try await store.fetchAll()
-
-    #expect(all.map(\.title) == ["Newer", "Older"])
+    try await SnippetStoreContractTests.fetchAllOrdersNewestFirst {
+      try makeStore()
+    }
   }
 
   @Test("fetchAll on an empty store returns an empty array")
   func fetchAllEmptyStore() async throws {
-    let store = try makeStore()
-
-    let all = try await store.fetchAll()
-
-    #expect(all.isEmpty)
+    try await SnippetStoreContractTests.fetchAllEmptyStore {
+      try makeStore()
+    }
   }
 
   @Test("query with empty text returns everything, newest-first")
   func queryEmptyTextReturnsAllNewestFirst() async throws {
-    let store = try makeStore()
-    let older = makeSnippet(title: "Older", createdAt: Date(timeIntervalSince1970: 1_000))
-    let newer = makeSnippet(title: "Newer", createdAt: Date(timeIntervalSince1970: 2_000))
-    _ = try await store.create(older)
-    _ = try await store.create(newer)
-
-    let result = try await store.query(text: "", offset: 0, limit: 10)
-
-    #expect(result.map(\.title) == ["Newer", "Older"])
+    try await SnippetStoreContractTests.queryEmptyTextReturnsAllNewestFirst {
+      try makeStore()
+    }
   }
 
   @Test("query matches by title (Tag), case-insensitive")
   func queryMatchesByTitle() async throws {
-    let store = try makeStore()
-    _ = try await store.create(makeSnippet(title: "Meeting Notes"))
-    _ = try await store.create(makeSnippet(title: "Grocery List"))
-
-    let result = try await store.query(text: "meeting", offset: 0, limit: 10)
-
-    #expect(result.count == 1)
-    #expect(result.first?.title == "Meeting Notes")
+    try await SnippetStoreContractTests.queryMatchesByTitle {
+      try makeStore()
+    }
   }
 
   @Test("query matches by body, case-insensitive")
   func queryMatchesByBody() async throws {
-    let store = try makeStore()
-    _ = try await store.create(makeSnippet(title: "a", body: "Contains the word Invoice in it"))
-    _ = try await store.create(makeSnippet(title: "b", body: "Unrelated content"))
-
-    let result = try await store.query(text: "invoice", offset: 0, limit: 10)
-
-    #expect(result.count == 1)
-    #expect(result.first?.title == "a")
+    try await SnippetStoreContractTests.queryMatchesByBody {
+      try makeStore()
+    }
   }
 
   @Test("query title (Tag) and body combine with OR, not AND")
   func queryFieldsCombineWithOr() async throws {
-    let store = try makeStore()
-    _ = try await store.create(makeSnippet(title: "shared", body: "unrelated"))
-    _ = try await store.create(makeSnippet(title: "unrelated", body: "shared"))
-    _ = try await store.create(makeSnippet(title: "x", body: "y"))
-
-    let result = try await store.query(text: "shared", offset: 0, limit: 10)
-
-    #expect(result.count == 2)
-    #expect(!result.contains { $0.title == "x" })
+    try await SnippetStoreContractTests.queryFieldsCombineWithOr {
+      try makeStore()
+    }
   }
 
   @Test("query never checks keyword")
   func queryKeywordIsNeverChecked() async throws {
-    let store = try makeStore()
-    _ = try await store.create(
-      makeSnippet(title: "unrelated", body: "unrelated", keyword: "onlyHere"))
-
-    let result = try await store.query(text: "onlyHere", offset: 0, limit: 10)
-
-    #expect(result.isEmpty)
+    try await SnippetStoreContractTests.queryKeywordIsNeverChecked {
+      try makeStore()
+    }
   }
 
   @Test("query pages through the full set with no duplicate or missing id")
   func queryPaginationCoversFullSet() async throws {
-    let store = try makeStore()
-    var created: [Snippet] = []
-    for index in 0..<5 {
-      created.append(
-        try await store.create(
-          makeSnippet(
-            title: "Item \(index)",
-            createdAt: Date(timeIntervalSince1970: Double(index) * 1_000)
-          )))
+    try await SnippetStoreContractTests.queryPaginationCoversFullSet {
+      try makeStore()
     }
-
-    var pagedIDs: [UUID] = []
-    var offset = 0
-    let pageSize = 2
-    while true {
-      let page = try await store.query(text: "", offset: offset, limit: pageSize)
-      if page.isEmpty { break }
-      pagedIDs.append(contentsOf: page.map(\.id))
-      offset += pageSize
-    }
-
-    #expect(Set(pagedIDs) == Set(created.map(\.id)))
-    #expect(pagedIDs.count == created.count)
   }
 
   @Test("query offset at or beyond the total count returns empty, no crash")
   func queryOffsetBeyondCountReturnsEmpty() async throws {
-    let store = try makeStore()
-    _ = try await store.create(makeSnippet(title: "Only"))
-
-    let result = try await store.query(text: "", offset: 5, limit: 10)
-
-    #expect(result.isEmpty)
+    try await SnippetStoreContractTests.queryOffsetBeyondCountReturnsEmpty {
+      try makeStore()
+    }
   }
 
   @Test("query limit caps the returned count")
   func queryLimitCapsReturnedCount() async throws {
-    let store = try makeStore()
-    for index in 0..<5 {
-      _ = try await store.create(makeSnippet(title: "Item \(index)"))
+    try await SnippetStoreContractTests.queryLimitCapsReturnedCount {
+      try makeStore()
     }
-
-    let result = try await store.query(text: "", offset: 0, limit: 2)
-
-    #expect(result.count == 2)
   }
 
   @Test("query stays in sync after update: stale text stops matching, new text matches")
   func queryReflectsUpdatedTitleAndBody() async throws {
     let store = try makeStore()
-    let snippet = try await store.create(makeSnippet(title: "Old", body: "Old body"))
+    let snippet = try await store.create(
+      SnippetStoreContractTests.makeSnippet(title: "Old", body: "Old body"))
 
     let beforeUpdate = try await store.query(text: "Old", offset: 0, limit: 10)
     #expect(beforeUpdate.contains { $0.id == snippet.id })
@@ -274,7 +183,8 @@ struct SwiftDataSnippetStoreTests {
   )
   func emptyNormalizedTextSnippetIsBackfilledAndBecomesMatchable() async throws {
     let container = try SwiftDataSnippetStore.makeTestContainer()
-    let legacySnippet = makeSnippet(title: "Legacy Title", body: "Legacy Body")
+    let legacySnippet = SnippetStoreContractTests.makeSnippet(
+      title: "Legacy Title", body: "Legacy Body")
     try SwiftDataSnippetStore.insertRecordWithEmptyNormalizedTextForTesting(
       legacySnippet, in: container)
 
@@ -339,6 +249,80 @@ struct SwiftDataSnippetStoreTests {
     #expect(results.count == 1)
     #expect(results.first?.title == "Legacy Title")
     #expect(results.first?.body == "Legacy Body")
+  }
+
+  // MARK: - Corrupt-store recovery
+
+  /// Finds the `.corrupt-<timestamp>` backup file `ModelContainerRecovery`
+  /// creates next to `originalURL` on recovery, if any — see the identical
+  /// helper in `SwiftDataClipStoreTests` for the full rationale. Never
+  /// touches the real `~/Library/Application Support`; scans only
+  /// `originalURL`'s own (temp) directory. Reuses `ModelContainerRecovery
+  /// .backupSuffixPrefix` rather than re-hardcoding the `.corrupt-` literal.
+  private func corruptBackupURL(near originalURL: URL) throws -> URL? {
+    let directory = originalURL.deletingLastPathComponent()
+    let prefix = originalURL.lastPathComponent + ModelContainerRecovery.backupSuffixPrefix
+    let contents = try FileManager.default.contentsOfDirectory(
+      at: directory, includingPropertiesForKeys: nil)
+    return contents.first { $0.lastPathComponent.hasPrefix(prefix) }
+  }
+
+  /// Removes `fileURL` and every file recovery could have left alongside it
+  /// — see the identical helper in `SwiftDataClipStoreTests` for the full
+  /// rationale.
+  private func cleanUpRecoveryArtifacts(near fileURL: URL) {
+    let backupURL = try? corruptBackupURL(near: fileURL)
+    for url in [fileURL, backupURL].compactMap({ $0 }) {
+      for candidate in [
+        url, URL(fileURLWithPath: url.path + "-wal"), URL(fileURLWithPath: url.path + "-shm"),
+      ] {
+        try? FileManager.default.removeItem(at: candidate)
+      }
+    }
+  }
+
+  @Test(
+    "A snippet store file containing garbage bytes recovers: makeRecoveringContainerForTesting returns a fresh, empty, writable container instead of throwing"
+  )
+  func corruptStoreFileRecoversToFreshEmptyWritableContainer() async throws {
+    let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "SwiftDataSnippetStoreTests-corrupt-\(UUID().uuidString).store")
+    try Data("not a valid SwiftData/SQLite store — garbage bytes".utf8).write(to: fileURL)
+    defer { cleanUpRecoveryArtifacts(near: fileURL) }
+
+    let container = try SwiftDataSnippetStore.makeRecoveringContainerForTesting(at: fileURL)
+    let store = SwiftDataSnippetStore(modelContainer: container)
+
+    // Fresh: the corrupt row-that-never-was is gone, not carried forward.
+    let beforeCreate = try await store.fetchAll()
+    #expect(beforeCreate.isEmpty)
+
+    // Writable: the recovered container isn't left in some read-only or
+    // half-open state — normal creates/queries work exactly as they would
+    // against any other on-disk store.
+    let created = try await store.create(
+      SnippetStoreContractTests.makeSnippet(title: "After recovery"))
+    let all = try await store.fetchAll()
+    #expect(all.map(\.id) == [created.id])
+  }
+
+  @Test(
+    "Corrupt snippet-store recovery backs up the original bytes rather than deleting them"
+  )
+  func corruptStoreFileIsBackedUpNotDeleted() async throws {
+    let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "SwiftDataSnippetStoreTests-corrupt-\(UUID().uuidString).store")
+    let garbageBytes = Data("not a valid SwiftData/SQLite store — garbage bytes".utf8)
+    try garbageBytes.write(to: fileURL)
+    defer { cleanUpRecoveryArtifacts(near: fileURL) }
+
+    _ = try SwiftDataSnippetStore.makeRecoveringContainerForTesting(at: fileURL)
+
+    let maybeBackupURL = try corruptBackupURL(near: fileURL)
+    let backupURL = try #require(maybeBackupURL)
+    #expect(backupURL.lastPathComponent.contains(ModelContainerRecovery.backupSuffixPrefix))
+    let backedUpBytes = try Data(contentsOf: backupURL)
+    #expect(backedUpBytes == garbageBytes)
   }
 }
 

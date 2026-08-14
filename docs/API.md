@@ -108,7 +108,7 @@ the Tag doubles as both.
 ```swift
 public protocol ClipStore: Sendable {
   func insertOrBumpDuplicate(_ item: ClipItem) async throws -> ClipItem
-  func fetchAll(matching query: SearchQuery?) async throws -> [ClipItem]
+  func fetchAll() async throws -> [ClipItem]
   func fetchPinned() async throws -> [ClipItem]
   func query(
     text: String, kind: ItemKind?, scope: ClipScope, offset: Int, limit: Int
@@ -140,12 +140,9 @@ the app, since deleting an item also deletes its blob (see
   matches everything); `kind` is an exact match when non-nil (`nil` matches
   every kind); `text` and `kind` combine with AND. `offset`/`limit` window
   the already-filtered-and-sorted result — both must be `>= 0`.
-- **`fetchAll(matching:)`** — every item, newest-first, unbounded and
-  unfiltered. `query` (the `SearchQuery` parameter — not to be confused
-  with the `query(text:kind:scope:offset:limit:)` method above) is accepted
-  for source compatibility but always **ignored**; the picker no longer
-  calls this method — use `query(text:kind:scope:offset:limit:)` for
-  anything user-facing. Pass `nil`.
+- **`fetchAll()`** — every item, newest-first, unbounded and unfiltered.
+  The whole-table accessor (tests/export); the picker never calls it — use
+  `query(text:kind:scope:offset:limit:)` for anything user-facing.
 - **`fetchPinned()`** — pinned items only, newest-first by `createdAt`
   (superseded for picker use by `query(scope: .pinned, ...)`, which sorts
   by `pinnedAt` instead — kept for callers that just want the full pinned
@@ -336,12 +333,12 @@ public struct SearchQuery: Equatable, Sendable {
   public init(text: String = "", kindFilter: ItemKind? = nil)
 }
 ```
-A small value type bundling free-text + an optional kind filter. Still
-referenced by `ClipStore.fetchAll(matching:)`'s legacy signature (see
-[Store](#store)), but `ClipStore.query(...)`/`SnippetStore.query(...)` take
-`text`/`kind` as plain parameters directly rather than wrapping them in
-this struct — construct one only if you're calling `fetchAll(matching:)`
-(which ignores it) or building your own equivalent bundling type.
+A small value type bundling free-text + an optional kind filter. Used by
+the picker (`PickerViewModel`) as its applied-search state; its fields feed
+`ClipStore.query(...)`, which takes `text`/`kind` as plain parameters
+directly rather than accepting this struct. Construct one only if you're
+tracking search state yourself or building an equivalent bundling type —
+the store `query(...)` methods do not take it.
 
 ```swift
 public enum SearchHighlighter {

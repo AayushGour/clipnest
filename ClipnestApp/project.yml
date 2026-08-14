@@ -71,12 +71,50 @@ targets:
           CODE_SIGN_STYLE: Manual
           DEVELOPMENT_TEAM: ${DEVELOPMENT_TEAM}
           CODE_SIGN_IDENTITY: ${CODE_SIGN_IDENTITY}
+  # Unit test target for `ClipnestApp`'s own App-layer code (the architecture
+  # + implementation reviews flagged the App target as having ZERO automated
+  # tests — see project-context.md). Swift Testing, not XCTest, matching
+  # coding-standards.md's test-framework rule for the whole repo. Also
+  # depends on `ClipnestCore` directly so tests can construct
+  # `InMemoryClipStore`/`InMemorySnippetStore` fakes without an intermediate
+  # App-layer type.
+  ClipnestAppTests:
+    type: bundle.unit-test
+    platform: macOS
+    deploymentTarget: "14.0"
+    sources:
+      - path: Tests/ClipnestAppTests
+    dependencies:
+      - target: ClipnestApp
+      - package: ClipnestCore
+        product: ClipnestCore
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.clipnest.app.tests
+        GENERATE_INFOPLIST_FILE: YES
+        SWIFT_VERSION: "6.0"
+        # XcodeGen's own `- target: ClipnestApp` dependency auto-configures
+        # TEST_HOST/BUNDLE_LOADER (hosted-in-app unit testing) — but it
+        # derives the host binary's path from the *target* name
+        # ("ClipnestApp"), not its actual `PRODUCT_NAME` ("Clipnest", set
+        # above on the `ClipnestApp` target) — the two diverged the moment
+        # `PRODUCT_NAME` was overridden, so the auto-derived path pointed at
+        # a `ClipnestApp.app` that's never actually produced (the real
+        # product is `Clipnest.app`), and `xcodebuild test` failed with
+        # "Could not find test host." Set explicitly here instead, matching
+        # `PRODUCT_NAME: Clipnest` above — this literal must stay in sync
+        # with that setting if it's ever renamed again.
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Clipnest.app/Contents/MacOS/Clipnest"
+        BUNDLE_LOADER: "$(TEST_HOST)"
 schemes:
   ClipnestApp:
     build:
       targets:
         ClipnestApp: all
+        ClipnestAppTests: [test]
     run:
       config: Debug
     test:
       config: Debug
+      targets:
+        - ClipnestAppTests

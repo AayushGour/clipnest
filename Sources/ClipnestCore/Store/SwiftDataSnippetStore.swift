@@ -31,6 +31,12 @@ public actor SwiftDataSnippetStore: SnippetStore {
   /// Support/Clipnest/Snippets.store` — the same base-directory family as
   /// `BlobStore.defaultBaseDirectory()` and `SwiftDataClipStore`. Never
   /// called by tests.
+  ///
+  /// Corrupt-store recovery: routed through `ModelContainerRecovery
+  /// .openWithRecovery(...)` — see `SwiftDataClipStore
+  /// .makeProductionContainer()`'s doc comment for the full rationale, which
+  /// applies identically here. Signature is unchanged (`() throws ->
+  /// ModelContainer`), so callers (`AppEnvironment`) need no changes.
   public static func makeProductionContainer() throws -> ModelContainer {
     let baseDirectory = BlobStore.defaultBaseDirectory()
     do {
@@ -40,9 +46,11 @@ public actor SwiftDataSnippetStore: SnippetStore {
       throw SnippetStoreError.ioFailure(underlying: String(describing: error))
     }
     let storeURL = baseDirectory.appendingPathComponent(storeFileName)
-    let configuration = ModelConfiguration(url: storeURL)
     do {
-      return try ModelContainer(for: SnippetRecord.self, configurations: configuration)
+      return try ModelContainerRecovery.openWithRecovery(storeURL: storeURL, logger: logger) {
+        let configuration = ModelConfiguration(url: storeURL)
+        return try ModelContainer(for: SnippetRecord.self, configurations: configuration)
+      }
     } catch {
       throw SnippetStoreError.ioFailure(underlying: String(describing: error))
     }
@@ -79,6 +87,27 @@ public actor SwiftDataSnippetStore: SnippetStore {
     }
   }
 
+  /// Test-only: exercises the exact same corrupt-store recovery path as
+  /// `makeProductionContainer()` against an explicit `url` — see
+  /// `SwiftDataClipStore.makeRecoveringContainerForTesting(at:)`'s doc
+  /// comment for the full rationale, which applies identically here.
+  /// Deliberately separate from `makeContainerForTesting(at:)` above, which
+  /// must stay recovery-free for the pre-`normalizedText` migration tests.
+  /// Never called by production code.
+  public static func makeRecoveringContainerForTesting(at url: URL) throws -> ModelContainer {
+    do {
+      return try ModelContainerRecovery.openWithRecovery(storeURL: url, logger: logger) {
+        // Explicit Schema so SwiftData maps the model directly rather than
+        // inferring it via `Bundle.main`. See makeTestContainer().
+        let schema = Schema([SnippetRecord.self])
+        let configuration = ModelConfiguration(schema: schema, url: url)
+        return try ModelContainer(for: schema, configurations: configuration)
+      }
+    } catch {
+      throw SnippetStoreError.ioFailure(underlying: String(describing: error))
+    }
+  }
+
   /// Test-only: inserts `snippet` directly into `container` with an
   /// **empty** `normalizedText`, bypassing the normal `title + " " + body`
   /// computation — simulates a row exactly as it looks the moment it
@@ -104,7 +133,7 @@ public actor SwiftDataSnippetStore: SnippetStore {
   // MARK: - Migration-crash fix: normalizedText backfill
 
   private static let logger = Logger(
-    subsystem: "com.clipnest.app", category: "SwiftDataSnippetStore")
+    subsystem: ClipnestLog.subsystem, category: "SwiftDataSnippetStore")
 
   /// One-time backfill for rows that migrated in with `normalizedText`
   /// defaulted to `""` — see `SwiftDataClipStore.backfillNormalizedText(in:)`'s

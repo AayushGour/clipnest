@@ -31,7 +31,7 @@ public actor InMemoryClipStore: ClipStore {
     return item
   }
 
-  public func fetchAll(matching query: SearchQuery?) async throws -> [ClipItem] {
+  public func fetchAll() async throws -> [ClipItem] {
     // Unbounded/unfiltered by design — see the protocol's doc comment.
     // `query(text:kind:scope:offset:limit:)` (T49) is the real, filtered/
     // paged path the picker actually uses.

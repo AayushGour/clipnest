@@ -50,6 +50,15 @@ public actor SwiftDataClipStore: ClipStore {
   /// The production on-disk container: `~/Library/Application
   /// Support/Clipnest/ClipItems.store` — the same base-directory family as
   /// `BlobStore.defaultBaseDirectory()`. Never called by tests.
+  ///
+  /// Corrupt-store recovery (architecture-review finding): routed through
+  /// `ModelContainerRecovery.openWithRecovery(...)` so a damaged/unreadable
+  /// store file no longer throws straight through to `AppEnvironment.init`
+  /// (which `AppDelegate` would otherwise turn into an unrecoverable launch
+  /// crash) — see that type's doc comment for the full recovery design. This
+  /// method's signature is unchanged (`() throws -> ModelContainer`), so
+  /// callers need no changes; it now only throws for a genuinely
+  /// unrecoverable failure (recovery's own retry also failed).
   public static func makeProductionContainer() throws -> ModelContainer {
     let baseDirectory = BlobStore.defaultBaseDirectory()
     do {
@@ -59,9 +68,11 @@ public actor SwiftDataClipStore: ClipStore {
       throw ClipStoreError.ioFailure(underlying: String(describing: error))
     }
     let storeURL = baseDirectory.appendingPathComponent(storeFileName)
-    let configuration = ModelConfiguration(url: storeURL)
     do {
-      return try ModelContainer(for: ClipItemRecord.self, configurations: configuration)
+      return try ModelContainerRecovery.openWithRecovery(storeURL: storeURL, logger: logger) {
+        let configuration = ModelConfiguration(url: storeURL)
+        return try ModelContainer(for: ClipItemRecord.self, configurations: configuration)
+      }
     } catch {
       throw ClipStoreError.ioFailure(underlying: String(describing: error))
     }
@@ -107,6 +118,31 @@ public actor SwiftDataClipStore: ClipStore {
     }
   }
 
+  /// Test-only: exercises the exact same corrupt-store recovery path as
+  /// `makeProductionContainer()` (see `ModelContainerRecovery
+  /// .openWithRecovery(...)`) but against an explicit `url` instead of the
+  /// fixed production path, so tests can prove recovery from a genuinely
+  /// corrupt store file without ever touching `~/Library/Application
+  /// Support/Clipnest`. Deliberately does NOT share an implementation with
+  /// `makeContainerForTesting(at:)` above — that one must stay
+  /// recovery-free so the pre-`normalizedText` migration tests keep proving
+  /// a legitimately-migratable store is upgraded, not backed up/wiped. Never
+  /// called by production code, which always goes through
+  /// `makeProductionContainer()`.
+  public static func makeRecoveringContainerForTesting(at url: URL) throws -> ModelContainer {
+    do {
+      return try ModelContainerRecovery.openWithRecovery(storeURL: url, logger: logger) {
+        // Explicit Schema so SwiftData maps the model directly rather than
+        // inferring it via `Bundle.main`. See makeTestContainer().
+        let schema = Schema([ClipItemRecord.self])
+        let configuration = ModelConfiguration(schema: schema, url: url)
+        return try ModelContainer(for: schema, configurations: configuration)
+      }
+    } catch {
+      throw ClipStoreError.ioFailure(underlying: String(describing: error))
+    }
+  }
+
   /// Test-only: inserts `item` directly into `container` with an **empty**
   /// `normalizedText`, bypassing `insertOrBumpDuplicate`'s normal
   /// `previewText.lowercased()` computation — simulates a row exactly as it
@@ -131,7 +167,8 @@ public actor SwiftDataClipStore: ClipStore {
 
   // MARK: - Migration-crash fix: normalizedText backfill
 
-  private static let logger = Logger(subsystem: "com.clipnest.app", category: "SwiftDataClipStore")
+  private static let logger = Logger(
+    subsystem: ClipnestLog.subsystem, category: "SwiftDataClipStore")
 
   /// One-time backfill for rows that migrated in with `normalizedText`
   /// defaulted to `""` — the lightweight-migration default that lets an
@@ -195,7 +232,7 @@ public actor SwiftDataClipStore: ClipStore {
     return record.asClipItem()
   }
 
-  public func fetchAll(matching query: SearchQuery?) async throws -> [ClipItem] {
+  public func fetchAll() async throws -> [ClipItem] {
     // Unbounded/unfiltered by design — see the protocol's doc comment.
     // `query(text:kind:scope:offset:limit:)` (T49) is the real, filtered/
     // paged path the picker actually uses.
