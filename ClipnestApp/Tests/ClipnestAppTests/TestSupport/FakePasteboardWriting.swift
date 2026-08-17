@@ -18,6 +18,7 @@ final class FakePasteboardWriting: PasteboardWriting, @unchecked Sendable {
   private(set) var writtenDataType: NSPasteboard.PasteboardType?
   private(set) var writtenRTF: Data?
   private(set) var writtenPlain: String?
+  private(set) var writtenFileURL: URL?
   private(set) var writeCount = 0
   /// Mirrors real `NSPasteboard.changeCount` semantics closely enough for
   /// tests: increments on every write, starting from an arbitrary non-zero
@@ -41,6 +42,12 @@ final class FakePasteboardWriting: PasteboardWriting, @unchecked Sendable {
   func writeRichText(rtf: Data, plain: String) {
     writtenRTF = rtf
     writtenPlain = plain
+    writeCount += 1
+    changeCount += 1
+  }
+
+  func writeFileURL(_ url: URL) {
+    writtenFileURL = url
     writeCount += 1
     changeCount += 1
   }

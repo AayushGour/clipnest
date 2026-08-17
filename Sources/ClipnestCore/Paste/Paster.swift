@@ -56,6 +56,19 @@ public protocol PasteboardWriting: Sendable {
   /// Clears the pasteboard once, then writes BOTH the `.rtf` and `.string`
   /// representations so a paste target picks the richest form it supports.
   func writeRichText(rtf: Data, plain: String)
+
+  /// Clears the pasteboard and writes `url` as a FILE, via
+  /// `NSPasteboard.writeObjects` — deliberately not as a single hand-rolled
+  /// `.fileURL` string, which is what this used to do.
+  ///
+  /// `writeObjects([url as NSURL])` puts every representation AppKit
+  /// generates for a file URL on the pasteboard at once: the modern
+  /// `public.file-url`, the legacy `NSFilenamesPboardType` that plenty of
+  /// apps still read, and a real URL object for anything reading typed
+  /// pasteboard items. Writing only `public.file-url` meant a paste into an
+  /// app that reads any of the other forms silently produced nothing — or
+  /// pasted the literal text `file:///…` instead of the file.
+  func writeFileURL(_ url: URL)
 }
 
 // `PasteboardWriting` refines `Sendable`, but `NSPasteboard` is an AppKit type
@@ -82,6 +95,13 @@ extension NSPasteboard: PasteboardWriting {
     clearContents()
     setData(rtf, forType: .rtf)
     setString(plain, forType: .string)
+  }
+
+  public func writeFileURL(_ url: URL) {
+    clearContents()
+    // `as NSURL`: `writeObjects` takes `NSPasteboardWriting`, which `NSURL`
+    // conforms to and the Swift-native `URL` value type does not.
+    writeObjects([url as NSURL])
   }
 }
 
@@ -199,7 +219,7 @@ public struct Paster: Sendable {
       }
       pasteboard.writeData(tiffData, forType: .tiff)
     case .file(let url):
-      pasteboard.writeString(url.absoluteString, forType: .fileURL)
+      pasteboard.writeFileURL(url)
     case .richText(let rtf, let plain):
       pasteboard.writeRichText(rtf: rtf, plain: plain)
     }

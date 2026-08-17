@@ -41,6 +41,14 @@ private final class FakePasteboardWriting: PasteboardWriting, @unchecked Sendabl
     writeCount += 1
     changeCount += 1
   }
+
+  private(set) var writtenFileURL: URL?
+
+  func writeFileURL(_ url: URL) {
+    writtenFileURL = url
+    writeCount += 1
+    changeCount += 1
+  }
 }
 
 /// Mock `EventSynthesizing` — records invocations instead of posting a real
@@ -190,7 +198,7 @@ struct PasterTests {
   }
 
   @Test(
-    "With Accessibility granted, writes a file's URL as a string then calls the synthesizer exactly once with the right target"
+    "With Accessibility granted, writes the file itself then calls the synthesizer exactly once with the right target"
   )
   func accessibilityGrantedWritesFileThenSynthesizes() async throws {
     let pasteboard = FakePasteboardWriting()
@@ -205,8 +213,11 @@ struct PasterTests {
 
     try await paster.paste(.file(fileURL), targetingFrontmostApp: target)
 
-    #expect(pasteboard.writtenString == fileURL.absoluteString)
-    #expect(pasteboard.writtenType == .fileURL)
+    // Written as a file, via the `writeObjects`-backed path — NOT as a
+    // hand-rolled `public.file-url` string, which pasted as literal text in
+    // apps reading any other representation.
+    #expect(pasteboard.writtenFileURL == fileURL)
+    #expect(pasteboard.writtenString == nil)
     #expect(synthesizer.invocationCount == 1)
     #expect(synthesizer.lastTarget == target)
   }

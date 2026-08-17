@@ -102,6 +102,18 @@ private final class CaptureFailureRecorder: @unchecked Sendable {
   }
 }
 
+/// A single mutable `Bool` box, so a test's `captureEnabledProvider` closure
+/// can read a flag that the test body flips mid-test. Same "plain wrapper is
+/// fine" reasoning as `CaptureFailureRecorder`/`CaptureRecorder` below: only
+/// ever touched sequentially from this @MainActor test body, never
+/// concurrently. Avoids capturing a raw `var` directly in a `@Sendable`
+/// closure, which Swift 6 strict concurrency flags even though the access
+/// here is provably sequential.
+private final class MutableFlag: @unchecked Sendable {
+  var value: Bool
+  init(_ value: Bool) { self.value = value }
+}
+
 /// Records every `ClipItem` handed to `ClipboardMonitor.onCapture` (T51).
 /// Same "plain class is fine" reasoning as `CaptureFailureRecorder` above:
 /// `checkNow()` invokes `onCapture` synchronously within its own async body
@@ -396,5 +408,68 @@ struct ClipboardMonitorTests {
 
     #expect(captured?.kind == .text)
     #expect(captured?.fileReference == nil)
+  }
+
+  @Test("captureEnabledProvider == false suppresses capture even on a real change")
+  func captureDisabledProviderSuppressesCapture() async throws {
+    let pasteboard = FakeMonitoredPasteboard(changeCount: 0)
+    let store = InMemoryClipStore()
+    let monitor = ClipboardMonitor(
+      store: store,
+      pasteboard: pasteboard,
+      captureEnabledProvider: { false }
+    )
+
+    pasteboard.simulateCopy(text: "should not be captured")
+    let result = await monitor.checkNow()
+
+    #expect(result == nil)
+    let all = try await store.fetchAll()
+    #expect(all.isEmpty)
+  }
+
+  @Test("captureEnabledProvider is read fresh each cycle — flipping it to true re-enables capture")
+  func captureEnabledProviderReadFreshEachCycle() async throws {
+    let pasteboard = FakeMonitoredPasteboard(changeCount: 0)
+    let store = InMemoryClipStore()
+    let enabled = MutableFlag(false)
+    let monitor = ClipboardMonitor(
+      store: store,
+      pasteboard: pasteboard,
+      captureEnabledProvider: { enabled.value }
+    )
+
+    pasteboard.simulateCopy(text: "while disabled")
+    #expect(await monitor.checkNow() == nil)
+
+    enabled.value = true
+    pasteboard.simulateCopy(text: "after enabling")
+    let result = await monitor.checkNow()
+
+    #expect(result?.previewText == "after enabling")
+    let all = try await store.fetchAll()
+    #expect(all.count == 1)
+  }
+
+  @Test("transient resume() does not override a disabled captureEnabledProvider")
+  func transientResumeDoesNotOverrideUserPause() async throws {
+    let pasteboard = FakeMonitoredPasteboard(changeCount: 0)
+    let store = InMemoryClipStore()
+    let monitor = ClipboardMonitor(
+      store: store,
+      pasteboard: pasteboard,
+      captureEnabledProvider: { false }  // user pause is ON
+    )
+
+    // Simulate the snippet-expansion clipboard borrow: transient pause then resume.
+    monitor.pause()
+    monitor.resume()
+
+    pasteboard.simulateCopy(text: "still should not capture")
+    let result = await monitor.checkNow()
+
+    #expect(result == nil)
+    let all = try await store.fetchAll()
+    #expect(all.isEmpty)
   }
 }

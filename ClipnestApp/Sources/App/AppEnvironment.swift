@@ -49,13 +49,17 @@
 import AppKit
 import ClipnestCore
 import Foundation
+import os
 
 @MainActor
 final class AppEnvironment {
+  private static let logger = Logger(subsystem: ClipnestLog.subsystem, category: "AppEnvironment")
+
   let blobStore: BlobStore
   let clipStore: SwiftDataClipStore
   let snippetStore: SwiftDataSnippetStore
   let privacyFilter: PrivacyFilter
+  let settingsStore: SettingsStore
   let pasteboardReader: PasteboardReader
   let clipboardMonitor: ClipboardMonitor
   let paster: Paster
@@ -65,6 +69,14 @@ final class AppEnvironment {
   let snippetEditorWindow: SnippetEditorWindow
   let snippetExpander: SnippetExpander
   let itemPreviewController: ItemPreviewController
+
+  /// Live Accessibility trust state, polled (macOS posts no notification for
+  /// a TCC change). Owned here because two very different consumers need the
+  /// same signal: the Permissions settings tab renders it, and
+  /// `HotkeyManager` must reinstall its `NSEvent` monitors the moment the
+  /// grant lands — a global key monitor installed while untrusted stays dead
+  /// forever otherwise.
+  let accessibilityWatcher: AccessibilityPermissionWatcher
 
   /// - Throws: whatever `SwiftDataClipStore`/`SwiftDataSnippetStore`'s
   ///   production `ModelContainer` construction throws (typed
@@ -77,12 +89,14 @@ final class AppEnvironment {
     // One shared BlobStore instance — see the file's doc comment.
     let blobStore = BlobStore(baseDirectory: BlobStore.defaultBaseDirectory())
     let privacyFilter = PrivacyFilter()
+    let settingsStore = SettingsStore()
     let pasteboardReader = PasteboardReader()
     let clipStore = SwiftDataClipStore(
       modelContainer: try SwiftDataClipStore.makeProductionContainer(), blobStore: blobStore)
 
     self.blobStore = blobStore
     self.privacyFilter = privacyFilter
+    self.settingsStore = settingsStore
     self.pasteboardReader = pasteboardReader
     self.clipStore = clipStore
     let snippetStore = SwiftDataSnippetStore(
@@ -106,15 +120,24 @@ final class AppEnvironment {
       store: clipStore,
       privacyFilter: privacyFilter,
       reader: pasteboardReader,
-      blobStore: blobStore
+      blobStore: blobStore,
+      excludedBundleIDsProvider: {
+        MainActor.assumeIsolated { Set(settingsStore.userExcludedBundleIDs) }
+      },
+      captureEnabledProvider: {
+        MainActor.assumeIsolated { settingsStore.isCaptureEnabled }
+      }
     )
 
     // T16: real paste engine — see this file's doc comment. Feeds the
-    // *prompting* Accessibility check (paste-reliability fix) so a paste
-    // attempt without Accessibility granted surfaces the system "grant
-    // access" dialog instead of silently degrading with no explanation.
+    // SILENT `PermissionsManager.isGranted`, never the prompting variant.
+    // Pasting is a hot path (every picker selection); asking it to prompt
+    // meant macOS's "Clipnest would like to control this computer" dialog
+    // reappeared on every paste made while untrusted. Discovering and fixing
+    // the permission is the Permissions settings tab's job now, plus the
+    // single first-run nudge in `requestAccessibilityOnceIfNeeded()`.
     let paster = Paster(
-      isAccessibilityGranted: { PermissionsManager.isGrantedPromptingIfNeeded() }
+      isAccessibilityGranted: { PermissionsManager.isGranted }
     )
     self.paster = paster
     let frontmostAppTracker = FrontmostAppTracker()
@@ -142,6 +165,11 @@ final class AppEnvironment {
     // non-key child `NSPanel` rather than `NSPopover`/`.popover`.
     let itemPreviewController = ItemPreviewController()
     self.itemPreviewController = itemPreviewController
+
+    // Polling is started in `registerHotkey()`, not here — construction
+    // must stay side-effect-free so tests can build an environment without
+    // a background task running.
+    self.accessibilityWatcher = AccessibilityPermissionWatcher()
 
     // Set after `panel`/`clipboardMonitor`/`snippetEditorWindow` exist to
     // break the construction-order cycle: the panel's own SwiftUI content
@@ -237,8 +265,17 @@ final class AppEnvironment {
     // (above) pasteboard observations already share. See
     // `PickerViewModel.handleNewCapture()`'s doc comment for why this is a
     // single bounded page-0 requery, not a full-table refetch.
+    let retentionStore = clipStore
     monitor.onCapture = { [weak viewModel] _ in
       viewModel?.handleNewCapture()
+      let cap = settingsStore.retentionCap
+      Task {
+        do {
+          try await retentionStore.enforceRetention(cap: cap)
+        } catch {
+          Self.logger.error("retention enforcement failed after capture: \(String(describing: error))")
+        }
+      }
     }
 
     // Snippet-expansion clipboard fallback (`ClipboardSelectionReplacer`):
@@ -271,6 +308,38 @@ final class AppEnvironment {
       guard let self else { return }
       Task { await self.snippetExpander.expand() }
     }
+
+    // A global `NSEvent` key monitor installed while the process is not
+    // Accessibility-trusted never starts firing on its own once the grant
+    // lands — it has to be reinstalled. Without this the user would grant
+    // Accessibility, see the Permissions tab flip to Granted, and still
+    // have a dead hotkey until the next launch.
+    accessibilityWatcher.onGranted = {
+      HotkeyManager.reinstallMonitors()
+    }
+    accessibilityWatcher.start()
+  }
+
+  /// Shows macOS's Accessibility prompt at most ONCE, ever, and only when
+  /// the permission is actually missing.
+  ///
+  /// This is the whole "check before prompting" rule in one place: read the
+  /// silent `PermissionsManager.isGranted` first and return immediately if
+  /// it is already granted, then consult the persisted
+  /// `SettingsStore.hasRequestedAccessibility` so a user who has already
+  /// seen (and possibly dismissed) the dialog is never nagged again. Every
+  /// later chance to grant it is user-initiated, from the Permissions
+  /// settings tab.
+  ///
+  /// Called from `AppDelegate.applicationDidFinishLaunching`, after
+  /// `registerHotkey()` — the hotkey genuinely cannot work without this
+  /// permission as of the ⌥⌘V pass-through fix (see `HotkeyManager`), so a
+  /// first-run user who is never told would just find a dead shortcut.
+  func requestAccessibilityOnceIfNeeded() {
+    guard !PermissionsManager.isGranted else { return }
+    guard !settingsStore.hasRequestedAccessibility else { return }
+    settingsStore.hasRequestedAccessibility = true
+    PermissionsManager.requestAccess()
   }
 
   /// Shows the picker panel — the menu bar "Open Clipnest" item's action,
@@ -284,5 +353,22 @@ final class AppEnvironment {
   func showPicker() {
     frontmostAppTracker.record()
     pickerPanel.show()
+  }
+
+  /// Trims history down to the user's configured cap once, now — called at
+  /// launch (also runs after each capture via `onCapture`). Fire-and-forget;
+  /// a failure is logged (metadata only), never surfaced, since retention is
+  /// best-effort housekeeping, not a user action. Pinned items are always
+  /// kept (guaranteed by `enforceRetention`).
+  func enforceRetentionNow() {
+    let cap = settingsStore.retentionCap
+    let retentionStore = clipStore
+    Task {
+      do {
+        try await retentionStore.enforceRetention(cap: cap)
+      } catch {
+        Self.logger.error("retention enforcement failed at launch: \(String(describing: error))")
+      }
+    }
   }
 }

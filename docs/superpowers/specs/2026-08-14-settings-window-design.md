@@ -1,9 +1,8 @@
-# Clipnest Settings window — design (WIP, paused 2026-08-14)
+# Clipnest Settings window — design (2026-08-14)
 
-> Status: **paused mid-brainstorm.** Surface + scope + two UX decisions are
-> locked (below); design was presented but not yet given final approval, and
-> no implementation plan has been written. Resume by re-reading this, confirming
-> the two open questions, then invoking `writing-plans`.
+> Status: **fully specified.** Surface, scope, and all UX decisions locked. The
+> two previously-open questions are resolved (retention cadence = on-launch +
+> after-each-capture; History is its own sub-tab). Ready for `writing-plans`.
 
 ## Decisions locked
 - **Surface:** a separate macOS **Settings window** (SwiftUI `Settings` scene),
@@ -72,7 +71,8 @@
 ### Out of scope (YAGNI)
 No import/export, no sync, no Accessibility-permission UI (capture works without it).
 
-## Open questions to resolve on resume
-1. Retention enforcement cadence: after each capture + on launch (proposed) vs a
-   lighter throttle?
-2. Keep **History** as its own sub-tab (retention + clear-all), or fold into General?
+## Resolved decisions (were open)
+1. **Retention cadence:** enforce on launch + after each capture. Bounded DELETE,
+   pinned protected — cheap even at 10k rows; no timer, no staleness window.
+2. **History tab:** its own sub-tab (retention picker + Clear-all), NOT folded
+   into General. Four tabs total: General · History · Shortcuts · Apps.

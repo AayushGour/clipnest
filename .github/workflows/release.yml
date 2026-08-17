@@ -3,8 +3,12 @@ name: Release
 # Auto-releases on every push to `main`. Reads MARKETING_VERSION from
 # ClipnestApp/project.yml; if no `v<version>` tag exists yet, it builds
 # Clipnest, publishes a GitHub Release with a .dmg, AND creates the tag on
-# that commit. Bump the version in project.yml (+ Casks/clipnest.rb) and push
-# — that's the whole release ritual. No manual `git tag` needed.
+# that commit. Bump MARKETING_VERSION in ClipnestApp/project.yml and push —
+# that's the whole release ritual. No manual `git tag` needed.
+#
+# Distribution is curl-only (scripts/install.sh / scripts/update.sh pull the
+# .dmg straight off the GitHub Release). There is deliberately no Homebrew
+# cask to keep in sync.
 #
 # Why not a separate tag-push trigger? A tag pushed by GITHUB_TOKEN does NOT
 # re-trigger `on: push: tags` workflows, so we tag + release in one run instead.
@@ -148,26 +152,3 @@ jobs:
             --target "$GITHUB_SHA" \
             --generate-notes \
             --notes "**SHA-256:** \`${{ steps.dmg.outputs.sha256 }}\`"
-
-      - name: Auto-update Homebrew cask (version + sha256)
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          SHA="${{ steps.dmg.outputs.sha256 }}"
-          BRANCH="$(gh repo view --json defaultBranchRef -q .defaultBranchRef.name)"
-          git fetch origin "+refs/heads/${BRANCH}:refs/remotes/origin/${BRANCH}"
-          git checkout -B "$BRANCH" "origin/${BRANCH}"
-          sed -i '' -E "s/^  version \".*\"/  version \"${VERSION}\"/" Casks/clipnest.rb
-          sed -i '' -E "s|^  sha256 .*|  sha256 \"${SHA}\"|" Casks/clipnest.rb
-          if git diff --quiet Casks/clipnest.rb; then
-            echo "Cask already current — nothing to commit."
-            exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add Casks/clipnest.rb
-          git commit -m "cask: clipnest ${VERSION}"
-          # Pushed by GITHUB_TOKEN → does not re-trigger this workflow (and even
-          # if it did, the tag now exists, so `check` would skip). No loop.
-          git push origin "HEAD:${BRANCH}"

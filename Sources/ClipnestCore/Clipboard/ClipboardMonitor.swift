@@ -90,6 +90,13 @@ public final class ClipboardMonitor {
   private let frontmostApplicationProvider: any FrontmostApplicationProviding
   private let pollInterval: TimeInterval
   private let excludedBundleIDsProvider: @Sendable () -> Set<String>
+  /// Returns whether the *user* currently wants capture on (the persisted
+  /// Settings "Pause capture" gate). Read fresh every `checkNow()` cycle and
+  /// kept deliberately separate from the transient `isPaused` flag (which the
+  /// snippet-expansion clipboard borrow toggles) — a transient `resume()` must
+  /// never silently un-pause a user who paused in Settings. Defaults to always
+  /// enabled so isolated tests and existing call sites need no change.
+  private let captureEnabledProvider: @Sendable () -> Bool
   private let captureFailureHandler: CaptureFailureHandler
 
   private var timer: Timer?
@@ -130,6 +137,7 @@ public final class ClipboardMonitor {
       WorkspaceFrontmostApplicationProvider(),
     pollInterval: TimeInterval = ClipboardMonitor.defaultPollInterval,
     excludedBundleIDsProvider: @escaping @Sendable () -> Set<String> = { [] },
+    captureEnabledProvider: @escaping @Sendable () -> Bool = { true },
     captureFailureHandler: @escaping CaptureFailureHandler = ClipboardMonitor.logCaptureFailure
   ) {
     self.store = store
@@ -140,6 +148,7 @@ public final class ClipboardMonitor {
     self.frontmostApplicationProvider = frontmostApplicationProvider
     self.pollInterval = pollInterval
     self.excludedBundleIDsProvider = excludedBundleIDsProvider
+    self.captureEnabledProvider = captureEnabledProvider
     self.captureFailureHandler = captureFailureHandler
     lastChangeCount = pasteboard.changeCount
   }
@@ -216,7 +225,7 @@ public final class ClipboardMonitor {
       privacyFilter.shouldCapture(
         availableTypes: pasteboard.availableTypes,
         sourceBundleID: sourceBundleID,
-        isPaused: isPaused,
+        isPaused: isPaused || !captureEnabledProvider(),
         customExcludedBundleIDs: excludedBundleIDsProvider()
       )
     else {

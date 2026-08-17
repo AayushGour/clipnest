@@ -18,17 +18,16 @@ Clipnest lives only in the menu bar (there's no Dock icon, no window that stays 
 
 ## 3. Install
 
-### Homebrew (recommended)
+### One-line install (recommended)
 
 ```bash
-brew tap aayushgour/clipnest https://github.com/AayushGour/clipnest
-brew install --cask clipnest
+curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash
 ```
 
-To update later:
+Clipnest installs into your Applications folder and launches. To update later:
 
 ```bash
-brew upgrade --cask clipnest
+curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/update.sh | bash
 ```
 
 ### Download the `.dmg`
@@ -230,15 +229,6 @@ Expected — an unsigned development build gets a new code identity on every reb
 Yes. Clipnest is a menu-bar-only app by design; look for its icon in the menu bar, and use ⌥⌘V or that menu to reach it.
 
 ## 10. Uninstall
-
-### Installed with Homebrew
-
-```bash
-brew uninstall --cask clipnest          # removes the app, keeps your history/snippets
-brew uninstall --zap --cask clipnest    # also deletes your local history, snippets & preferences
-```
-
-### Installed manually from the `.dmg`
 
 Drag **Clipnest** from Applications to the Trash, then, if you also want to remove your data:
 

@@ -10,15 +10,24 @@
 
 import AppKit
 import ClipnestCore
+import Combine
 import os
 
 /// Bridges Clipnest's SwiftUI `App` to AppKit lifecycle events that SwiftUI's
 /// `App` protocol doesn't expose directly (activation policy, app launch).
+///
+/// Conforms to `ObservableObject` (and publishes `environment`) so the SwiftUI
+/// `Settings` scene, which reads `appDelegate.environment` through
+/// `@NSApplicationDelegateAdaptor`, actually re-renders once the composition
+/// root finishes building. `environment` is nil at App-init time and only set
+/// later in `applicationDidFinishLaunching`; without publishing the change, the
+/// scene stays frozen on its first evaluation — the "Starting Clipnest…"
+/// fallback — because a plain stored `var` creates no SwiftUI dependency.
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
   private static let logger = Logger(subsystem: ClipnestLog.subsystem, category: "AppDelegate")
 
-  private(set) var environment: AppEnvironment?
+  @Published private(set) var environment: AppEnvironment?
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
@@ -28,6 +37,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
       self.environment = environment
       environment.startCapture()
       environment.registerHotkey()
+      environment.enforceRetentionNow()
+      // Checks first, prompts at most once ever, and only if actually
+      // missing — see the method's doc comment. The picker hotkey needs
+      // Accessibility as of the ⌥⌘V pass-through fix, so a first-run user
+      // has to be told something.
+      environment.requestAccessibilityOnceIfNeeded()
     } catch {
       // No safe in-app fallback if the on-disk persistence layer itself
       // can't come up (see `AppEnvironment.init()`'s doc comment) — log
