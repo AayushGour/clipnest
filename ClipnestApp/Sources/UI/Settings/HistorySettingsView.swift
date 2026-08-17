@@ -81,7 +81,9 @@ struct HistorySettingsView: View {
       }
       Button("Cancel", role: .cancel) {}
     } message: {
-      Text("This permanently deletes every captured item, including pinned ones. This can't be undone.")
+      Text(
+        "This permanently deletes every captured item, including pinned ones. "
+          + "This can't be undone.")
     }
   }
 }

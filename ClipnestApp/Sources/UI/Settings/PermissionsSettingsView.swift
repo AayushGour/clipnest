@@ -27,7 +27,9 @@ struct PermissionsSettingsView: View {
         LabeledContent("Accessibility") {
           Label(
             watcher.isGranted ? "Granted" : "Not granted",
-            systemImage: watcher.isGranted ? "checkmark.circle.fill" : "exclamationmark.triangle.fill"
+            systemImage: watcher.isGranted
+              ? "checkmark.circle.fill"
+              : "exclamationmark.triangle.fill"
           )
           .foregroundStyle(watcher.isGranted ? .green : .orange)
         }

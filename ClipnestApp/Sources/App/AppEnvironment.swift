@@ -273,7 +273,8 @@ final class AppEnvironment {
         do {
           try await retentionStore.enforceRetention(cap: cap)
         } catch {
-          Self.logger.error("retention enforcement failed after capture: \(String(describing: error))")
+          Self.logger.error(
+            "retention enforcement failed after capture: \(String(describing: error))")
         }
       }
     }

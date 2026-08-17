@@ -19,8 +19,8 @@
 // global `var` (an `extern CFStringRef`), which Swift 6's strict
 // concurrency checking otherwise flags as unaudited shared mutable state
 // even though it's a read-only constant at runtime.
-@preconcurrency import ApplicationServices
 import AppKit
+@preconcurrency import ApplicationServices
 import Foundation
 import Observation
 
