@@ -1,10 +1,10 @@
 // AccessibilityPermissionWatcherTests.swift
 //
 // Covers the transition logic the permission-prompt fix depends on: the
-// watcher must fire `onGranted` exactly once, on the false -> true edge, and
-// never on a repeat read or a revocation. `HotkeyManager.reinstallMonitors()`
-// hangs off that callback, and reinstalling monitors on every poll tick (or
-// never reinstalling) are both real bugs.
+// watcher must fire `onTrustChanged` exactly once per edge, in BOTH
+// directions, and never on a repeat read. `HotkeyManager.applyDeliveryMode()`
+// hangs off that callback — it must run on a grant (install the monitors) and
+// on a revocation (fall back to the Carbon hotkey), but not on every tick.
 //
 // The real `AXIsProcessTrusted()` is never called — `readTrustState` is
 // injected, same rationale as `Paster`'s `isAccessibilityGranted`.
@@ -37,7 +37,7 @@ struct AccessibilityPermissionWatcherTests {
     let flag = TrustFlag(false)
     let watcher = AccessibilityPermissionWatcher(readTrustState: { flag.value })
     var grantCount = 0
-    watcher.onGranted = { grantCount += 1 }
+    watcher.onTrustChanged = { if $0 { grantCount += 1 } }
 
     watcher.refresh()
     #expect(!watcher.isGranted)
@@ -59,7 +59,7 @@ struct AccessibilityPermissionWatcherTests {
     let flag = TrustFlag(true)
     let watcher = AccessibilityPermissionWatcher(readTrustState: { flag.value })
     var grantCount = 0
-    watcher.onGranted = { grantCount += 1 }
+    watcher.onTrustChanged = { if $0 { grantCount += 1 } }
 
     flag.value = false
     watcher.refresh()
@@ -72,7 +72,7 @@ struct AccessibilityPermissionWatcherTests {
     let flag = TrustFlag(true)
     let watcher = AccessibilityPermissionWatcher(readTrustState: { flag.value })
     var grantCount = 0
-    watcher.onGranted = { grantCount += 1 }
+    watcher.onTrustChanged = { if $0 { grantCount += 1 } }
 
     flag.value = false
     watcher.refresh()
@@ -88,5 +88,23 @@ struct AccessibilityPermissionWatcherTests {
     watcher.start()
     watcher.start()
     watcher.stop()
+  }
+
+  /// The revocation edge is what puts the Carbon hotkey back — if it did not
+  /// fire, losing Accessibility would leave the shortcut dead.
+  @Test("revocation fires onTrustChanged with false")
+  func revocationFiresWithFalse() {
+    let flag = TrustFlag(true)
+    let watcher = AccessibilityPermissionWatcher(readTrustState: { flag.value })
+    var observed: [Bool] = []
+    watcher.onTrustChanged = { observed.append($0) }
+
+    flag.value = false
+    watcher.refresh()
+    watcher.refresh()  // no edge — must not fire again
+    flag.value = true
+    watcher.refresh()
+
+    #expect(observed == [false, true])
   }
 }

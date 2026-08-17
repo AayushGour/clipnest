@@ -3,47 +3,58 @@
 // Plan task T27: the global hotkey that opens Clipnest's picker from
 // anywhere, without needing the menu bar.
 //
-// ⌥⌘V pass-through fix
-// --------------------
-// `.togglePicker` used to be registered through `KeyboardShortcuts.onKeyDown`,
-// which registers a Carbon `RegisterEventHotKey` hotkey. A Carbon hotkey
-// CONSUMES the keystroke exclusively: while Clipnest was running, macOS's own
-// ⌥⌘V ("Move Item Here" — paste a cut file in Finder) never fired, because
-// Clipnest swallowed the chord before Finder's menu system saw it.
+// ⌥⌘V pass-through, and why there are TWO delivery mechanisms
+// -----------------------------------------------------------
+// `.togglePicker` was originally delivered by `KeyboardShortcuts.onKeyDown`,
+// i.e. a Carbon `RegisterEventHotKey` hotkey. A Carbon hotkey CONSUMES the
+// keystroke exclusively: while Clipnest ran, macOS's own ⌥⌘V ("Move Item
+// Here" — paste a cut file in Finder) never fired, because Clipnest swallowed
+// the chord before Finder's menu system saw it.
 //
-// `.togglePicker` is therefore matched from `NSEvent` monitors instead:
+// The fix is to match the chord from `NSEvent` monitors instead, which cannot
+// consume a keystroke destined for another app — so the picker opens AND
+// Finder still gets ⌥⌘V. That is the same mechanism the app the user compared
+// this to uses (its binary imports `addGlobalMonitorForEventsMatchingMask:`,
+// not `RegisterEventHotKey`).
 //
-//   * the GLOBAL monitor (`addGlobalMonitorForEvents`) sees keystrokes while
-//     another app is frontmost and — by design, there is no return value —
-//     CANNOT consume them. Clipnest opens its picker and Finder still gets
-//     ⌥⌘V. That is exactly the mechanism the app the user compared this to
-//     uses (its binary imports `addGlobalMonitorForEventsMatchingMask:`, not
-//     `RegisterEventHotKey`).
+// The catch, and the reason `deliveryMode` exists: an `NSEvent` GLOBAL key
+// monitor only receives events while the process is Accessibility-trusted.
+// Shipping monitors unconditionally meant that on a fresh install — before
+// the user has granted anything — the shortcut was simply dead, with no
+// feedback. That is a strictly worse first-run experience than the Carbon
+// hotkey it replaced, which needed no permission at all.
 //
-//   * the LOCAL monitor (`addLocalMonitorForEvents`) covers the case where
-//     Clipnest itself has key focus (picker panel open, Settings window
-//     open). This one DOES consume on a match (returns `nil`) — passing the
-//     chord through to our own picker would type `√` (Option-V) into the
-//     search field.
+// So the mechanism is chosen from the live trust state, and re-chosen
+// whenever it changes (`AccessibilityPermissionWatcher` drives
+// `applyDeliveryMode()` from `AppEnvironment`):
 //
-// Cost of this mechanism, deliberately accepted: an `NSEvent` global key
-// monitor only receives events when the process is Accessibility-trusted, so
-// unlike the old Carbon hotkey, `.togglePicker` no longer works before the
-// user grants Accessibility. `AccessibilityPermissionWatcher` +
-// `reinstallMonitors()` handle the grant landing later (see below), and the
-// Permissions settings tab tells the user when the hotkey is inert.
+//   NOT trusted -> Carbon hotkey. Works immediately, no permission. Consumes
+//                  ⌥⌘V, so Finder does not get it — the pre-existing
+//                  behavior, and strictly better than a dead shortcut.
+//   trusted     -> NSEvent monitors. Non-consuming, so Finder gets ⌥⌘V too.
 //
-// `.expandSnippet` is deliberately NOT moved to this mechanism — it replaces
-// the user's selected text, so letting the same chord also reach the target
-// app is wrong. It keeps the consuming Carbon registration.
+// Exactly one mechanism is live at a time; switching tears the other down
+// (`KeyboardShortcuts.removeHandler(for:)` also unregisters the underlying
+// Carbon hotkey, so the chord is genuinely released).
+//
+// The LOCAL monitor is part of the trusted mode only, and unlike the global
+// one it DOES consume on a match (returns `nil`) — passing the chord through
+// to our own picker would type `√` (Option-V) into its search field.
+//
+// `.expandSnippet` is deliberately never moved off Carbon — it replaces the
+// user's selected text, so letting the same chord also reach the target app
+// is wrong.
 //
 // Privacy: the global monitor is handed every key-down system-wide, but this
 // file only ever reads `keyCode`/`modifierFlags` for an equality check
 // against the configured shortcut. Nothing is stored, logged, or forwarded —
-// `event.characters` is never touched.
+// `event.characters` is never touched, and the debug logging below records
+// only which mechanism is live, never a keystroke.
 
 import AppKit
+import ClipnestCore
 import KeyboardShortcuts
+import os
 
 extension KeyboardShortcuts.Name {
   /// Toggles Clipnest's picker panel open. Default **⌥⌘V** (Option+Command+V)
@@ -89,6 +100,20 @@ extension KeyboardShortcuts.Name {
 /// for that chord — which is what actually frees ⌥⌘V for Finder.
 @MainActor
 enum HotkeyManager {
+  /// Which mechanism is currently delivering `.togglePicker`. See this
+  /// file's header for why it depends on Accessibility trust.
+  enum DeliveryMode: String {
+    /// `KeyboardShortcuts`' Carbon `RegisterEventHotKey`. No permission
+    /// required; consumes the chord.
+    case carbonHotkey
+    /// `NSEvent` global + local monitors. Requires Accessibility; the global
+    /// one cannot consume, so other apps still receive the chord.
+    case eventMonitors
+  }
+
+  private static let logger = Logger(
+    subsystem: ClipnestLog.subsystem, category: "HotkeyManager")
+
   /// Posted by `KeyboardShortcuts` whenever a stored shortcut changes (the
   /// user recording a new one in Settings). The library declares this name
   /// internally, so it is matched here by its stable raw string.
@@ -112,6 +137,11 @@ enum HotkeyManager {
   private static var localMonitor: Any?
   private static var observers: [NSObjectProtocol] = []
 
+  /// The mechanism currently live, or `nil` before `register(onToggle:)`.
+  /// Readable so the Permissions/Shortcuts UI and the logs can say which one
+  /// is in effect rather than guessing.
+  private(set) static var deliveryMode: DeliveryMode?
+
   /// Whether `event` should fire the picker toggle, given the currently
   /// configured `shortcut`. Pure and `static` so `HotkeyManagerTests` can
   /// exercise the matching rules against synthesized `NSEvent`s without
@@ -128,42 +158,77 @@ enum HotkeyManager {
     return KeyboardShortcuts.Shortcut(event: event) == shortcut
   }
 
+  /// The mechanism that should be live for a given Accessibility trust
+  /// state. Split out as a pure function so the decision itself is testable
+  /// without touching the real permission or installing anything.
+  static func deliveryMode(forAccessibilityGranted isGranted: Bool) -> DeliveryMode {
+    isGranted ? .eventMonitors : .carbonHotkey
+  }
+
   /// Registers `.togglePicker` to call `onToggle`. Call exactly once, from
   /// `AppDelegate.applicationDidFinishLaunching` (via `AppEnvironment`).
   static func register(onToggle: @escaping () -> Void) {
     toggleAction = onToggle
     refreshShortcut()
     observeLibraryNotifications()
-    installMonitors()
+    applyDeliveryMode()
   }
 
   /// Registers `.expandSnippet` to call `onExpand`. Call exactly once, from
   /// `AppDelegate.applicationDidFinishLaunching` (via `AppEnvironment`).
-  /// Still the library's consuming Carbon registration — see the header.
+  /// Always the library's consuming Carbon registration — see the header.
   static func registerExpandSnippet(onExpand: @escaping () -> Void) {
     KeyboardShortcuts.onKeyDown(for: .expandSnippet, action: onExpand)
   }
 
-  /// Tears down and reinstalls the `NSEvent` monitors.
+  /// Re-picks the delivery mechanism from the current Accessibility trust
+  /// state and installs it, tearing down whatever was live before.
   ///
-  /// Required because a global key monitor installed while the process is
-  /// not Accessibility-trusted stays dead for the monitor's whole lifetime —
-  /// macOS does not retroactively start delivering to it when the grant
-  /// lands. `AppEnvironment` wires this to
-  /// `AccessibilityPermissionWatcher.onGranted` so the hotkey starts working
-  /// the moment the user flips the switch, with no relaunch.
+  /// `AppEnvironment` wires this to `AccessibilityPermissionWatcher`'s
+  /// change callback, so the shortcut keeps working across a grant OR a
+  /// revocation with no relaunch. It must be a full teardown/reinstall
+  /// rather than a no-op when the mode is unchanged: a global key monitor
+  /// installed while untrusted stays dead for its whole lifetime, macOS does
+  /// not retroactively start delivering to it once the grant lands.
   ///
   /// No-op before `register(onToggle:)` has run.
-  static func reinstallMonitors() {
+  static func applyDeliveryMode() {
     guard toggleAction != nil else { return }
+
     removeMonitors()
-    installMonitors()
+    KeyboardShortcuts.removeHandler(for: .togglePicker)
+
+    let mode = deliveryMode(forAccessibilityGranted: PermissionsManager.isGranted)
+    switch mode {
+    case .eventMonitors:
+      installMonitors()
+    case .carbonHotkey:
+      KeyboardShortcuts.onKeyDown(for: .togglePicker) {
+        logger.debug("togglePicker fired from the Carbon hotkey")
+        toggleAction?()
+      }
+    }
+    deliveryMode = mode
+
+    // `.notice`, not `.debug`: debug-level entries are not persisted to the
+    // unified log, so `log show` cannot retrieve them after the fact — and
+    // "which mechanism did it actually choose on that machine" is precisely
+    // the question worth being able to answer from a user's Mac without
+    // asking them to reproduce under `log stream`. Fires once per mode
+    // change, carries no keystroke data.
+    logger.notice(
+      """
+      togglePicker delivery=\(mode.rawValue, privacy: .public) \
+      shortcut=\(toggleShortcut?.description ?? "none", privacy: .public) \
+      globalMonitorInstalled=\(globalMonitor != nil, privacy: .public)
+      """)
   }
 
   private static func installMonitors() {
     // Global: fires only while ANOTHER app is frontmost, and has no return
     // value — it cannot consume, which is the entire point (Finder still
-    // receives ⌥⌘V). Requires Accessibility; silently never fires without it.
+    // receives ⌥⌘V). Returns nil, and never fires, without Accessibility —
+    // which is exactly why this mode is only selected when trusted.
     globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { event in
       handleGlobal(event)
     }
@@ -184,6 +249,7 @@ enum HotkeyManager {
 
   private static func handleGlobal(_ event: NSEvent) {
     guard shouldToggle(for: event, matching: toggleShortcut) else { return }
+    logger.debug("togglePicker fired from the global monitor")
     toggleAction?()
   }
 
@@ -192,6 +258,7 @@ enum HotkeyManager {
     // not open the picker.
     guard !isRecorderActive else { return event }
     guard shouldToggle(for: event, matching: toggleShortcut) else { return event }
+    logger.debug("togglePicker fired from the local monitor")
     toggleAction?()
     return nil
   }
@@ -207,7 +274,13 @@ enum HotkeyManager {
       NotificationCenter.default.addObserver(
         forName: shortcutDidChangeNotification, object: nil, queue: .main
       ) { _ in
-        MainActor.assumeIsolated { refreshShortcut() }
+        MainActor.assumeIsolated {
+          refreshShortcut()
+          // The Carbon path re-registers itself inside the library, but the
+          // monitor path reads `toggleShortcut` — both are covered by simply
+          // reapplying the current mode.
+          applyDeliveryMode()
+        }
       })
 
     observers.append(

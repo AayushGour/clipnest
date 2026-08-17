@@ -76,6 +76,13 @@ jobs:
       # `secrets` can't be referenced in a step `if:`, but it CAN in job env.
       # Hoist the presence check here, then test env.HAS_SIGNING in the step.
       HAS_SIGNING: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 != '' }}
+      # Notarization is INDEPENDENT of signing. The release key from
+      # scripts/release-cert.sh is self-signed, not a Developer ID, so it can
+      # sign but can never notarize — and signing alone is what makes the
+      # designated requirement stable across updates (which is what keeps
+      # users' Accessibility grants alive). Gated separately so a missing
+      # Apple Developer account doesn't skip signing too.
+      HAS_NOTARY: ${{ secrets.NOTARY_PASSWORD != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -103,7 +110,7 @@ jobs:
           DEVELOPMENT_TEAM: ${{ secrets.NOTARY_TEAM_ID }}
         run: scripts/build.sh
 
-      - name: Sign + notarize (only if Developer ID secrets are present)
+      - name: Sign (and notarize, if Developer ID secrets are present)
         if: ${{ env.HAS_SIGNING == 'true' }}
         env:
           MACOS_CERTIFICATE_P12_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
@@ -112,6 +119,7 @@ jobs:
           NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
           NOTARY_TEAM_ID: ${{ secrets.NOTARY_TEAM_ID }}
           NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+          HAS_NOTARY: ${{ env.HAS_NOTARY }}
         run: |
           set -euo pipefail
           # Import the signing cert into a temporary keychain.
@@ -125,12 +133,24 @@ jobs:
             -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
           security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PW" "$KEYCHAIN"
           security list-keychains -d user -s "$KEYCHAIN" login.keychain-db
-          # Notary keychain profile for scripts/notarize.sh.
-          xcrun notarytool store-credentials clipnest-notary \
-            --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" \
-            --keychain "$KEYCHAIN"
+
           scripts/sign.sh "$CODESIGN_IDENTITY"
-          scripts/notarize.sh clipnest-notary
+
+          if [ "${HAS_NOTARY}" = "true" ]; then
+            # Notary keychain profile for scripts/notarize.sh.
+            xcrun notarytool store-credentials clipnest-notary \
+              --apple-id "$NOTARY_APPLE_ID" --team-id "$NOTARY_TEAM_ID" --password "$NOTARY_PASSWORD" \
+              --keychain "$KEYCHAIN"
+            scripts/notarize.sh clipnest-notary
+          else
+            echo "No notarization secrets — signed but not notarized."
+            echo "The signature is what matters here: it pins the designated"
+            echo "requirement to the release certificate instead of this build's"
+            echo "cdhash, so users' Accessibility grants survive the update."
+          fi
+
+          echo "Designated requirement of the signed app:"
+          codesign -d -r- build/Clipnest.app 2>&1 | grep -i designated || true
 
       - name: Package DMG
         run: scripts/package_dmg.sh

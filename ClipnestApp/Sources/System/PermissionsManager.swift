@@ -85,10 +85,10 @@ enum PermissionsManager {
 /// while we're waiting on the user, `grantedInterval` once granted, purely
 /// to notice a later revocation.
 ///
-/// `onGranted` exists for `HotkeyManager`: an `NSEvent` global key monitor
-/// installed while untrusted stays permanently dead even after the grant
-/// lands, so the monitors have to be torn down and reinstalled at the moment
-/// the state flips. See `HotkeyManager.reinstallMonitors()`.
+/// `onTrustChanged` exists for `HotkeyManager`, which picks between a Carbon
+/// hotkey (works untrusted, consumes the chord) and `NSEvent` monitors (need
+/// trust, don't consume) — so it has to be told about a change in EITHER
+/// direction, not just a grant. See `HotkeyManager.applyDeliveryMode()`.
 @MainActor
 @Observable
 final class AccessibilityPermissionWatcher {
@@ -102,8 +102,10 @@ final class AccessibilityPermissionWatcher {
 
   private(set) var isGranted: Bool
 
-  /// Invoked on every false -> true transition, never on the initial read.
-  @ObservationIgnored var onGranted: (() -> Void)?
+  /// Invoked on every change to the trust state, in either direction, with
+  /// the new value. Never fired for the initial read, and never fired when a
+  /// refresh sees no change.
+  @ObservationIgnored var onTrustChanged: ((Bool) -> Void)?
 
   @ObservationIgnored private var pollTask: Task<Void, Never>?
   @ObservationIgnored private let readTrustState: @Sendable () -> Bool
@@ -143,15 +145,14 @@ final class AccessibilityPermissionWatcher {
     pollTask = nil
   }
 
-  /// Re-reads trust state now and fires `onGranted` if this is the moment it
-  /// became granted. Called by the poll loop, and directly by the Permissions
-  /// tab so a returning user sees the new state without waiting a full tick.
+  /// Re-reads trust state now and, if it changed, publishes it and fires
+  /// `onTrustChanged`. Called by the poll loop, and directly by the
+  /// Permissions tab so a returning user sees the new state without waiting
+  /// a full tick.
   func refresh() {
     let latest = readTrustState()
     guard latest != isGranted else { return }
     isGranted = latest
-    if latest {
-      onGranted?()
-    }
+    onTrustChanged?(latest)
   }
 }

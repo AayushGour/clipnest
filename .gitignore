@@ -10,3 +10,6 @@ build/
 .superpowers/
 archived-images/
 .DS_Store
+
+# Private release signing key — never commit (scripts/release-cert.sh)
+release-cert/

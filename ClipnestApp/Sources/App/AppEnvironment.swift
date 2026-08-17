@@ -310,13 +310,13 @@ final class AppEnvironment {
       Task { await self.snippetExpander.expand() }
     }
 
-    // A global `NSEvent` key monitor installed while the process is not
-    // Accessibility-trusted never starts firing on its own once the grant
-    // lands — it has to be reinstalled. Without this the user would grant
-    // Accessibility, see the Permissions tab flip to Granted, and still
-    // have a dead hotkey until the next launch.
-    accessibilityWatcher.onGranted = {
-      HotkeyManager.reinstallMonitors()
+    // The picker hotkey is delivered by a Carbon hotkey while untrusted and
+    // by non-consuming `NSEvent` monitors once trusted (see `HotkeyManager`'s
+    // header). Both directions matter: on a grant the monitors have to be
+    // installed (one created while untrusted stays permanently dead), and on
+    // a revocation the Carbon hotkey has to come back or the shortcut dies.
+    accessibilityWatcher.onTrustChanged = { _ in
+      HotkeyManager.applyDeliveryMode()
     }
     accessibilityWatcher.start()
   }

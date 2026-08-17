@@ -106,4 +106,15 @@ struct HotkeyManagerTests {
     let oldChord = keyDown(keyCode: Self.vKeyCode, modifiers: [.command, .option])
     #expect(!HotkeyManager.shouldToggle(for: oldChord, matching: rebound))
   }
+
+  /// The delivery mechanism must follow Accessibility trust: monitors only
+  /// when trusted (a global key monitor never fires without it), Carbon
+  /// otherwise so a fresh install has a working shortcut before the user has
+  /// granted anything. Shipping monitors unconditionally is what made the
+  /// shortcut dead on a new machine.
+  @Test("delivery mode follows Accessibility trust")
+  func deliveryModeFollowsTrust() {
+    #expect(HotkeyManager.deliveryMode(forAccessibilityGranted: true) == .eventMonitors)
+    #expect(HotkeyManager.deliveryMode(forAccessibilityGranted: false) == .carbonHotkey)
+  }
 }
