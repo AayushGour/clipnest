@@ -105,4 +105,70 @@ enum WindowPlacement {
 
     return (pickerOrigin, editorOrigin)
   }
+
+  /// Which side of the picker the item-preview popover sits on.
+  enum PreviewSide {
+    case right
+    case left
+  }
+
+  /// Picks the side of `anchorRect` (the picker) that the item preview should
+  /// appear on: whichever has more room, ties going right.
+  ///
+  /// Deliberately does NOT consider the preview panel's own width. The panel
+  /// is sized per item — a long snippet or a large image makes it wider — so
+  /// the previous "right if it fits, else left" rule produced a different
+  /// answer for different rows and the preview visibly jumped from side to
+  /// side while the user moved down a single list. Comparing only the space
+  /// either side of the picker gives one stable answer for every item in a
+  /// session, and `previewAvailableWidth(...)` lets the caller cap the
+  /// preview's width to that side so it still fits.
+  static func previewSide(
+    anchorRect: CGRect,
+    screenVisibleFrame: CGRect,
+    gap: CGFloat
+  ) -> PreviewSide {
+    let spaceRight = screenVisibleFrame.maxX - anchorRect.maxX - gap
+    let spaceLeft = anchorRect.minX - screenVisibleFrame.minX - gap
+    return spaceRight >= spaceLeft ? .right : .left
+  }
+
+  /// How much horizontal room the preview has on `side`, between the picker
+  /// and the screen edge, with `gap` already deducted. Can be negative on a
+  /// pathologically narrow screen; callers clamp to their own minimum.
+  static func previewAvailableWidth(
+    on side: PreviewSide,
+    anchorRect: CGRect,
+    screenVisibleFrame: CGRect,
+    gap: CGFloat
+  ) -> CGFloat {
+    switch side {
+    case .right: screenVisibleFrame.maxX - anchorRect.maxX - gap
+    case .left: anchorRect.minX - screenVisibleFrame.minX - gap
+    }
+  }
+
+  /// The X origin for a preview panel of `panelWidth` placed on `side` of
+  /// `anchorRect`, kept fully on screen.
+  ///
+  /// If the panel is somehow wider than the room on that side (it shouldn't
+  /// be — the caller caps its width via `previewAvailableWidth`), staying on
+  /// screen wins: the panel is pushed flush against that screen edge and may
+  /// then overlap the picker, which is still better than rendering partly
+  /// off-screen where it can't be read.
+  static func previewOriginX(
+    on side: PreviewSide,
+    anchorRect: CGRect,
+    panelWidth: CGFloat,
+    screenVisibleFrame: CGRect,
+    gap: CGFloat
+  ) -> CGFloat {
+    switch side {
+    case .right:
+      let flushRight = max(screenVisibleFrame.maxX - panelWidth, screenVisibleFrame.minX)
+      return min(anchorRect.maxX + gap, flushRight)
+    case .left:
+      return max(anchorRect.minX - gap - panelWidth, screenVisibleFrame.minX)
+    }
+  }
 }

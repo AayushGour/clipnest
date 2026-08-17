@@ -169,4 +169,116 @@ struct WindowPlacementTests {
     #expect(result.pickerOrigin == CGPoint(x: 750, y: 50))
     #expect(result.editorOrigin == CGPoint(x: 200, y: 100))
   }
+
+  // MARK: - Item-preview side
+
+  /// A 1440-wide screen with the picker (560 wide) sitting left of centre, so
+  /// there is clearly more room on its right.
+  private static let screen = CGRect(x: 0, y: 0, width: 1440, height: 900)
+  private static let pickerLeftOfCentre = CGRect(x: 300, y: 200, width: 560, height: 420)
+  private static let gap: CGFloat = 24
+
+  @Test("preview side: more room right -> right")
+  func previewSidePrefersRoomierRight() {
+    #expect(
+      WindowPlacement.previewSide(
+        anchorRect: Self.pickerLeftOfCentre, screenVisibleFrame: Self.screen, gap: Self.gap)
+        == .right)
+  }
+
+  @Test("preview side: more room left -> left")
+  func previewSidePrefersRoomierLeft() {
+    // Picker pushed to the right edge: 1440 - (1000 + 560) leaves nothing right.
+    let picker = CGRect(x: 860, y: 200, width: 560, height: 420)
+    #expect(
+      WindowPlacement.previewSide(
+        anchorRect: picker, screenVisibleFrame: Self.screen, gap: Self.gap) == .left)
+  }
+
+  /// The actual reported bug: the preview panel's width varies per item, and
+  /// the old rule ("right if the panel fits, else left") therefore flipped
+  /// sides from row to row. The side must not depend on panel width at all.
+  @Test("preview side is identical regardless of how wide that item's panel is")
+  func previewSideIsIndependentOfPanelWidth() {
+    let side = WindowPlacement.previewSide(
+      anchorRect: Self.pickerLeftOfCentre, screenVisibleFrame: Self.screen, gap: Self.gap)
+
+    // A narrow text preview and a huge image preview must land on the SAME
+    // side — only their origin differs, never which side of the picker.
+    for panelWidth in [200.0, 400.0, 560.0, 900.0] as [CGFloat] {
+      let originX = WindowPlacement.previewOriginX(
+        on: side,
+        anchorRect: Self.pickerLeftOfCentre,
+        panelWidth: panelWidth,
+        screenVisibleFrame: Self.screen,
+        gap: Self.gap)
+      // `side` is .right here, so every one of them sits at or right of the
+      // picker's trailing edge — never flipped to the left of it.
+      #expect(originX >= Self.pickerLeftOfCentre.maxX - panelWidth)
+      #expect(originX + panelWidth <= Self.screen.maxX)
+    }
+  }
+
+  @Test("preview origin: right side sits one gap past the picker")
+  func previewOriginRight() {
+    let originX = WindowPlacement.previewOriginX(
+      on: .right,
+      anchorRect: Self.pickerLeftOfCentre,
+      panelWidth: 300,
+      screenVisibleFrame: Self.screen,
+      gap: Self.gap)
+    #expect(originX == Self.pickerLeftOfCentre.maxX + Self.gap)  // 860 + 24
+  }
+
+  @Test("preview origin: left side ends one gap before the picker")
+  func previewOriginLeft() {
+    let picker = CGRect(x: 860, y: 200, width: 560, height: 420)
+    let originX = WindowPlacement.previewOriginX(
+      on: .left,
+      anchorRect: picker,
+      panelWidth: 300,
+      screenVisibleFrame: Self.screen,
+      gap: Self.gap)
+    #expect(originX == picker.minX - Self.gap - 300)  // 860 - 24 - 300
+  }
+
+  /// Staying fully on screen beats honoring the gap — an unreadable
+  /// half-off-screen preview is worse than one that overlaps the picker.
+  @Test("preview origin stays on screen when the panel is wider than its side")
+  func previewOriginClampsOnScreen() {
+    let rightX = WindowPlacement.previewOriginX(
+      on: .right,
+      anchorRect: Self.pickerLeftOfCentre,
+      panelWidth: 1200,
+      screenVisibleFrame: Self.screen,
+      gap: Self.gap)
+    #expect(rightX + 1200 <= Self.screen.maxX)
+
+    let picker = CGRect(x: 100, y: 200, width: 560, height: 420)
+    let leftX = WindowPlacement.previewOriginX(
+      on: .left,
+      anchorRect: picker,
+      panelWidth: 400,
+      screenVisibleFrame: Self.screen,
+      gap: Self.gap)
+    #expect(leftX >= Self.screen.minX)
+  }
+
+  @Test("available width matches the room on the chosen side")
+  func previewAvailableWidthMatchesSide() {
+    // screen.maxX 1440 - picker.maxX 860 - gap 24
+    let expectedRight: CGFloat = 556
+    // picker.minX 300 - screen.minX 0 - gap 24
+    let expectedLeft: CGFloat = 276
+
+    let right = WindowPlacement.previewAvailableWidth(
+      on: .right, anchorRect: Self.pickerLeftOfCentre,
+      screenVisibleFrame: Self.screen, gap: Self.gap)
+    let left = WindowPlacement.previewAvailableWidth(
+      on: .left, anchorRect: Self.pickerLeftOfCentre,
+      screenVisibleFrame: Self.screen, gap: Self.gap)
+
+    #expect(right == expectedRight)
+    #expect(left == expectedLeft)
+  }
 }
