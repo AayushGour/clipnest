@@ -70,6 +70,12 @@ final class AppEnvironment {
   let snippetExpander: SnippetExpander
   let itemPreviewController: ItemPreviewController
 
+  /// Approved feature: background 24h update-availability check — see
+  /// `UpdateChecker`'s doc comment. Owned here (not by `PickerViewModel`)
+  /// because `GeneralSettingsView` also needs it directly, to call
+  /// `settingChanged(enabled:)` when the user flips the Settings toggle.
+  let updateChecker: UpdateChecker
+
   /// Live Accessibility trust state, polled (macOS posts no notification for
   /// a TCC change). Owned here because two very different consumers need the
   /// same signal: the Permissions settings tab renders it, and
@@ -183,6 +189,22 @@ final class AppEnvironment {
     // (shells out to the public curl updater via Terminal instead).
     viewModel.appVersion = AppUpdater.currentVersion
     viewModel.requestAppUpdate = { AppUpdater.runUpdate() }
+
+    // Approved feature: background 24h update-availability check — see
+    // `UpdateChecker`'s doc comment. Purely informational (a badge next to
+    // the version label); the click-to-update flow above is unchanged.
+    // `start(settings:)` is NOT called here — construction stays side-
+    // effect-free (see this file's doc comment) — it's called from
+    // `startUpdateChecking()`, invoked by `AppDelegate.
+    // applicationDidFinishLaunching` alongside `startCapture()`/
+    // `registerHotkey()`.
+    let updateChecker = UpdateChecker()
+    self.updateChecker = updateChecker
+    updateChecker.onStateChanged = { [weak viewModel] available, latest in
+      viewModel?.isUpdateAvailable = available
+      viewModel?.latestVersion = latest
+    }
+
     panel.onWillShow = { [weak viewModel] in viewModel?.willShow() }
     panel.onDidHide = { [weak viewModel, weak itemPreviewController] in
       viewModel?.didHide()
@@ -319,6 +341,16 @@ final class AppEnvironment {
       HotkeyManager.applyDeliveryMode()
     }
     accessibilityWatcher.start()
+  }
+
+  /// Starts the approved background 24h update-availability check. Call
+  /// exactly once, from `AppDelegate.applicationDidFinishLaunching`,
+  /// alongside `startCapture()`/`registerHotkey()` — construction itself
+  /// stays side-effect-free (see this file's top doc comment and
+  /// `UpdateChecker`'s own), so tests can build an environment with no
+  /// background timer running.
+  func startUpdateChecking() {
+    updateChecker.start(settings: settingsStore)
   }
 
   /// Shows macOS's Accessibility prompt at most ONCE, ever, and only when

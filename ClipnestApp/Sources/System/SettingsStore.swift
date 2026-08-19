@@ -36,6 +36,7 @@ final class SettingsStore {
     static let retentionDays = "settings.retentionDays"
     static let userExcludedBundleIDs = "settings.userExcludedBundleIDs"
     static let hasRequestedAccessibility = "settings.hasRequestedAccessibility"
+    static let automaticallyCheckForUpdates = "settings.automaticallyCheckForUpdates"
   }
 
   // `@ObservationIgnored`: the backing store is not observable UI state.
@@ -67,6 +68,20 @@ final class SettingsStore {
     didSet { defaults.set(hasRequestedAccessibility, forKey: Key.hasRequestedAccessibility) }
   }
 
+  /// Approved feature: whether `UpdateChecker` runs its 24h background
+  /// check at all. Defaults to `true` (opt-out, not opt-in) — the check is
+  /// silent, local-only aside from one `curl` call (see `UpdateChecker`'s
+  /// doc comment), and never downloads/installs anything on its own, so
+  /// there's no meaningful privacy/safety reason to default it off.
+  /// `GeneralSettingsView`'s `.onChange` calls
+  /// `UpdateChecker.settingChanged(enabled:)` so flipping this live starts/
+  /// stops the timer immediately, not on the next launch.
+  var automaticallyCheckForUpdates: Bool {
+    didSet {
+      defaults.set(automaticallyCheckForUpdates, forKey: Key.automaticallyCheckForUpdates)
+    }
+  }
+
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
     // `object(forKey:) as? Bool` distinguishes "absent" (-> default true)
@@ -79,6 +94,10 @@ final class SettingsStore {
     self.retentionDays = defaults.object(forKey: Key.retentionDays) as? Int ?? Self.defaultDays
     self.userExcludedBundleIDs = defaults.stringArray(forKey: Key.userExcludedBundleIDs) ?? []
     self.hasRequestedAccessibility = defaults.bool(forKey: Key.hasRequestedAccessibility)
+    // `object(forKey:) as? Bool` distinguishes "absent" (-> default true)
+    // from an explicitly-stored false, same reasoning as `isCaptureEnabled`.
+    self.automaticallyCheckForUpdates =
+      defaults.object(forKey: Key.automaticallyCheckForUpdates) as? Bool ?? true
   }
 
   /// The cap handed to `ClipStore.enforceRetention(cap:)`. Values are clamped

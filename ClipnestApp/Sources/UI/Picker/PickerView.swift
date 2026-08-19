@@ -282,6 +282,16 @@ struct PickerView: View {
   /// (see this file's top doc comment). `Spacer(minLength: 8)` keeps the
   /// version from ever crowding the hints; both sides keep `lineLimit(1)` so
   /// neither wraps or grows the bar's height.
+  ///
+  /// Background update-availability check (approved feature): a small
+  /// `Color.accentColor` dot appears immediately before the version text
+  /// whenever `viewModel.isUpdateAvailable` is true (set by
+  /// `UpdateChecker.onStateChanged` via the composition root, on a 24h
+  /// timer — see that type's doc comment). `updateHelpText` swaps the
+  /// tooltip to name the specific newer version when one is known. This is
+  /// purely a nudge: the button's action, the confirmation dialog, and
+  /// `requestAppUpdate()` are all completely unchanged — download stays
+  /// exactly as manual as it already was.
   private var shortcutHintBar: some View {
     HStack(spacing: 0) {
       Text(shortcutHints)
@@ -293,13 +303,27 @@ struct PickerView: View {
       Button {
         showUpdateConfirm = true
       } label: {
-        Text("v\(viewModel.appVersion)")
-          .font(.caption2)
-          .foregroundStyle(.secondary)
-          .lineLimit(1)
+        HStack(spacing: 4) {
+          // Approved feature: background 24h update-availability check
+          // (`UpdateChecker`) — purely informational, shown only when a
+          // newer release was last observed as available. Tapping the
+          // button is unchanged either way: it always opens the same
+          // confirmation dialog, which always runs the same
+          // `requestAppUpdate()` — the dot never changes what happens on
+          // click, only whether the user is nudged to click at all.
+          if viewModel.isUpdateAvailable {
+            Circle()
+              .fill(Color.accentColor)
+              .frame(width: 6, height: 6)
+          }
+          Text("v\(viewModel.appVersion)")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+        }
       }
       .buttonStyle(.plain)
-      .help("Check for updates")
+      .help(updateHelpText)
     }
     .padding(.horizontal, 10)
     .padding(.vertical, 6)
@@ -311,6 +335,17 @@ struct PickerView: View {
     } message: {
       Text("Opens Terminal to download the latest version and relaunch Clipnest.")
     }
+  }
+
+  /// Tooltip for the version button — mentions the specific newer version
+  /// when `UpdateChecker` has one, otherwise the existing generic prompt.
+  /// Purely descriptive; doesn't change what tapping the button does (see
+  /// `shortcutHintBar`'s doc comment).
+  private var updateHelpText: String {
+    guard viewModel.isUpdateAvailable, let latestVersion = viewModel.latestVersion else {
+      return "Check for updates"
+    }
+    return "Update to v\(latestVersion) available"
   }
 
   private var shortcutHints: String {

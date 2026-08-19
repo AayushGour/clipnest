@@ -37,6 +37,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
       self.environment = environment
       environment.startCapture()
       environment.registerHotkey()
+      environment.startUpdateChecking()
       environment.enforceRetentionNow()
       // Checks first, prompts at most once ever, and only if actually
       // missing — see the method's doc comment. The picker hotkey needs

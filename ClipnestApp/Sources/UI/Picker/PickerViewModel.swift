@@ -328,6 +328,25 @@ final class PickerViewModel: ObservableObject {
   /// composition root.
   var requestAppUpdate: () -> Void = {}
 
+  /// Set by the composition root (see `AppEnvironment`) from
+  /// `UpdateChecker.onStateChanged` — whether the background 24h check
+  /// (approved feature) currently believes a newer release exists. Drives
+  /// the small dot indicator next to the version label in
+  /// `PickerView.shortcutHintBar`. Purely informational: this never
+  /// triggers a download itself — `requestAppUpdate()` above (an explicit
+  /// user click) is still the only path that does. Defaults to `false` so
+  /// this type stays usable in previews/tests without the composition
+  /// root's checker.
+  @Published var isUpdateAvailable: Bool = false
+
+  /// The version `isUpdateAvailable` refers to, set alongside it from the
+  /// same `UpdateChecker.onStateChanged` callback. Deliberately plain, not
+  /// `@Published`: `PickerView` only ever reads it in the same view update
+  /// as `isUpdateAvailable` (which already triggers the redraw), so a
+  /// second publish would be redundant. `nil` whenever `isUpdateAvailable`
+  /// is `false`.
+  var latestVersion: String?
+
   private let clipStore: any ClipStore
   private let snippetStore: any SnippetStore
   private let pasteboard: any PasteboardWriting

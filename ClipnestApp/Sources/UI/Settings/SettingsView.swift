@@ -12,20 +12,23 @@ struct SettingsView: View {
   private let settings: SettingsStore
   private let clipStore: any ClipStore
   private let accessibilityWatcher: AccessibilityPermissionWatcher
+  private let updateChecker: UpdateChecker
 
   init(
     settings: SettingsStore,
     clipStore: any ClipStore,
-    accessibilityWatcher: AccessibilityPermissionWatcher
+    accessibilityWatcher: AccessibilityPermissionWatcher,
+    updateChecker: UpdateChecker
   ) {
     self.settings = settings
     self.clipStore = clipStore
     self.accessibilityWatcher = accessibilityWatcher
+    self.updateChecker = updateChecker
   }
 
   var body: some View {
     TabView {
-      GeneralSettingsView(settings: settings)
+      GeneralSettingsView(settings: settings, updateChecker: updateChecker)
         .tabItem { Label("General", systemImage: "gearshape") }
 
       HistorySettingsView(settings: settings, clipStore: clipStore)

@@ -115,4 +115,18 @@ struct SettingsStoreTests {
     store.hasRequestedAccessibility = true
     #expect(SettingsStore(defaults: defaults).hasRequestedAccessibility == true)
   }
+
+  /// Approved feature (background update-availability check): defaults to
+  /// `true` (opt-out) — see the property's own doc comment for why — and
+  /// persists an explicit `false` across instances the same way every other
+  /// `Bool` setting here does.
+  @Test("automaticallyCheckForUpdates: defaults true, persists an explicit false")
+  func automaticallyCheckForUpdatesDefaultsTrueAndPersists() {
+    let defaults = makeDefaults()
+    let store = SettingsStore(defaults: defaults)
+    #expect(store.automaticallyCheckForUpdates == true)
+
+    store.automaticallyCheckForUpdates = false
+    #expect(SettingsStore(defaults: defaults).automaticallyCheckForUpdates == false)
+  }
 }

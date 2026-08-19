@@ -160,7 +160,8 @@ struct SettingsRootView: View {
       SettingsView(
         settings: environment.settingsStore,
         clipStore: environment.clipStore,
-        accessibilityWatcher: environment.accessibilityWatcher)
+        accessibilityWatcher: environment.accessibilityWatcher,
+        updateChecker: environment.updateChecker)
     } else {
       Text("Starting Clipnest…")
         .frame(width: 460, height: 340)
