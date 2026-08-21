@@ -23,10 +23,12 @@ python3 setup-team.py <path-to-your-project>
 `claude-code/.claude/` already mirrors the exact layout an installed project uses, so setup is a straight copy:
 
 - `.claude/agents/*.md` — the 10 agent prompts
-- `.claude/instructions.md` — shared rules every agent reads first (incl. the DONE gate + team-formation)
+- `CLAUDE.md` → project root — the **one shared rulebook**: orchestrator brief + org rules (DONE gate, integrity rules, team formation, delegation, cost + consent rules). The main thread auto-loads it; every spawned agent reads it first (junior-dev carries a self-contained mini-rulebook instead). Framework file: `--force` upgrades it — but only when the existing root `CLAUDE.md` is the harness's own (checked by a marker line); a user's personal `CLAUDE.md` is never touched
 - `.claude/agent-template.md` — skeleton the architect copies into `.claude/agents/` when authoring a project specialist
 - `.claude/coding-standards.md` · `.claude/project-context.md` · `.claude/task-board.md` · `.claude/design.md` — working docs (start as templates)
 - `.claude/skills/ui-ux-pro-max/` — UI/UX design-intelligence skill the `ux-designer` queries (searchable local DB of styles/palettes/fonts/UX rules; pure stdlib, no pip install). Vendored from [nextlevelbuilder/ui-ux-pro-max-skill](https://github.com/nextlevelbuilder/ui-ux-pro-max-skill) (MIT).
+- `.claude/skills/` — on-demand expertise (progressive disclosure, ~100 tokens each until triggered): `security-review` + `differential-review` (Trail of Bits, CC-BY-SA) for reviews, `data-modeling` for schema changes, `tdd` + `diagnosing-bugs` (Matt Pocock, MIT) for devs, `webapp-testing` (Anthropic, Apache-2.0) + `property-based-testing` (Trail of Bits) for tester, `prd` (GitHub, MIT) for the BA. Each vendored skill carries a `SOURCE.md` (origin, commit, license) and was security-audited before vendoring
+- a **board-lint hook** (`tools/board_lint.py`, wired as a PreToolUse hook in `.claude/settings.json`) — mechanically blocks any `status:done` board line lacking `evidence:`, so the DONE gate is enforced, not just requested
 - this `README.md` → `.claude/README.md` (kept inside `.claude/`, never overwrites your project's own root `README.md`)
 - `.mcp.json` at the project root — the **only** file placed there, because Claude Code discovers project MCP servers only from `<project>/.mcp.json`, not from `.claude/` (tool paths rewritten to absolute)
 
@@ -79,10 +81,10 @@ The **architect is team lead**. These 10 are the standing team; for a project wi
 - **Plan mode** — `business-analyst` gathers + clarifies requirements → `architect` designs, sets standards, runs the [team self-review](#team-formation), then splits into tasks, pulling in `ux-designer` (UI) and `product-engineer` (feasibility/spikes). No code.
 - **Agile dev mode** — `architect` delegates → `senior-dev` / `junior-dev` / `devops` (+ any specialist) build → `reviewer` reviews code + integration → `tester` validates → done. `project-manager` tracks + documents throughout.
 
-Start in plan mode; switch to dev mode once the plan + tasks exist. Small/obvious change → skip plan mode, just do it.
+Start in plan mode; switch to dev mode once the plan + tasks exist. Small/obvious change → skip plan mode, build at size S (a board line + pasted evidence still required).
 
 ## Team formation
-Once the plan is clear and before task-split, the **architect** (team lead) reviews the 10 core roles against what the project actually needs, with `project-manager` (coordination) and `product-engineer` (feasibility) consulting. Default is to reuse the 10; only a genuine *ongoing* domain gap (ML, mobile/iOS, data engineering, security, a niche framework — not a one-off task) justifies a new agent. If so, the architect copies `.claude/agent-template.md` → `.claude/agents/<name>.md`, fills it house-style (reads `instructions.md`, satisfies the DONE gate, own log file), and records why in `.claude/project-context.md` (`## Team`). Claude Code hot-loads the new agent within seconds — delegatable the same session — and PM adds it to the roster. Keep the team as small as the work allows.
+Once the plan is clear and before task-split, the **architect** (team lead) reviews the 10 core roles against what the project actually needs, with `project-manager` (coordination) and `product-engineer` (feasibility) consulting. Default is to reuse the 10; only a genuine *ongoing* domain gap (ML, mobile/iOS, data engineering, security, a niche framework — not a one-off task) justifies a new agent. If so, the architect copies `.claude/agent-template.md` → `.claude/agents/<name>.md`, fills it house-style (reads `CLAUDE.md`, satisfies the DONE gate, own log file), and records why in `.claude/project-context.md` (`## Team`). Claude Code hot-loads the new agent within seconds — delegatable the same session — and PM adds it to the roster. Keep the team as small as the work allows.
 
 ## Incoming requests — intake + triage
 Every new bug/change goes to **project-manager** first (the front door).
@@ -111,7 +113,7 @@ Priority = business urgency (PM owns). Severity = technical impact/complexity (s
 
 ## Design principles (why the prompts are short)
 - Few agents, sharp prompts, direct action — coordination tax is what kills agent orgs.
-- Shared rules live in one `instructions.md`, not repeated per agent.
+- Shared rules live in one root `CLAUDE.md`, not repeated per agent.
 - Memory = plain files; "analyze the codebase" = grep/glob/read.
 - Log one line per task, not 15 fields per action.
 - senior-dev + reviewer review; tester can reject. Neither ceremony runs on a typo.

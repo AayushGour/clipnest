@@ -19,6 +19,17 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 /Users/aayushgour/Desktop/harness/tools/board_lint.py"
+          }
+        ]
+      }
     ]
   }
 }
