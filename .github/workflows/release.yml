@@ -10,6 +10,16 @@ name: Release
 # .dmg straight off the GitHub Release). There is deliberately no Homebrew
 # cask to keep in sync.
 #
+# Every release also publishes a `<dmg>.sha256` checksum as its own release
+# asset (M-2 fix). scripts/install.sh and scripts/update.sh fetch it and
+# verify the downloaded .dmg against it BEFORE mounting — since this app
+# ships unsigned-or-self-signed with quarantine deliberately stripped
+# (see install.sh's header comment), that checksum is the only integrity
+# check standing between "GitHub release" and "mounted + copied to
+# /Applications". Releases cut before this fix has no checksum asset; those
+# scripts fail closed (REQUIRE_CHECKSUM=true by default) rather than install
+# unverified — see install.sh/update.sh for the escape hatch.
+#
 # Why not a separate tag-push trigger? A tag pushed by GITHUB_TOKEN does NOT
 # re-trigger `on: push: tags` workflows, so we tag + release in one run instead.
 #
@@ -155,19 +165,31 @@ jobs:
       - name: Package DMG
         run: scripts/package_dmg.sh
 
-      - name: Name the DMG with the version
+      - name: Name the DMG with the version + publish its SHA-256 checksum
         id: dmg
+        # The checksum is a *separate* release asset (`<dmg>.sha256`), not
+        # just text in the release notes — scripts/install.sh and
+        # scripts/update.sh fetch and verify it programmatically before
+        # mounting the .dmg (M-2 fix). Format is plain `shasum -a 256` output
+        # (`<hash>  <filename>`), so it's also directly usable by hand:
+        #   shasum -a 256 -c Clipnest-<version>.dmg.sha256
         run: |
           OUT="build/Clipnest-${VERSION}.dmg"
           mv build/Clipnest.dmg "$OUT"
+          SHA256="$(shasum -a 256 "$OUT" | awk '{print $1}')"
+          CHECKSUM_OUT="${OUT}.sha256"
+          echo "${SHA256}  $(basename "$OUT")" > "$CHECKSUM_OUT"
           echo "path=$OUT" >> "$GITHUB_OUTPUT"
-          echo "sha256=$(shasum -a 256 "$OUT" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "checksum_path=$CHECKSUM_OUT" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release (creates tag v$VERSION on this commit)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "v${VERSION}" "${{ steps.dmg.outputs.path }}" \
+          gh release create "v${VERSION}" \
+            "${{ steps.dmg.outputs.path }}" \
+            "${{ steps.dmg.outputs.checksum_path }}" \
             --title "Clipnest v${VERSION}" \
             --target "$GITHUB_SHA" \
             --generate-notes \

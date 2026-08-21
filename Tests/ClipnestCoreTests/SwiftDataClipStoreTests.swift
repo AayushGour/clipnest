@@ -244,6 +244,15 @@ struct SwiftDataClipStoreTests {
   }
 
   @Test(
+    "query with scope: .pinned orders a legacy pinned==true/pinnedAt==nil row before a dated pin"
+  )
+  func queryPinnedScopeOrdersLegacyNilPinnedAtBeforeDatedPins() async throws {
+    try await ClipStoreContractTests.queryPinnedScopeOrdersLegacyNilPinnedAtBeforeDatedPins {
+      try makeStore()
+    }
+  }
+
+  @Test(
     "Paginated queries (offset:0,2,4 limit:2) concatenate to the full sorted set with no duplicate and no missing id"
   )
   func queryPaginationConcatenatesToFullSortedSetWithNoGapsOrDuplicates() async throws {

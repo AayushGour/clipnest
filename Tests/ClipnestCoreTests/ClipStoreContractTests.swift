@@ -32,6 +32,7 @@ enum ClipStoreContractTests {
     previewText: String = "preview",
     kind: ItemKind = .text,
     pinned: Bool = false,
+    pinnedAt: Date? = nil,
     blobPath: String? = nil
   ) -> ClipItem {
     ClipItem(
@@ -40,6 +41,7 @@ enum ClipStoreContractTests {
       previewText: previewText,
       contentHash: contentHash,
       pinned: pinned,
+      pinnedAt: pinnedAt,
       byteSize: previewText.utf8.count,
       blobPath: blobPath
     )
@@ -502,6 +504,41 @@ enum ClipStoreContractTests {
       text: "", kind: nil, scope: .pinned, offset: 0, limit: 10)
 
     #expect(results.map(\.id) == [firstPinned.id, secondPinned.id])
+    #expect(!results.contains { $0.id == unpinned.id })
+  }
+
+  /// M-3 (review finding): rows pinned before `pinnedAt` existed have
+  /// `pinned == true` but `pinnedAt == nil` — a "legacy pinned row". Both
+  /// `ClipStore` conformances must coalesce that `nil` to the earliest
+  /// possible position (matching `InMemoryClipStore.query`'s
+  /// `($0.pinnedAt ?? .distantPast) < ($1.pinnedAt ?? .distantPast)` rule)
+  /// rather than diverge on however their backing sort handles `nil`.
+  /// Deliberately seeds only ONE legacy (`pinnedAt == nil`) row — with two,
+  /// their relative order on a tie is an unspecified/unstable sort detail
+  /// (`InMemoryClipStore`'s pre-sort iteration order comes from a `Dictionary`,
+  /// which has no guaranteed order), which would make "one exact expected
+  /// order" a flaky assertion rather than a real contract.
+  static func queryPinnedScopeOrdersLegacyNilPinnedAtBeforeDatedPins(
+    makeStore: () async throws -> any ClipStore
+  ) async throws {
+    let store = try await makeStore()
+    let unpinned = try await store.insertOrBumpDuplicate(makeItem(contentHash: "unpinned"))
+    // Simulates a row pinned before `pinnedAt` existed: `pinned == true`
+    // going straight into `insertOrBumpDuplicate` (never through
+    // `setPinned`, which always stamps `pinnedAt`), exactly like a
+    // pre-existing on-disk row lightweight-migrating in with `pinnedAt`
+    // defaulted to `nil`.
+    let legacyPinned = try await store.insertOrBumpDuplicate(
+      makeItem(contentHash: "legacy-pinned", pinned: true, pinnedAt: nil))
+    let datedPinned = try await store.insertOrBumpDuplicate(
+      makeItem(
+        contentHash: "dated-pinned", pinned: true,
+        pinnedAt: Date(timeIntervalSince1970: 5_000)))
+
+    let results = try await store.query(
+      text: "", kind: nil, scope: .pinned, offset: 0, limit: 10)
+
+    #expect(results.map(\.id) == [legacyPinned.id, datedPinned.id])
     #expect(!results.contains { $0.id == unpinned.id })
   }
 

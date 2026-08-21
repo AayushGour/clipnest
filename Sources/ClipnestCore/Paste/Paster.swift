@@ -16,6 +16,16 @@ public enum PasteError: Error, Equatable, Sendable {
   /// `.image` content whose bytes could not be decoded into a valid image —
   /// thrown before anything is written to the pasteboard.
   case invalidImageData
+
+  /// The app that was frontmost when the target was captured is no longer
+  /// the app that holds focus right now, checked immediately before posting
+  /// the synthesized ⌘V. The synthetic keystroke was deliberately NOT
+  /// posted — if it had been, it could have landed in whatever app stole
+  /// focus during `synthesisDelay`, potentially typing sensitive clipboard
+  /// content (e.g. a password) into the wrong place. The pasteboard write
+  /// already happened before this is thrown, so the content is still
+  /// available for the user to paste manually.
+  case targetNoLongerFrontmost
 }
 
 /// Content `Paster` places on the pasteboard (and, if possible, pastes into
@@ -128,23 +138,17 @@ public struct CGEventSynthesizer: EventSynthesizing {
   /// still meaningfully asserted on by `PasterTests`' mock, which verifies
   /// `Paster` computes and passes the right target) but is otherwise unused
   /// by this global-post implementation — correctness now depends on the
-  /// target app actually holding key focus by the time this posts, which is
-  /// exactly why `Paster.paste` waits `synthesisDelay` beforehand.
+  /// target app actually holding key focus by the time this posts. `Paster.paste`
+  /// is responsible for both waiting `synthesisDelay` beforehand and
+  /// re-verifying `app` is still frontmost immediately before calling this
+  /// (see `PasteError.targetNoLongerFrontmost`) — this type only builds and
+  /// posts the chord, via the shared `SyntheticKeystroke` (see M-1: the same
+  /// helper `ClipboardSelectionReplacer` uses for its ⌘C/⌘V, so there is one
+  /// place that builds and posts synthetic modified keystrokes).
   public func synthesizeCommandV(targeting app: FrontmostAppRef) throws {
-    let source = CGEventSource(stateID: .combinedSessionState)
-
-    guard
-      let keyDown = CGEvent(keyboardEventSource: source, virtualKey: Self.vKeyCode, keyDown: true),
-      let keyUp = CGEvent(keyboardEventSource: source, virtualKey: Self.vKeyCode, keyDown: false)
-    else {
+    guard SyntheticKeystroke.postCommandModified(Self.vKeyCode) else {
       throw PasteError.eventPostFailed
     }
-
-    keyDown.flags = .maskCommand
-    keyUp.flags = .maskCommand
-
-    keyDown.post(tap: .cghidEventTap)
-    keyUp.post(tap: .cghidEventTap)
   }
 }
 
@@ -173,22 +177,37 @@ public struct Paster: Sendable {
   private let eventSynthesizer: any EventSynthesizing
   private let isAccessibilityGranted: @Sendable () -> Bool
   private let synthesisDelay: Duration
+  private let frontmostAppProvider: any FrontmostAppReferenceProviding
 
   public init(
     pasteboard: any PasteboardWriting = NSPasteboard.general,
     eventSynthesizer: any EventSynthesizing = CGEventSynthesizer(),
     isAccessibilityGranted: @escaping @Sendable () -> Bool = { AXIsProcessTrusted() },
-    synthesisDelay: Duration = Paster.defaultSynthesisDelay
+    synthesisDelay: Duration = Paster.defaultSynthesisDelay,
+    frontmostAppProvider: any FrontmostAppReferenceProviding =
+      WorkspaceFrontmostAppReferenceProvider()
   ) {
     self.pasteboard = pasteboard
     self.eventSynthesizer = eventSynthesizer
     self.isAccessibilityGranted = isAccessibilityGranted
     self.synthesisDelay = synthesisDelay
+    self.frontmostAppProvider = frontmostAppProvider
+  }
+
+  /// Whether `current` — the app that actually holds focus right now, read
+  /// fresh immediately before posting the synthesized ⌘V (H-1) — is the same
+  /// process as `target`, the app captured when the picker/snippet flow
+  /// started (`targetingFrontmostApp`). Pure and free of any
+  /// `NSWorkspace`/`CGEvent` call so it's directly unit-testable without
+  /// posting a real event — see `PasterTests`.
+  static func isStillFrontmost(current: FrontmostAppRef?, target: FrontmostAppRef) -> Bool {
+    current?.processIdentifier == target.processIdentifier
   }
 
   /// Writes `content` to the pasteboard, then — only if Accessibility is
-  /// granted and a target app was provided — waits `synthesisDelay` and
-  /// synthesizes ⌘V targeting `frontmostApp` (typically
+  /// granted and a target app was provided — waits `synthesisDelay`,
+  /// re-verifies `frontmostApp` is STILL the app that holds focus, and only
+  /// then synthesizes ⌘V targeting it (typically
   /// `FrontmostAppTracker.consume()`'s result).
   ///
   /// If Accessibility is not granted, or no target is available, this stops
@@ -199,6 +218,13 @@ public struct Paster: Sendable {
   /// immediately after this call returns (to feed
   /// `ClipboardMonitor.ignore(changeCount:)`) still observes the correct
   /// value.
+  ///
+  /// - Throws: `PasteError.targetNoLongerFrontmost` if some other app took
+  ///   focus during `synthesisDelay` (H-1) — the synthesized keystroke is
+  ///   deliberately NOT posted in that case, since posting it could type the
+  ///   clipboard content (e.g. a password) into the wrong app. The
+  ///   pasteboard write above still stands either way, so the content
+  ///   remains available for the user to paste manually.
   public func paste(
     _ content: PasteContent,
     targetingFrontmostApp frontmostApp: FrontmostAppRef?
@@ -227,6 +253,14 @@ public struct Paster: Sendable {
     guard isAccessibilityGranted(), let frontmostApp else { return }
 
     try? await Task.sleep(for: synthesisDelay)
+
+    // H-1: verify, immediately before posting, that focus hasn't moved to a
+    // different app during synthesisDelay. Do NOT post on a mismatch — see
+    // this method's `Throws` doc and `PasteError.targetNoLongerFrontmost`.
+    let currentFrontmost = frontmostAppProvider.currentFrontmostAppRef()
+    guard Self.isStillFrontmost(current: currentFrontmost, target: frontmostApp) else {
+      throw PasteError.targetNoLongerFrontmost
+    }
 
     try eventSynthesizer.synthesizeCommandV(targeting: frontmostApp)
   }

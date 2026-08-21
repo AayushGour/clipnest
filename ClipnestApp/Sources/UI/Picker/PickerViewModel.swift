@@ -151,6 +151,30 @@
 // `PickerView` binds to) deliberately stay stored directly on this type
 // rather than moving into `PagedQuery` — see that file's top doc comment
 // for why.
+//
+// M-4 extraction (reviewer finding: this file carried too many
+// responsibilities): two genuinely self-contained clusters moved out to
+// `extension PickerViewModel` files in this same directory — pure code
+// motion, no behavior change. `PickerViewModel+Preview.swift` owns the
+// hover-driven preview-popover coordination (`hoverItem(_:)`,
+// `previewHoverChanged(_:)`, and their private resolve/scheduling
+// machinery). `PickerViewModel+Paste.swift` owns pasting
+// (`select(_:plainText:)`, `pasteContent(for:plainText:)`,
+// `pasteSnippet(_:)`, `pasteAndDismiss(_:)`). Everything else — the Rows/
+// Snippets query pipelines described above, selection-policy application,
+// keyboard-navigation/commit actions, and Snippets CRUD — stayed here: they
+// share `rowsQuery`/`snippetsQuery`/`clipStore`/`snippetStore` and each
+// other's private helpers so tightly (by design — see the "DRY follow-up"
+// comment above) that splitting them would mean widening most of this
+// file's private surface just to reconnect the pieces, trading one
+// responsibility-labeled file for several tightly-coupled ones. A few
+// stored properties the two extracted files need (`hoveredItemID`/
+// `isHoveringPreview`/`previewTask`/`previewTargetID`'s setter, `paster`/
+// `frontmostAppTracker`/`pasteboard`, `logger`) widened from `private` to
+// `internal` — Swift's `private` is file-scoped and extensions can't hold
+// stored instance properties, so this was the minimum required for the
+// split; each widened symbol's own doc comment explains why, and none of
+// them gained a new caller outside `PickerViewModel`/its extensions.
 
 import AppKit
 import ClipnestCore
@@ -164,7 +188,11 @@ import os
 /// comment for the T50/T51 windowed-query design.
 @MainActor
 final class PickerViewModel: ObservableObject {
-  private static let logger = Logger(subsystem: ClipnestLog.subsystem, category: "PickerViewModel")
+  // Not `private` (M-4 extraction — see `PickerViewModel+Paste.swift`'s top
+  // doc comment): `PickerViewModel+Paste.swift` also logs through this, and
+  // `private` is file-scoped in Swift. Still only ever used from within
+  // `PickerViewModel` and its extensions.
+  static let logger = Logger(subsystem: ClipnestLog.subsystem, category: "PickerViewModel")
 
   /// How many rows/snippets a single `query(...)` call fetches — both the
   /// initial page and every subsequent `loadMoreIfNeeded()` page. Large
@@ -221,10 +249,9 @@ final class PickerViewModel: ObservableObject {
       // Switching tabs clears any open popover (the pointer is over the tab
       // bar, not a row). Clearing the hover state and re-resolving closes a
       // stale History/Pinned popover on the way to Snippets, and leaves the
-      // popover correctly closed until the pointer hovers a row again.
-      hoveredItemID = nil
-      isHoveringPreview = false
-      resolvePreview()
+      // popover correctly closed until the pointer hovers a row again. See
+      // `PickerViewModel+Preview.swift` (M-4 extraction).
+      resetHoverForTabSwitch()
     }
   }
 
@@ -236,8 +263,11 @@ final class PickerViewModel: ObservableObject {
   @Published var selectedItemID: ClipItem.ID?
   /// The item whose preview should currently show (hover takes priority over
   /// keyboard selection). Driven by `hoverItem(_:)` / selection changes with
-  /// the debounce delays below. Nil = no preview.
-  @Published private(set) var previewTargetID: ClipItem.ID?
+  /// the debounce delays below. Nil = no preview. Not `private(set)` (M-4
+  /// extraction — see `PickerViewModel+Preview.swift`'s top doc comment):
+  /// its mutator, `setPreviewTarget(_:)`, now lives in that file, and
+  /// `private` is file-scoped in Swift.
+  @Published var previewTargetID: ClipItem.ID?
   /// The current window of Snippets rows loaded from `SnippetStore`.
   @Published private(set) var snippetRows: [Snippet] = []
   @Published var selectedSnippetID: Snippet.ID?
@@ -349,7 +379,10 @@ final class PickerViewModel: ObservableObject {
 
   private let clipStore: any ClipStore
   private let snippetStore: any SnippetStore
-  private let pasteboard: any PasteboardWriting
+  /// Not `private` (M-4 extraction — see `PickerViewModel+Paste.swift`'s top
+  /// doc comment): `pasteAndDismiss(_:)` there reads `changeCount` off this.
+  /// Still only ever used from within `PickerViewModel`/its extensions.
+  let pasteboard: any PasteboardWriting
   /// Used by `ItemRow` to load thumbnail bytes for `.image` rows (via
   /// `BlobStore.read(blobPath:)`) — the actual thumbnail-loading logic lives
   /// there, not in this view model. Defaults to a real `BlobStore` pointed
@@ -357,11 +390,15 @@ final class PickerViewModel: ObservableObject {
   /// without the composition root's shared instance.
   let blobStore: BlobStore
   /// T16: performs the real paste (pasteboard write + synthesized ⌘V when
-  /// Accessibility is granted, clipboard-only otherwise).
-  private let paster: Paster
+  /// Accessibility is granted, clipboard-only otherwise). Not `private` (M-4
+  /// extraction — see `PickerViewModel+Paste.swift`'s top doc comment):
+  /// `pasteAndDismiss(_:)` there needs it. Still only ever used from within
+  /// `PickerViewModel`/its extensions.
+  let paster: Paster
   /// T16: supplies the app that was frontmost right before the picker
-  /// opened, recorded by `AppEnvironment.showPicker()`.
-  private let frontmostAppTracker: FrontmostAppTracker
+  /// opened, recorded by `AppEnvironment.showPicker()`. Not `private` — same
+  /// reason as `paster`'s doc comment above.
+  let frontmostAppTracker: FrontmostAppTracker
 
   /// True between `willShow()` and `didHide()` — gates whether a live
   /// capture (`handleNewCapture()`) bothers requerying at all; nothing
@@ -369,29 +406,25 @@ final class PickerViewModel: ObservableObject {
   private var isVisible = false
 
   /// The row currently under the pointer, reported by `ItemRow.onHover` via
-  /// `hoverItem(_:)` — `nil` when the pointer isn't over any row.
-  private var hoveredItemID: ClipItem.ID?
+  /// `hoverItem(_:)` — `nil` when the pointer isn't over any row. Not
+  /// `private` (M-4 extraction — see `PickerViewModel+Preview.swift`'s top
+  /// doc comment): all the logic that reads/writes this now lives there,
+  /// and `private` is file-scoped in Swift, so this stored property (which
+  /// must stay declared here — extensions can't hold stored instance
+  /// properties) needs at least `internal` access to reach it.
+  var hoveredItemID: ClipItem.ID?
   /// Whether the pointer is currently over the preview popover itself
   /// (reported by `ItemPreview.onHover` via `previewHoverChanged(_:)`). While
   /// `true` the popover stays open so it can be hovered and scrolled; it
-  /// closes only once BOTH this and `hoveredItemID` are clear.
-  private var isHoveringPreview = false
+  /// closes only once BOTH this and `hoveredItemID` are clear. Not
+  /// `private` — see `hoveredItemID`'s doc comment above for why.
+  var isHoveringPreview = false
   /// The in-flight/pending debounce that will next re-resolve the popover —
   /// cancelled and replaced by every `scheduleResolve(delay:)`, so only the
-  /// most recent hover change lands. Cancelled in `didHide()`.
-  private var previewTask: Task<Void, Never>?
-  /// Delay before a hovered row's popover appears — kept tiny so it feels
-  /// instant, but non-zero so sweeping the pointer across rows (each
-  /// `hoverItem` cancels the prior pending resolve) still coalesces to a
-  /// single update rather than flashing a popover per row passed over. Safe
-  /// to keep this low because `ItemPreviewController.update`'s content is
-  /// bounded (text capped, files excluded), so even back-to-back updates are
-  /// cheap — the earlier hang came from unbounded content, not this delay.
-  private static let previewShowDelay = Duration.milliseconds(20)
-  /// Grace delay before the popover closes after the pointer leaves a row (or
-  /// the popover) — long enough to cross the small gap from the row to the
-  /// popover (or back) without it closing underfoot.
-  private static let previewCloseGrace = Duration.milliseconds(250)
+  /// most recent hover change lands. Cancelled in `didHide()` (via
+  /// `cancelPreviewAndHide()` — see `PickerViewModel+Preview.swift`). Not
+  /// `private` — see `hoveredItemID`'s doc comment above for why.
+  var previewTask: Task<Void, Never>?
 
   /// The Rows (History/Pinned) and Snippets paged-query pipelines — see this
   /// file's top "DRY follow-up" doc comment and `PagedQuery.swift`. Each
@@ -478,11 +511,7 @@ final class PickerViewModel: ObservableObject {
     isVisible = false
     rowsQuery.cancelAll()
     snippetsQuery.cancelAll()
-    previewTask?.cancel()
-    previewTask = nil
-    hoveredItemID = nil
-    isHoveringPreview = false
-    previewTargetID = nil
+    cancelPreviewAndHide()
   }
 
   /// Wired by `AppEnvironment` to `ClipboardMonitor.onCapture` (T51): a new
@@ -766,78 +795,12 @@ final class PickerViewModel: ObservableObject {
   }
 
   // MARK: - Preview popover tracking (hover-only)
-
-  /// Called by `ItemRow.onHover`. `id` = the row now under the pointer,
-  /// `nil` = the pointer left that row. Entering a row shows its popover
-  /// after `Self.previewShowDelay`; leaving re-resolves after
-  /// `Self.previewCloseGrace` (long enough to cross the gap onto the popover
-  /// without it closing).
-  func hoverItem(_ id: ClipItem.ID?) {
-    hoveredItemID = id
-    scheduleResolve(delay: id == nil ? Self.previewCloseGrace : Self.previewShowDelay)
-  }
-
-  /// Called by `ItemPreview.onHover` (wired through `ItemPreviewController`).
-  /// While the pointer is over the popover it stays open (and scrollable);
-  /// leaving re-resolves after the grace delay so the pointer can move back
-  /// onto a row without the popover closing underfoot.
-  func previewHoverChanged(_ hovering: Bool) {
-    isHoveringPreview = hovering
-    scheduleResolve(delay: hovering ? Self.previewShowDelay : Self.previewCloseGrace)
-  }
-
-  /// Cancels any pending resolve and schedules a fresh one after `delay`, so a
-  /// rapid run of hover changes (sweeping across rows, crossing to/from the
-  /// popover) only ever resolves the last one.
-  private func scheduleResolve(delay: Duration) {
-    previewTask?.cancel()
-    previewTask = Task { [weak self] in
-      guard let self else { return }
-      try? await Task.sleep(for: delay)
-      if Task.isCancelled { return }
-      self.resolvePreview()
-    }
-  }
-
-  /// Resolves which item's popover should show, purely from hover state: a
-  /// hovered, preview-worthy row wins; otherwise, while the pointer is over
-  /// the popover itself, whatever is shown stays open; otherwise the popover
-  /// closes. Snippets rows are `Snippet`s (no `ClipItem` popover), so that tab
-  /// always resolves to closed.
-  private func resolvePreview() {
-    // A hovered row on the active tab wins (History/Pinned show the clip's
-    // content, Snippets show the snippet's Body — `hoveredItemID` holds a
-    // `ClipItem.ID` or a `Snippet.ID`, both `UUID`, per tab). Otherwise, while
-    // the pointer is over the popover itself, whatever is shown stays open;
-    // otherwise the popover closes.
-    switch activeTab {
-    case .history, .pinned:
-      if let hoveredItemID, let item = rows.first(where: { $0.id == hoveredItemID }),
-        item.isPreviewWorthy
-      {
-        setPreviewTarget(hoveredItemID)
-        return
-      }
-    case .snippets:
-      if let hoveredItemID, snippetRows.contains(where: { $0.id == hoveredItemID }) {
-        setPreviewTarget(hoveredItemID)
-        return
-      }
-    }
-    if isHoveringPreview {
-      // Keep the current popover open while the pointer is over it.
-      return
-    }
-    setPreviewTarget(nil)
-  }
-
-  /// Writes `previewTargetID` only when it actually changes, so re-hovering an
-  /// already-shown popover doesn't rebuild it (which would reset its scroll
-  /// position — see `ItemPreviewController.update`).
-  private func setPreviewTarget(_ id: ClipItem.ID?) {
-    guard previewTargetID != id else { return }
-    previewTargetID = id
-  }
+  //
+  // Extracted (M-4) to `PickerViewModel+Preview.swift` — `hoverItem(_:)`,
+  // `previewHoverChanged(_:)`, and the private resolve/scheduling logic all
+  // live there now. `hoveredItemID`/`isHoveringPreview`/`previewTask`/
+  // `previewTargetID` stay declared above (stored properties can't move into
+  // an extension file) — see that file's top doc comment.
 
   // MARK: - Selection policy (shared, generic over ClipItem/Snippet)
 
@@ -904,128 +867,12 @@ final class PickerViewModel: ObservableObject {
     focusToken += 1
   }
 
-  /// T12/T16/T21: selecting a row pastes its content — via `Paster`, which
-  /// writes the pasteboard and, only if Accessibility is granted, also
-  /// synthesizes ⌘V into the app that was frontmost when the picker opened
-  /// — then dismisses the panel. Supports `.text`/`.link`/`.image`/`.file`/
-  /// `.richText` via `pasteContent(for:plainText:)`. `plainText` (default
-  /// `false`, i.e. rich) is "paste without formatting" (routed follow-up,
-  /// rich-paste-preview-snippet-expansion): `true` strips any text-bearing
-  /// kind down to its plain `previewText` instead of the richer form.
-  func select(_ item: ClipItem, plainText: Bool = false) {
-    guard let content = pasteContent(for: item, plainText: plainText) else { return }
-    pasteAndDismiss(content)
-  }
-
-  /// Maps `item` to the `PasteContent` `Paster` should write/paste, per its
-  /// `ItemKind` and `plainText`. When `plainText` is `true`, every text-
-  /// bearing kind (`.text`/`.link`/`.richText`) pastes its plain
-  /// `previewText`, ignoring any richer stored form — `.image`/`.file` have
-  /// no plain form, so they fall through to their normal handling below
-  /// unaffected. Otherwise: `.text`/`.link` paste their `previewText`
-  /// verbatim (both store their *full* content there). `.richText` reads
-  /// its stored RTF blob via `blobPath` and pastes rich; a legacy
-  /// `.richText` item captured before RTF was stored has no blob and falls
-  /// back to plain `previewText` rather than no-op. `.image` reads its
-  /// bytes from `BlobStore` via `blobPath`. `.file` re-offers the original
-  /// file via `fileReference`.
-  // Deliberately not `private` (unlike everything else in this file's
-  // "Selecting" section): `@testable import` only elevates `internal`
-  // symbols to be visible outside the module, never `private`/
-  // `fileprivate` ones — a `private` `pasteContent` would be permanently
-  // unreachable from `ClipnestAppTests` regardless of `@testable import`.
-  // This is the exact pure decision logic the architecture/implementation
-  // reviews flagged as untested (plain vs. formatted paste), so it's
-  // widened to the module's default `internal` access — still invisible
-  // outside `ClipnestApp`, just no longer invisible to this module's own
-  // test target. See `PickerViewModelTests.swift`.
-  func pasteContent(for item: ClipItem, plainText: Bool) -> PasteContent? {
-    if plainText {
-      // Strip: paste the plain form for any text-bearing kind.
-      switch item.kind {
-      case .text, .link, .richText:
-        return .text(item.previewText)
-      case .image, .file:
-        break  // no plain form — fall through to normal handling below
-      }
-    }
-
-    switch item.kind {
-    case .text, .link:
-      return .text(item.previewText)
-    case .richText:
-      // Rich by default: read the stored RTF blob. Legacy richText items
-      // captured before RTF was stored have no blob → paste the plain
-      // previewText rather than no-op.
-      guard let blobPath = item.blobPath else { return .text(item.previewText) }
-      do {
-        let rtf = try blobStore.read(blobPath: blobPath)
-        return .richText(rtf: rtf, plain: item.previewText)
-      } catch {
-        Self.logger.error(
-          "Failed to load RTF blob for paste (item \(item.id, privacy: .public)): \(String(describing: error))"
-        )
-        return .text(item.previewText)
-      }
-    case .image:
-      guard let blobPath = item.blobPath else { return nil }
-      do {
-        return .image(try blobStore.read(blobPath: blobPath))
-      } catch {
-        // A missing/corrupt blob means this select silently no-ops (no safe
-        // content to paste) rather than crashing. Logged — metadata only,
-        // never blob bytes, per coding-standards.md's "never log clipboard
-        // content".
-        Self.logger.error(
-          "Failed to load image blob for paste (item \(item.id, privacy: .public)): \(String(describing: error))"
-        )
-        return nil
-      }
-    case .file:
-      guard let fileReference = item.fileReference, let url = URL(string: fileReference) else {
-        return nil
-      }
-      return .file(url)
-    }
-  }
-
-  /// T23: selecting a snippet pastes its `body` through the exact same path
-  /// `select(_:)` uses for History/Pinned items — see `pasteAndDismiss(_:)`.
-  func pasteSnippet(_ snippet: Snippet) {
-    pasteAndDismiss(.text(snippet.body))
-  }
-
-  /// Shared by `select(_:)` and `pasteSnippet(_:)`: dismisses the panel
-  /// *first*, then writes `content` through `Paster` and tells the running
-  /// `ClipboardMonitor` to ignore the resulting self-write.
-  ///
-  /// **Dismiss-before-paste is deliberate, not incidental ordering**:
-  /// `Paster`'s real `CGEventSynthesizer` posts the synthesized ⌘V through
-  /// the *global* HID event tap after a short `synthesisDelay`. If
-  /// Clipnest's own panel still held key focus when that posts, the OS
-  /// could deliver the synthetic keystroke to *our* search field instead of
-  /// the previously-frontmost app. Calling `dismiss()` here, before
-  /// `Paster` even starts its delay, gives the OS the full `synthesisDelay`
-  /// window to hand focus back to that app first.
-  private func pasteAndDismiss(_ content: PasteContent) {
-    let frontmostApp = frontmostAppTracker.consume()
-    dismiss()
-    Task { [weak self] in
-      guard let self else { return }
-      do {
-        try await self.paster.paste(content, targetingFrontmostApp: frontmostApp)
-      } catch {
-        // A genuine `PasteError` — the pasteboard write already happened
-        // before this could be thrown, so the item is still on the
-        // clipboard; this is not fatal. Log metadata only.
-        Self.logger.error("Paster failed to synthesize paste: \(String(describing: error))")
-      }
-      // Must run right after Paster's pasteboard write is observable, before
-      // anything else observes the pasteboard — see
-      // `suppressOwnPasteboardWrite`'s doc comment.
-      self.suppressOwnPasteboardWrite(self.pasteboard.changeCount)
-    }
-  }
+  // MARK: - Selecting / pasting
+  //
+  // Extracted (M-4) to `PickerViewModel+Paste.swift` — `select(_:plainText:)`,
+  // `pasteContent(for:plainText:)`, `pasteSnippet(_:)`, and the private
+  // `pasteAndDismiss(_:)` all live there now, unchanged. See that file's top
+  // doc comment.
 
   /// The `ClipItem` currently highlighted (`selectedItemID`), if it's both
   /// set and still present in `rows`.

@@ -98,17 +98,20 @@ final class ClipboardSelectionReplacer: SelectionReplacing {
   /// Posts a ⌘-modified keystroke through the global HID event tap (targeting
   /// whatever app is frontmost — the app the user is working in). Returns
   /// `false` only if the events couldn't be created.
+  ///
+  /// Routed through `ClipnestCore`'s shared `SyntheticKeystroke` (rather than
+  /// hand-rolling a `CGEventSource`/`CGEvent` pair here) so there is exactly
+  /// ONE place that builds and posts synthetic modified keystrokes —
+  /// `Paster`'s `CGEventSynthesizer` (picker paste, ⌘V) uses the same
+  /// helper. That shared implementation also fixes two defects the old
+  /// hand-rolled version here had: it used to build events from
+  /// `.combinedSessionState`, which merges the user's currently
+  /// physically-held modifiers (very likely still Option+Command, since this
+  /// fires from ⌥⌘E) into the synthetic event; and it asserted Command purely
+  /// via `.flags` with no bracketing keydown/keyup to explicitly return the
+  /// modifier state to released.
   private func postCommandKey(_ key: CGKeyCode) -> Bool {
-    let source = CGEventSource(stateID: .combinedSessionState)
-    guard
-      let down = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true),
-      let up = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false)
-    else { return false }
-    down.flags = .maskCommand
-    up.flags = .maskCommand
-    down.post(tap: .cghidEventTap)
-    up.post(tap: .cghidEventTap)
-    return true
+    SyntheticKeystroke.postCommandModified(key)
   }
 
   /// Copies the current pasteboard's items + all their type data so they can

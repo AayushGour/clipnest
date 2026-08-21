@@ -263,15 +263,46 @@ public actor SwiftDataClipStore: ClipStore {
         && (!hasKind || record.kindRawValue == kindRawValue)
     }
 
-    var descriptor = FetchDescriptor<ClipItemRecord>(predicate: predicate)
-    descriptor.sortBy = [
-      scope == .pinned
-        ? SortDescriptor(\ClipItemRecord.pinnedAt, order: .forward)
-        : SortDescriptor(\ClipItemRecord.createdAt, order: .reverse)
-    ]
-    descriptor.fetchOffset = offset
-    descriptor.fetchLimit = limit
-    return try fetch(descriptor: descriptor).map { $0.asClipItem() }
+    switch scope {
+    case .history:
+      var descriptor = FetchDescriptor<ClipItemRecord>(predicate: predicate)
+      descriptor.sortBy = [SortDescriptor(\ClipItemRecord.createdAt, order: .reverse)]
+      descriptor.fetchOffset = offset
+      descriptor.fetchLimit = limit
+      return try fetch(descriptor: descriptor).map { $0.asClipItem() }
+
+    case .pinned:
+      // `pinnedAt` is optional: rows pinned before this field existed have
+      // `pinned == true, pinnedAt == nil` (a "legacy pinned row" — see
+      // `ClipItemRecord.pinnedAt`'s and `InMemoryClipStore.query`'s doc
+      // comments, and `ClipStoreContractTests
+      // .queryPinnedScopeOrdersLegacyNilPinnedAtBeforeDatedPins`, M-3). This
+      // used to push `SortDescriptor(\.pinnedAt, order: .forward)` down to
+      // `FetchDescriptor` and trust its nil-handling; empirically that
+      // *does* already sort `nil` first (verified against reversed
+      // insertion order, multiple mixed dated/nil rows, and pagination
+      // boundaries — Foundation's `OptionalComparator` treats `nil` as
+      // ordered-ascending under `.forward`), but that's an internal
+      // Foundation/SwiftData behavior, not a documented contract of
+      // `FetchDescriptor`'s SQL pushdown specifically — nothing pins it to
+      // stay that way across a SwiftData/Core Data version. Rather than
+      // depend on it, fetch the (small — user-authored pins, not full
+      // history) pinned set predicate-filtered only, and sort explicitly in
+      // Swift with the exact same rule `InMemoryClipStore.query` uses
+      // (`($0.pinnedAt ?? .distantPast) < ($1.pinnedAt ?? .distantPast)`),
+      // so both `ClipStore` conformances are guaranteed byte-for-byte
+      // identical regardless of any framework internal. Offset/limit are
+      // applied here, in Swift, after this sort — they can't be pushed
+      // down to `FetchDescriptor.fetchOffset/fetchLimit` (SQL-level) since
+      // the correct order can only be established post-coalesce.
+      let descriptor = FetchDescriptor<ClipItemRecord>(predicate: predicate)
+      let records = try fetch(descriptor: descriptor)
+      let sorted = records.sorted {
+        ($0.pinnedAt ?? .distantPast) < ($1.pinnedAt ?? .distantPast)
+      }
+      guard offset < sorted.count else { return [] }
+      return Array(sorted[offset...].prefix(limit)).map { $0.asClipItem() }
+    }
   }
 
   public func setPinned(_ id: UUID, pinned: Bool) async throws {
