@@ -95,7 +95,7 @@ Updates Clipnest to the latest version, if a newer one is available.
 #    https://github.com/yonaskolb/XcodeGen#installing  (requires Xcode 16+)
 
 # 2. Clone
-git clone https://github.com/<your-username>/clipnest.git
+git clone https://github.com/AayushGour/clipnest.git
 cd clipnest
 
 # 3. Test the core logic (pure Swift package, no Xcode project needed — needs Xcode 26+; see Requirements)
@@ -155,7 +155,7 @@ Clipnest is intentionally boring in the best way — a small, well-tested native
 
 - **Swift 6 + SwiftUI/AppKit**, minimum macOS 14. Menu-bar app (`LSUIElement`, no Dock icon).
 - **`ClipnestCore`** — a dependency-light Swift package holding *all* the logic (capture, privacy filtering, storage, search, paste, snippet expansion). Fully unit-tested with Swift Testing — runnable on its own with `swift test`, no Xcode project required.
-- **`ClipnestApp`** — the SwiftUI/AppKit frontend (menu bar, the non-activating floating picker panel, hover-preview popover, snippet editor window). Generated with [XcodeGen](https://github.com/yonyz/XcodeGen) from `ClipnestApp/project.yml`.
+- **`ClipnestApp`** — the SwiftUI/AppKit frontend (menu bar, the non-activating floating picker panel, hover-preview popover, snippet editor window). Generated with [XcodeGen](https://github.com/yonaskolb/XcodeGen) from `ClipnestApp/project.yml`.
 - **Persistence:** **SwiftData** for metadata; a content-addressed **blob store** on disk for image/rich-text bytes (deduped by SHA-256), so the database stays small.
 - **Capture:** macOS has no "pasteboard changed" event, so a lightweight `changeCount` poll detects new copies; a live hook pushes them straight into the picker.
 - **Paste & expansion:** synthesized ⌘V via `CGEvent`; snippet expansion uses an **Accessibility path** with a **clipboard-with-restore fallback** so it works in every app (see [Snippets](#snippets--keyword-expansion)).
