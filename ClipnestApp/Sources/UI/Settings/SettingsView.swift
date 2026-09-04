@@ -11,17 +11,20 @@ import SwiftUI
 struct SettingsView: View {
   private let settings: SettingsStore
   private let clipStore: any ClipStore
+  private let ocrBackfillViewModel: OCRBackfillViewModel
   private let accessibilityWatcher: AccessibilityPermissionWatcher
   private let updateChecker: UpdateChecker
 
   init(
     settings: SettingsStore,
     clipStore: any ClipStore,
+    ocrBackfillViewModel: OCRBackfillViewModel,
     accessibilityWatcher: AccessibilityPermissionWatcher,
     updateChecker: UpdateChecker
   ) {
     self.settings = settings
     self.clipStore = clipStore
+    self.ocrBackfillViewModel = ocrBackfillViewModel
     self.accessibilityWatcher = accessibilityWatcher
     self.updateChecker = updateChecker
   }
@@ -31,8 +34,10 @@ struct SettingsView: View {
       GeneralSettingsView(settings: settings, updateChecker: updateChecker)
         .tabItem { Label("General", systemImage: "gearshape") }
 
-      HistorySettingsView(settings: settings, clipStore: clipStore)
-        .tabItem { Label("History", systemImage: "clock") }
+      HistorySettingsView(
+        settings: settings, clipStore: clipStore, ocrBackfillViewModel: ocrBackfillViewModel
+      )
+      .tabItem { Label("History", systemImage: "clock") }
 
       ShortcutsSettingsView(accessibilityWatcher: accessibilityWatcher)
         .tabItem { Label("Shortcuts", systemImage: "command") }

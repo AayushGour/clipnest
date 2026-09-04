@@ -36,6 +36,11 @@ public final class PickerPanel: NSPanel {
   /// editor; see `onCommandDelete`'s doc comment.
   private static let deleteKeyCode: UInt16 = 51
 
+  /// The physical `,` key's virtual keycode (`kVK_ANSI_Comma`). Used by the
+  /// same local event monitor to recognize ⌘, ahead of `NSApp.mainMenu`'s
+  /// own key-equivalent matching; see `onCommandComma`'s doc comment.
+  private static let commaKeyCode: UInt16 = 43
+
   /// Invoked right before the panel is ordered to the front, on *every*
   /// `show(at:)` call — not just the first. Lets the composition root reset
   /// picker state (search query, live-refresh polling, search-field focus)
@@ -58,18 +63,43 @@ public final class PickerPanel: NSPanel {
   /// instead, before the field editor gets it.
   public var onCommandDelete: (() -> Void)?
 
+  /// Invoked when ⌘, (Command+Comma) is pressed while this panel is key —
+  /// T-SET5.
+  ///
+  /// A SECOND, independently-discovered reason (beyond `onCommandDelete`'s
+  /// field-editor one) why a key has to be intercepted here at the AppKit
+  /// layer instead of `PickerView`'s SwiftUI `.onKeyPress`: declaring a
+  /// `Settings` scene makes SwiftUI auto-generate a "Settings…" command
+  /// bound to ⌘, in the app's (possibly not currently visible) main menu,
+  /// wired directly to its own `openSettings()`. `-[NSApplication
+  /// sendEvent:]` matches a physical keyDown against `NSApp.mainMenu`'s key
+  /// equivalents BEFORE the key window's responder chain (and therefore
+  /// before SwiftUI's `.onKeyPress`) ever sees it — and this matching does
+  /// NOT require Clipnest to be the active/frontmost app, only that one of
+  /// its own windows (this panel) is currently `key`. Confirmed live
+  /// (T-SET5 manual verification): with no interception, ⌘, while the
+  /// picker is open silently creates the Settings window via that built-in
+  /// path but never raises or activates it — the exact T-SET1 failure mode
+  /// `SettingsActivator` exists to fix — so a `PickerView`-level
+  /// `.onKeyPress(",")` case would be unreachable dead code; a local
+  /// `NSEvent` monitor is the only layer that runs early enough to preempt
+  /// the built-in handler and substitute Clipnest's own (dismiss the
+  /// picker, then the same `openSettings()` + `SettingsFocusCoordinator`
+  /// sequence `MenuBarContent`'s "Settings…" item uses).
+  public var onCommandComma: (() -> Void)?
+
   /// Token for the local `NSEvent` monitor installed in `configure()` that
-  /// implements `onCommandDelete`. Removed in `deinit`. The token's type
-  /// (`Any?`, opaque per `NSEvent.addLocalMonitorForEvents`'s signature)
-  /// isn't `Sendable`, which the nonisolated `deinit` below needs to read
-  /// it to remove the monitor — `nonisolated(unsafe)` is safe here (see
-  /// `BlobStore.fileManager`'s doc comment for the same pattern) because
-  /// this property is only ever written once, synchronously, from
+  /// implements `onCommandDelete`/`onCommandComma`. Removed in `deinit`. The
+  /// token's type (`Any?`, opaque per `NSEvent.addLocalMonitorForEvents`'s
+  /// signature) isn't `Sendable`, which the nonisolated `deinit` below needs
+  /// to read it to remove the monitor — `nonisolated(unsafe)` is safe here
+  /// (see `BlobStore.fileManager`'s doc comment for the same pattern)
+  /// because this property is only ever written once, synchronously, from
   /// `configure()` during `@MainActor`-isolated `init`, and only ever read
   /// in `deinit`, which by construction can't run concurrently with that
   /// write (an object can't be deallocated while its own init is still
   /// running) or with itself (deinit runs exactly once).
-  private nonisolated(unsafe) var commandDeleteMonitor: Any?
+  private nonisolated(unsafe) var localKeyMonitor: Any?
 
   /// Creates a panel hosting `content` via `NSHostingView`.
   public convenience init<Content: View>(@ViewBuilder content: () -> Content) {
@@ -101,11 +131,11 @@ public final class PickerPanel: NSPanel {
   /// `PickerPanel` is `@MainActor`; `deinit` is nonisolated by default in
   /// Swift 6, and `NSEvent.removeMonitor` isn't actor-isolated, so this
   /// compiles as a plain (implicitly nonisolated) `deinit` — no explicit
-  /// `nonisolated` needed, given `commandDeleteMonitor`'s own
+  /// `nonisolated` needed, given `localKeyMonitor`'s own
   /// `nonisolated(unsafe)` above already makes it accessible here.
   deinit {
-    if let commandDeleteMonitor {
-      NSEvent.removeMonitor(commandDeleteMonitor)
+    if let localKeyMonitor {
+      NSEvent.removeMonitor(localKeyMonitor)
     }
   }
 
@@ -131,28 +161,38 @@ public final class PickerPanel: NSPanel {
     // in that Space — both are required together for the full-screen AC.
     collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
-    // Intercepts ⌘⌫ ahead of the search field's field editor — see
-    // `onCommandDelete`'s doc comment for why this can't be done at the
-    // SwiftUI layer. Returning `nil` from a local monitor's handler
-    // swallows the event: per `NSEvent.addLocalMonitorForEvents`'s
-    // documented semantics, a `nil` return means the event is never
-    // dispatched further to the window/first responder. That's exactly
-    // what stops the search field's field editor from treating Cmd+Delete
-    // as "delete to line start," AND stops `PickerView`'s own
-    // `.onKeyPress(.delete)` case (which matches the physical Delete key
-    // "regardless of modifiers," per its doc comment) from *also* firing
-    // for the same physical keystroke — avoiding a double-delete. Any
-    // other key, or plain Delete/Backspace with no Command modifier,
-    // returns `event` unchanged so normal text editing in the search field
-    // is completely unaffected.
-    commandDeleteMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
+    // Intercepts ⌘⌫ ahead of the search field's field editor (see
+    // `onCommandDelete`'s doc comment) and ⌘, ahead of
+    // `NSApp.mainMenu`'s auto-generated Settings key equivalent (see
+    // `onCommandComma`'s doc comment) — two independent reasons for the
+    // same mechanism, checked in one monitor rather than installing two.
+    // Returning `nil` from a local monitor's handler swallows the event:
+    // per `NSEvent.addLocalMonitorForEvents`'s documented semantics, a
+    // `nil` return means the event is never dispatched further — to the
+    // window/first responder for ⌘⌫ (stopping the field editor's own
+    // "delete to line start" AND `PickerView`'s `.onKeyPress(.delete)` case
+    // from also firing for the same keystroke, avoiding a double-delete),
+    // or to `-[NSApplication sendEvent:]`'s menu key-equivalent matching
+    // for ⌘, (stopping the built-in, silently-non-raising `openSettings()`
+    // call from firing instead of/in addition to Clipnest's own). Any other
+    // key, or either of these keys without Command, returns `event`
+    // unchanged so normal text editing in the search field (and everything
+    // else) is completely unaffected.
+    localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) {
       [weak self] event in
       guard let self, event.window === self else { return event }
-      guard event.keyCode == Self.deleteKeyCode,
-        event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command)
+      guard event.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(.command)
       else { return event }
-      self.onCommandDelete?()
-      return nil
+      switch event.keyCode {
+      case Self.deleteKeyCode:
+        self.onCommandDelete?()
+        return nil
+      case Self.commaKeyCode:
+        self.onCommandComma?()
+        return nil
+      default:
+        return event
+      }
     }
   }
 

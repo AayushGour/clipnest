@@ -87,6 +87,18 @@ import SwiftUI
 struct PickerView: View {
   @ObservedObject var viewModel: PickerViewModel
   @FocusState private var isSearchFieldFocused: Bool
+  /// T-SET5: ⌘, (opens Settings)'s route there. Read here (rather than wired
+  /// up in `AppEnvironment`, a plain non-View composition root) because
+  /// `@Environment(\.openSettings)` is only reachable from inside a `View`'s
+  /// body. The actual ⌘, KEY DISPATCH is NOT this view's `.onKeyPress`
+  /// (`handle(_:)`, below) — `PickerPanel`'s local `NSEvent` monitor
+  /// intercepts ⌘, before it ever reaches SwiftUI's key-press handling; see
+  /// `PickerPanel.onCommandComma`'s doc comment for why. This property exists
+  /// purely so `.onAppear` below can wire `viewModel.openSettings` to the
+  /// real action, keeping `viewModel.openSettingsFromPicker()`'s `dismiss()`
+  /// → `openSettings()` sequencing unit-testable via the same injected-
+  /// closure pattern `dismiss`/`requestAppUpdate` already use.
+  @Environment(\.openSettings) private var openSettings
   /// The search field's live text — pure local SwiftUI state, decoupled
   /// from `viewModel.query`/the async query pipeline entirely, so typing is
   /// always instant regardless of DB-query latency. See this file's top
@@ -109,7 +121,28 @@ struct PickerView: View {
     }
     .frame(maxWidth: .infinity, maxHeight: .infinity)
     .background(.regularMaterial)
-    .onAppear { isSearchFieldFocused = true }
+    .onAppear {
+      isSearchFieldFocused = true
+      // T-SET5: wired once here so `PickerViewModel.openSettingsFromPicker()`
+      // — invoked from `PickerPanel.onCommandComma`, NOT from this view's own
+      // `.onKeyPress` (see `openSettings`'s doc comment above) — has a real
+      // `openSettings()` to call. Kept as an injected closure rather than
+      // read directly at the AppEnvironment call site so
+      // `openSettingsFromPicker()`'s `dismiss()` → `openSettings()`
+      // sequencing stays unit-testable via a plain closure spy, same as
+      // `dismiss`/`requestAppUpdate` — see `viewModel.openSettings`'s doc
+      // comment. `.onAppear` (not `viewModel.willShow()`/`onWillShow`)
+      // because this hosting view's `body` is only laid out once for the
+      // process's lifetime (the panel is hidden/shown via
+      // `orderOut`/`orderFrontRegardless`, never recreated — the same reason
+      // `focusToken`/`searchResetToken` exist as explicit re-fire signals
+      // instead of relying on `.onAppear`), and a fresh `OpenSettingsAction`
+      // isn't needed on every show.
+      viewModel.openSettings = {
+        openSettings()
+        SettingsFocusCoordinator.focusAfterOpening()
+      }
+    }
     .onChange(of: viewModel.focusToken) { _, _ in isSearchFieldFocused = true }
     .onChange(of: viewModel.searchResetToken) { _, _ in searchText = "" }
     .onChange(of: searchText) { _, newValue in viewModel.searchTextChanged(newValue) }
@@ -132,7 +165,10 @@ struct PickerView: View {
 
   /// T13's Esc/↑/↓/⌘F plus T24's ⌘P/Delete plus T23's ⌘1/⌘2/⌘3/⌘N/⌘S, in
   /// one place so there's a single "what keys does the picker respond to"
-  /// answer rather than one `.onKeyPress` modifier per key.
+  /// answer rather than one `.onKeyPress` modifier per key. NOT here: T-SET5's
+  /// ⌘, (opens Settings) — `PickerPanel`'s local `NSEvent` monitor intercepts
+  /// it earlier, at the AppKit layer, so it never reaches this method at all;
+  /// see `PickerPanel.onCommandComma`'s doc comment for why.
   ///
   /// Reliability note (T24): `.delete` matches the physical Delete key
   /// regardless of modifiers, so this one case covers both plain Delete and
@@ -348,16 +384,33 @@ struct PickerView: View {
     return "Update to v\(latestVersion) available"
   }
 
+  // T-OCR2: "⌥⏎ plain" was genuinely overloaded — on an image row it pastes
+  // the recognized text (falling back to the image when there is none), not
+  // just "strip formatting" as it does for `.richText`.
+  //
+  // T-SET2 (regression fix): spelling that out permanently as
+  // "⌥⏎ plain/OCR text" overflowed the picker panel's fixed width at
+  // `.caption2` and truncated `esc close` off the tail entirely. Fixed in
+  // two steps, both in `ShortcutHints.text(for:capabilities:)` (extracted
+  // so the string-building logic is testable — see that file's top doc
+  // comment, which also has the full width-budget measurement): (1) the
+  // hint is contextual instead of permanently longer; (2) that alone still
+  // didn't fit every tab/state, so `esc close` (the least informative item,
+  // and Esc-to-close needs no reminder) was dropped from the bar entirely —
+  // Esc still closes the picker, it's just not spelled out here anymore.
+  //
+  // T-SET4 (bug fix + re-audit): `⌘S save` used to show unconditionally on
+  // History/Pinned regardless of the highlighted row's kind (the reported
+  // bug — it showed for a highlighted `.image` row, whose ⌘S silently
+  // opened a save-as-snippet form the row's own UI never offers) and ⌥⏎'s
+  // wording didn't account for every kind where it's actually identical to
+  // ⏎. Both are now driven by `viewModel.highlightedItemCapabilities`
+  // (`HighlightedItemCapabilities`, in `ShortcutHints.swift`) instead of the
+  // single `hasRecognizedText: Bool` this used to pass — see that type's
+  // and file's doc comments for the corrected per-kind/per-tab truth table.
   private var shortcutHints: String {
-    var parts = ["↑↓ move", "⏎ paste", "⌥⏎ plain", "⌘F search"]
-    switch viewModel.activeTab {
-    case .history, .pinned:
-      parts += ["⌘P pin", "⌘S save", "⌘⌫ delete"]
-    case .snippets:
-      parts += ["⌘N new", "⌥⌘E replace", "⌘⌫ delete"]
-    }
-    parts += ["⌘1/2/3 tabs", "esc close"]
-    return parts.joined(separator: " · ")
+    ShortcutHints.text(
+      for: viewModel.activeTab, capabilities: viewModel.highlightedItemCapabilities)
   }
 
   private var tabBar: some View {
@@ -426,6 +479,7 @@ struct PickerView: View {
             onTogglePin: { viewModel.togglePin(item) },
             onSaveAsSnippet: { viewModel.presentSaveAsSnippetForm(from: item) },
             onDelete: { viewModel.delete(item) },
+            onCopyRecognizedText: { viewModel.copyRecognizedText(from: item) },
             onHover: { hovering in viewModel.hoverItem(hovering ? item.id : nil) }
           )
         }

@@ -37,6 +37,8 @@ final class SettingsStore {
     static let userExcludedBundleIDs = "settings.userExcludedBundleIDs"
     static let hasRequestedAccessibility = "settings.hasRequestedAccessibility"
     static let automaticallyCheckForUpdates = "settings.automaticallyCheckForUpdates"
+    static let isTextRecognitionEnabled = "settings.isTextRecognitionEnabled"
+    static let textRecognitionQuality = "settings.textRecognitionQuality"
   }
 
   // `@ObservationIgnored`: the backing store is not observable UI state.
@@ -82,6 +84,42 @@ final class SettingsStore {
     }
   }
 
+  /// T-OCR2: "Recognize text in copied images" (History settings tab).
+  /// Default OFF (opt-in, unlike `automaticallyCheckForUpdates` above) —
+  /// unlike that purely informational check, this runs Vision against
+  /// every copied image's actual pixels and the recognized text becomes
+  /// part of the item's searchable/stored content, so a user who has never
+  /// opted in should see zero behavior change. Read by `ClipboardMonitor`'s
+  /// `textRecognitionEnabledProvider` (see `AppEnvironment`'s wiring,
+  /// mirroring `isCaptureEnabled`/`excludedBundleIDsProvider`'s identical
+  /// `MainActor.assumeIsolated` pattern).
+  var isTextRecognitionEnabled: Bool {
+    didSet {
+      defaults.set(isTextRecognitionEnabled, forKey: Key.isTextRecognitionEnabled)
+    }
+  }
+
+  /// T-OCR8: how thorough on-device text recognition should be — the
+  /// Fast/Accurate picker in History settings, shown directly under
+  /// `isTextRecognitionEnabled`'s toggle (only meaningful while that's on).
+  /// Default `.accurate`, NOT `.fast` — the opposite bias from
+  /// `isTextRecognitionEnabled` itself (which defaults OFF): once a user
+  /// has opted into OCR at all, real-world testing showed `.fast` mangling
+  /// digits/letters, punctuation, and arrows badly enough that the more
+  /// correct level should be the one nobody has to discover. `ClipnestCore
+  /// .TextRecognitionQuality`, never `Vision.VNRequestTextRecognitionLevel`
+  /// — this file/the Settings UI must not `import Vision` (see
+  /// `VisionTextRecognizer`, the one place that maps this to the real
+  /// Vision enum). Read by `ClipboardMonitor`'s
+  /// `textRecognitionQualityProvider` (see `AppEnvironment`'s wiring,
+  /// mirroring `isTextRecognitionEnabled`/`textRecognitionEnabledProvider`'s
+  /// identical `MainActor.assumeIsolated` pattern).
+  var textRecognitionQuality: TextRecognitionQuality {
+    didSet {
+      defaults.set(textRecognitionQuality.rawValue, forKey: Key.textRecognitionQuality)
+    }
+  }
+
   init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
     // `object(forKey:) as? Bool` distinguishes "absent" (-> default true)
@@ -98,6 +136,17 @@ final class SettingsStore {
     // from an explicitly-stored false, same reasoning as `isCaptureEnabled`.
     self.automaticallyCheckForUpdates =
       defaults.object(forKey: Key.automaticallyCheckForUpdates) as? Bool ?? true
+    // `object(forKey:) as? Bool` distinguishes "absent" (-> default false)
+    // from an explicitly-stored true. Default is OFF, unlike every other
+    // Bool above — see this property's doc comment for why.
+    self.isTextRecognitionEnabled =
+      defaults.object(forKey: Key.isTextRecognitionEnabled) as? Bool ?? false
+    // `.flatMap(Init(rawValue:))` distinguishes "absent" (-> default
+    // `.accurate`) from an explicitly-stored value, same pattern as
+    // `retentionMode` above.
+    self.textRecognitionQuality =
+      defaults.string(forKey: Key.textRecognitionQuality).flatMap(
+        TextRecognitionQuality.init(rawValue:)) ?? .accurate
   }
 
   /// The cap handed to `ClipStore.enforceRetention(cap:)`. Values are clamped

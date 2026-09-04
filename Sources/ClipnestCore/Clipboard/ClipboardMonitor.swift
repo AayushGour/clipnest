@@ -90,6 +90,32 @@ public final class ClipboardMonitor {
   private let frontmostApplicationProvider: any FrontmostApplicationProviding
   private let pollInterval: TimeInterval
   private let excludedBundleIDsProvider: @Sendable () -> Set<String>
+  /// T-OCR2: on-device text recognizer for freshly-captured `.image` items.
+  /// `nil` in most existing tests/call sites (no recognition attempted) —
+  /// production wiring (`AppEnvironment`) injects a real
+  /// `VisionTextRecognizer`. Kept separate from `textRecognitionEnabledProvider`
+  /// so a caller can wire the capability without also wiring a live user
+  /// setting (e.g. tests that want recognition unconditionally attempted).
+  private let textRecognizer: (any TextRecognizing)?
+  /// Returns whether the *user* currently wants on-device text recognition
+  /// on captured images (the persisted Settings "Recognize text in copied
+  /// images" toggle, default OFF — see `SettingsStore
+  /// .isTextRecognitionEnabled`). Read fresh at the moment each `.image` is
+  /// captured, same "read fresh every cycle" shape as
+  /// `captureEnabledProvider`. Defaults to always disabled so existing call
+  /// sites/tests need no change and never accidentally start running Vision.
+  private let textRecognitionEnabledProvider: @Sendable () -> Bool
+  /// T-OCR8: returns the *user's* currently-selected recognition quality
+  /// (the persisted Settings "Fast/Accurate" picker — see
+  /// `SettingsStore.textRecognitionQuality`). Read fresh at the moment each
+  /// `.image` recognition is scheduled — same "read fresh every cycle"
+  /// shape as `textRecognitionEnabledProvider`/`captureEnabledProvider`, so
+  /// changing the setting mid-session takes effect on the very next copy
+  /// with no `ClipboardMonitor`/`VisionTextRecognizer` recreation. Defaults
+  /// to always `.accurate`, matching `SettingsStore`'s default, so existing
+  /// call sites/tests that don't care about quality still exercise the
+  /// more-correct level.
+  private let textRecognitionQualityProvider: @Sendable () -> TextRecognitionQuality
   /// Returns whether the *user* currently wants capture on (the persisted
   /// Settings "Pause capture" gate). Read fresh every `checkNow()` cycle and
   /// kept deliberately separate from the transient `isPaused` flag (which the
@@ -138,6 +164,11 @@ public final class ClipboardMonitor {
     pollInterval: TimeInterval = ClipboardMonitor.defaultPollInterval,
     excludedBundleIDsProvider: @escaping @Sendable () -> Set<String> = { [] },
     captureEnabledProvider: @escaping @Sendable () -> Bool = { true },
+    textRecognizer: (any TextRecognizing)? = nil,
+    textRecognitionEnabledProvider: @escaping @Sendable () -> Bool = { false },
+    textRecognitionQualityProvider: @escaping @Sendable () -> TextRecognitionQuality = {
+      .accurate
+    },
     captureFailureHandler: @escaping CaptureFailureHandler = ClipboardMonitor.logCaptureFailure
   ) {
     self.store = store
@@ -149,6 +180,9 @@ public final class ClipboardMonitor {
     self.pollInterval = pollInterval
     self.excludedBundleIDsProvider = excludedBundleIDsProvider
     self.captureEnabledProvider = captureEnabledProvider
+    self.textRecognizer = textRecognizer
+    self.textRecognitionEnabledProvider = textRecognitionEnabledProvider
+    self.textRecognitionQualityProvider = textRecognitionQualityProvider
     self.captureFailureHandler = captureFailureHandler
     lastChangeCount = pasteboard.changeCount
   }
@@ -232,7 +266,21 @@ public final class ClipboardMonitor {
       return nil
     }
 
-    guard let result = reader.read(from: pasteboard) else { return nil }
+    // T-PERF1: `pullRawPayload` does the real `NSPasteboard` reads (types,
+    // `data(forType:)`/`string(forType:)`) and MUST stay here on
+    // `@MainActor` — that's genuine AppKit pasteboard access, which per this
+    // task's directive is the one thing that stays main-isolated. Everything
+    // downstream of it — `classify`'s SHA-256 hashing and `previewText`
+    // construction, pure CPU work with no further pasteboard access — moves
+    // to a detached background task, same `Task.detached(priority: .utility)`
+    // pattern the blob write just below already uses. `reader` is `Sendable`
+    // (stateless struct) so it's safe to copy into the closure; `rawPayload`
+    // is `Sendable` by construction (`PasteboardReader.RawPayload`).
+    guard let rawPayload = reader.pullRawPayload(from: pasteboard) else { return nil }
+    let reader = self.reader
+    let result = await Task.detached(priority: .utility) {
+      reader.classify(rawPayload)
+    }.value
 
     let blobPath: String?
     do {
@@ -277,6 +325,28 @@ public final class ClipboardMonitor {
     do {
       let stored = try await store.insertOrBumpDuplicate(item)
       onCapture(stored)
+
+      // T-OCR2: on-device text recognition runs ONLY here, on copy — never
+      // at idle-scan or on a background sweep (that's the approved design).
+      // Gated on all four: the user setting, `.image` kind, no `ocrText`
+      // yet (a re-copied duplicate returned by `insertOrBumpDuplicate`
+      // already has its text from the first capture — never re-run
+      // recognition on content that's already been recognized), and raw
+      // image bytes actually being available. Fired off via
+      // `scheduleTextRecognition`, NOT awaited — `checkNow()` must return
+      // exactly as fast as it does today regardless of this setting.
+      if textRecognitionEnabledProvider(), stored.kind == .image, stored.ocrText == nil,
+        let recognizer = textRecognizer, let rawData = result.rawData
+      {
+        // T-OCR8: quality is also read fresh here, at schedule time —
+        // same freshness guarantee as the `textRecognitionEnabledProvider()`
+        // read just above, so a mid-session Fast<->Accurate change takes
+        // effect on this very capture, not the next `ClipboardMonitor`.
+        let quality = textRecognitionQualityProvider()
+        scheduleTextRecognition(
+          for: stored, imageData: rawData, recognizer: recognizer, quality: quality)
+      }
+
       return stored
     } catch {
       // Surface the failure (metadata-only) instead of silently returning nil
@@ -284,6 +354,52 @@ public final class ClipboardMonitor {
       // coding-standards.md's error-handling rule.
       captureFailureHandler(error)
       return nil
+    }
+  }
+
+  /// T-OCR2: runs `recognizer` against `imageData`, at the `quality` the
+  /// caller already resolved (T-OCR8 — passed through as a plain value, not
+  /// re-read here, so this method carries no provider dependency of its
+  /// own), off the main actor (a detached `.utility` task, same priority
+  /// `checkNow()`'s own blob write uses). Persists any recognized text via
+  /// `store.setRecognizedText`, and — only on success — hops back to
+  /// `@MainActor` to notify listeners via
+  /// the exact same `onCapture` hook a fresh capture uses, so the picker's
+  /// existing capture→requery wiring (`AppEnvironment`'s `monitor.onCapture`
+  /// → `PickerViewModel.handleNewCapture()`) picks up the now-searchable/
+  /// badge-worthy item with no second notification path to maintain.
+  ///
+  /// Deliberately fire-and-forget from `checkNow()`'s perspective: this
+  /// method itself returns immediately (it only *schedules* the detached
+  /// task), so capture latency is unaffected regardless of how long
+  /// recognition takes. Every failure — recognition finding nothing,
+  /// recognition failing, or the store write failing — is swallowed to
+  /// `captureFailureHandler`/silently, exactly like every other best-effort
+  /// path in this file; it can never surface as a capture failure, since
+  /// the item itself was already captured successfully before this runs.
+  private func scheduleTextRecognition(
+    for item: ClipItem, imageData: Data, recognizer: any TextRecognizing,
+    quality: TextRecognitionQuality
+  ) {
+    let store = self.store
+    Task.detached(priority: .utility) { [weak self] in
+      guard let text = await recognizer.recognizeText(in: imageData, quality: quality),
+        !text.isEmpty
+      else {
+        return
+      }
+      do {
+        try await store.setRecognizedText(item.id, text: text)
+      } catch {
+        Self.logCaptureFailure(error)
+        return
+      }
+      guard let self else { return }
+      await MainActor.run {
+        var recognized = item
+        recognized.ocrText = text
+        self.onCapture(recognized)
+      }
     }
   }
 }

@@ -68,6 +68,25 @@ public protocol ClipStore: Sendable {
   /// - Throws: `ClipStoreError.notFound` if no item with that `id` exists.
   func setPinned(_ id: UUID, pinned: Bool) async throws
 
+  /// T-OCR2: records `text` as the item's recognized (OCR) text
+  /// (`ClipItem.ocrText`) and makes it findable by `query(text:...)` —
+  /// implementations must fold `text` into whatever search index they
+  /// already derive from `previewText` (see `SwiftDataClipStore
+  /// .setRecognizedText(_:text:)`'s doc comment).
+  /// - Throws: `ClipStoreError.notFound` if no item with that `id` exists.
+  func setRecognizedText(_ id: UUID, text: String) async throws
+
+  /// T-UX1: every `.image` item with a blob but no recognized text yet
+  /// (`ocrText` is `nil` or empty) — the work set for a user-triggered OCR
+  /// backfill over already-captured history
+  /// (`ClipnestCore.OCRBackfillCoordinator`), as distinct from
+  /// `ClipboardMonitor`'s at-capture-time recognition (T-OCR2). Newest-first
+  /// by `createdAt`, matching `fetchAll()`/`fetchPinned()`'s ordering
+  /// convention. Unbounded/unfiltered otherwise — like `fetchAll()`, no
+  /// picker/UI surface pages through this; it backs a bulk background
+  /// operation, not a scrolling list.
+  func fetchImagesNeedingRecognition() async throws -> [ClipItem]
+
   /// Deletes the item with the given `id`, and its blob if it has one (via
   /// `BlobStore.delete`) — no orphaned blobs left on disk.
   /// - Throws: `ClipStoreError.notFound` if no item with that `id` exists.

@@ -653,10 +653,20 @@ paste targeting). `show(at:)` (`:170-175`) therefore calls
 or `makeKeyAndOrderFront`. `level = .popUpMenu` + `collectionBehavior =
 [.canJoinAllSpaces, .fullScreenAuxiliary]` (`:113-132`) let it draw over
 another app's full-screen Space — `.floating` alone sat too low. A local
-`NSEvent` monitor installed in `configure()` (`:148-156`) intercepts ⌘⌫
-*ahead of* the search field's field editor (which would otherwise consume it
-as "delete to line start" before SwiftUI's `.onKeyPress` ever saw it) and
-calls `onCommandDelete`. Position clamping is shared with
+`NSEvent` monitor installed in `configure()` (`localKeyMonitor`, renamed
+from `commandDeleteMonitor` at T-SET5) intercepts two keys *ahead of*
+anything else in the app that could otherwise consume/preempt them: ⌘⌫
+(ahead of the search field's field editor, which would otherwise treat it as
+"delete to line start" before SwiftUI's `.onKeyPress` ever saw it — calls
+`onCommandDelete`) and, as of T-SET5, ⌘, (ahead of `NSApp.mainMenu`'s own
+auto-generated Settings key equivalent — a `Settings` scene binds one
+automatically, and `-[NSApplication sendEvent:]` matches it before the key
+window's SwiftUI content ever sees the event, even for an `.accessory`-policy
+app with no visible menu bar — calls `onCommandComma`, wired to
+`PickerViewModel.openSettingsFromPicker()`, which dismisses the picker then
+opens Settings via `SettingsFocusCoordinator` — see that type's and
+`PickerPanel.onCommandComma`'s doc comments for the full story). Position
+clamping is shared with
 `SnippetEditorWindow` via `WindowPlacement.clampedOrigin`
 (`WindowPlacement.swift:33-40`).
 
@@ -765,6 +775,15 @@ tabs). Return is handled both here *and* via the search field's own
 `.onSubmit` (`:231`) — belt-and-suspenders, since which of the two actually
 receives a given Return keystroke isn't reliably verifiable headlessly;
 both call `selectHighlighted()`, so there's no double-paste risk.
+**Not** in this list: ⌘, (opens Settings, T-SET5). It's deliberately excluded
+from `handle(_:)` — a `Settings` scene's auto-generated ⌘, main-menu key
+equivalent is matched by `-[NSApplication sendEvent:]` before this view's
+`.onKeyPress` would ever see the keystroke (confirmed live: with no
+interception, ⌘, silently created the Settings window via that built-in path
+but never raised/activated it — the T-SET1 failure mode all over again), so
+it has to be intercepted one layer earlier, in `PickerPanel`'s AppKit-level
+local `NSEvent` monitor (`onCommandComma`, see the panel section above) —
+the same reason `onCommandDelete` already lives there rather than here.
 
 **Edge cases handled**
 - Typing while a previous debounced search is still pending → generation counter discards the stale result.

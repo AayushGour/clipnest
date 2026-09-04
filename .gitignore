@@ -13,3 +13,24 @@ archived-images/
 
 # Private release signing key — never commit (scripts/release-cert.sh)
 release-cert/
+
+# T-GLY1 spike tooling (tools/glyph-classifier/) — generated synthetic
+# dataset (thousands of PNGs) and trained model artifacts, never committed;
+# regenerate via GlyphDatasetGen/GlyphTrainer. See tools/glyph-classifier/
+# Package.swift's header comment for why this tree is a standalone package,
+# not part of ClipnestCore/ClipnestApp.
+tools/glyph-classifier/.build/
+tools/glyph-classifier/.swiftpm/
+tools/glyph-classifier/dataset/
+tools/glyph-classifier/dataset_smoke/
+tools/glyph-classifier/output/
+# Crops harvested from the user's real (sensitive) clipboard-history
+# screenshots for T-GLY1's real-world evaluation — never committed, even
+# though these particular crops are just single keyboard glyphs/fragments
+# (see this task's return-to-senior-dev report for how they were sourced).
+tools/glyph-classifier/real_eval_crops/
+
+# Raw stress/profiling captures (sample dumps, harness runs). Regenerate with
+# tools/stress-harness; the findings that matter live in .claude/logs/tester.md
+# and the task board, not in 15k lines of raw stack traces.
+.claude/logs/stress-artifacts/

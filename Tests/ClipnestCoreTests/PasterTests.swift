@@ -57,14 +57,29 @@ private final class MockEventSynthesizing: EventSynthesizing, @unchecked Sendabl
   private(set) var invocationCount = 0
   private(set) var lastTarget: FrontmostAppRef?
   var shouldThrow = false
+  /// T-HANG2: fired on every real invocation, before `shouldThrow` is
+  /// checked — lets `CallOrderRecorder`-based tests prove `onPasteboardWrite`
+  /// fires strictly before the synthesized keystroke.
+  var onInvoke: (() -> Void)?
 
   func synthesizeCommandV(targeting app: FrontmostAppRef) throws {
     invocationCount += 1
     lastTarget = app
+    onInvoke?()
     if shouldThrow {
       throw PasteError.eventPostFailed
     }
   }
+}
+
+/// Records the ORDER in which named events happen across a single
+/// `paste()` call — used only by T-HANG2's tests to prove `onPasteboardWrite`
+/// fires before the synthesized keystroke, not after `paste()` fully
+/// returns. `@unchecked Sendable` matches this file's other fakes: access is
+/// always sequential within one `paste()` call, never truly concurrent.
+private final class CallOrderRecorder: @unchecked Sendable {
+  private(set) var events: [String] = []
+  func record(_ event: String) { events.append(event) }
 }
 
 /// Fake `FrontmostAppReferenceProviding` — returns a fixed, test-controlled
@@ -202,6 +217,53 @@ struct PasterTests {
     #expect(pasteboard.writtenData != nil)
     #expect(synthesizer.invocationCount == 1)
     #expect(synthesizer.lastTarget == target)
+  }
+
+  // MARK: - T-PERF1: `.image` decode/re-encode runs off the calling actor
+
+  /// Structural + empirical proof for T-PERF1's directive ("no heavy work on
+  /// the main actor") — deliberately NOT a fragile exact-timing assertion.
+  /// `paste`'s `.image` case now runs its ImageIO decode/re-encode inside
+  /// `Task.detached(priority: .utility)` (see `Paster.paste`'s doc comment).
+  /// If it instead ran synchronously on the calling actor (the pre-T-PERF1
+  /// behavior — this test would have failed against that code), a
+  /// `@MainActor` counter task racing alongside `paste()` could never get
+  /// scheduled until `paste()` returned, so it would observe `value == 0`.
+  /// Asserting `> 0` (not any specific count) keeps this robust against
+  /// machine speed/CI load while still proving genuine interleaving.
+  @Test("`.image` decode+re-encode does not block the calling MainActor")
+  @MainActor
+  func imageDecodeDoesNotBlockTheCallingActor() async throws {
+    let pasteboard = FakePasteboardWriting()
+    let synthesizer = MockEventSynthesizing()
+    let paster = Paster(
+      pasteboard: pasteboard,
+      eventSynthesizer: synthesizer,
+      isAccessibilityGranted: { false },
+      synthesisDelay: .zero
+    )
+    // Large enough that ImageIO decode+encode takes measurable time even
+    // under a debug (-Onone) build — deterministic synthetic bytes, never a
+    // real user file (per coding-standards.md's testing rules).
+    let largeImageData = ImageFixtures.makeTinyImageData(width: 2000, height: 2000)
+
+    final class Counter: @unchecked Sendable {
+      private(set) var value = 0
+      func increment() { value += 1 }
+    }
+    let counter = Counter()
+    let counterTask = Task { @MainActor in
+      while !Task.isCancelled {
+        counter.increment()
+        await Task.yield()
+      }
+    }
+    defer { counterTask.cancel() }
+
+    try await paster.paste(.image(largeImageData), targetingFrontmostApp: nil)
+
+    #expect(counter.value > 0)
+    #expect(pasteboard.writtenDataType == .tiff)
   }
 
   @Test(
@@ -343,5 +405,112 @@ struct PasterTests {
 
     #expect(pasteboard.writtenString == "sensitive")
     #expect(synthesizer.invocationCount == 0)
+  }
+
+  // MARK: - T-HANG2: onPasteboardWrite fires immediately after the write
+
+  /// Regression test for the self-paste-suppression race T-STRESS1's harness
+  /// quantified (`.claude/logs/tester.md`, `SelfPasteRaceScenario`: 18/18
+  /// raced at 5-42ms against the OLD ordering, where the caller re-read
+  /// `pasteboard.changeCount` only after `paste()` had fully returned — i.e.
+  /// after `synthesisDelay` + a real event post). Proves the NEW contract by
+  /// call ORDER, not wall-clock timing (this file's convention is
+  /// `synthesisDelay: .zero`, so a real-time race isn't observable here —
+  /// see `SelfPasteRaceScenario`'s own doc comment on why a genuine
+  /// wall-clock race lives in `tools/stress-harness` instead, outside
+  /// coding-standards.md's "no real timers" `ClipnestCoreTests` rule):
+  /// `onPasteboardWrite` must fire strictly BEFORE the synthesized keystroke
+  /// is posted, proving it happens before `synthesisDelay`'s sleep and the
+  /// H-1 re-verification, not merely "before `paste()` returns."
+  ///
+  /// Watched this fail first: temporarily moved the `onPasteboardWrite` call
+  /// in `Paster.paste` to AFTER `eventSynthesizer.synthesizeCommandV(...)`
+  /// (mirroring the OLD `PickerViewModel+Paste.performPaste`'s "arm
+  /// suppression only once everything else is done" ordering) — this test
+  /// failed with `events == ["synthesized", "wrote:42"]`. Moved the call
+  /// back to immediately after the pasteboard write (its real, shipped
+  /// position) — passes.
+  @Test(
+    "onPasteboardWrite fires with the pasteboard's resulting changeCount immediately after the write — strictly before the synthesized keystroke"
+  )
+  func onPasteboardWriteFiresBeforeSynthesizedKeystroke() async throws {
+    let pasteboard = FakePasteboardWriting()
+    let synthesizer = MockEventSynthesizing()
+    let paster = Paster(
+      pasteboard: pasteboard,
+      eventSynthesizer: synthesizer,
+      isAccessibilityGranted: { true },
+      synthesisDelay: .zero,
+      frontmostAppProvider: stillFrontmostProvider
+    )
+    let recorder = CallOrderRecorder()
+    synthesizer.onInvoke = { recorder.record("synthesized") }
+
+    try await paster.paste(
+      .text("hello"), targetingFrontmostApp: target,
+      onPasteboardWrite: { changeCount in
+        recorder.record("wrote:\(changeCount)")
+      })
+
+    // `FakePasteboardWriting.changeCount` starts at 41 and increments on
+    // each write — 42 is the value immediately after this single write.
+    #expect(recorder.events == ["wrote:42", "synthesized"])
+  }
+
+  @Test(
+    "onPasteboardWrite fires for .image content too, after the internal Task.detached decode/re-encode suspension, with the write's real changeCount"
+  )
+  func onPasteboardWriteFiresForImageContent() async throws {
+    let pasteboard = FakePasteboardWriting()
+    let synthesizer = MockEventSynthesizing()
+    let paster = Paster(
+      pasteboard: pasteboard,
+      eventSynthesizer: synthesizer,
+      isAccessibilityGranted: { false },
+      synthesisDelay: .zero
+    )
+    let validImageData = ImageFixtures.makeTinyImageData(width: 4, height: 4)
+
+    final class ObservedChangeCount: @unchecked Sendable {
+      var value: Int?
+    }
+    let observed = ObservedChangeCount()
+    try await paster.paste(
+      .image(validImageData), targetingFrontmostApp: nil,
+      onPasteboardWrite: { changeCount in
+        observed.value = changeCount
+      })
+
+    #expect(observed.value == pasteboard.changeCount)
+    #expect(pasteboard.writtenDataType == .tiff)
+  }
+
+  @Test(
+    "onPasteboardWrite never fires when invalid image data throws before any write happens"
+  )
+  func onPasteboardWriteNotCalledWhenWriteNeverHappens() async {
+    let pasteboard = FakePasteboardWriting()
+    let synthesizer = MockEventSynthesizing()
+    let paster = Paster(
+      pasteboard: pasteboard,
+      eventSynthesizer: synthesizer,
+      isAccessibilityGranted: { true },
+      synthesisDelay: .zero
+    )
+    let invalidImageData = Data([0x00, 0x01, 0x02])
+
+    final class Flag: @unchecked Sendable {
+      var called = false
+    }
+    let flag = Flag()
+
+    await #expect(throws: PasteError.invalidImageData) {
+      try await paster.paste(
+        .image(invalidImageData), targetingFrontmostApp: target,
+        onPasteboardWrite: { _ in flag.called = true })
+    }
+
+    #expect(!flag.called)
+    #expect(pasteboard.writeCount == 0)
   }
 }

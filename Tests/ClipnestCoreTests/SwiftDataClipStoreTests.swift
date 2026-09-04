@@ -285,6 +285,73 @@ struct SwiftDataClipStoreTests {
     }
   }
 
+  // MARK: - setRecognizedText (T-OCR2)
+
+  @Test("setRecognizedText sets ocrText on the target item")
+  func setRecognizedTextSetsOcrTextField() async throws {
+    try await ClipStoreContractTests.setRecognizedTextSetsOcrTextField {
+      try makeStore()
+    }
+  }
+
+  @Test("setRecognizedText on an unknown id throws .notFound")
+  func setRecognizedTextOnUnknownIDThrows() async throws {
+    try await ClipStoreContractTests.setRecognizedTextOnUnknownIDThrows {
+      try makeStore()
+    }
+  }
+
+  @Test("query finds an image item by its recognized text alone, even with no match in previewText")
+  func queryFindsItemByRecognizedTextAlone() async throws {
+    try await ClipStoreContractTests.queryFindsItemByRecognizedTextAlone {
+      try makeStore()
+    }
+  }
+
+  // MARK: - fetchImagesNeedingRecognition (T-UX1)
+
+  @Test("fetchImagesNeedingRecognition returns only unrecognized image items")
+  func fetchImagesNeedingRecognitionOnlyReturnsUnrecognizedImages() async throws {
+    try await ClipStoreContractTests.fetchImagesNeedingRecognitionOnlyReturnsUnrecognizedImages {
+      try makeStore()
+    }
+  }
+
+  @Test("fetchImagesNeedingRecognition excludes image items with no blob")
+  func fetchImagesNeedingRecognitionExcludesImagesWithNoBlob() async throws {
+    try await ClipStoreContractTests.fetchImagesNeedingRecognitionExcludesImagesWithNoBlob {
+      try makeStore()
+    }
+  }
+
+  @Test("fetchImagesNeedingRecognition orders results newest-first")
+  func fetchImagesNeedingRecognitionOrdersNewestFirst() async throws {
+    try await ClipStoreContractTests.fetchImagesNeedingRecognitionOrdersNewestFirst {
+      try makeStore()
+    }
+  }
+
+  @Test("fetchImagesNeedingRecognition is empty once every image has recognized text")
+  func fetchImagesNeedingRecognitionEmptyWhenNothingPending() async throws {
+    try await ClipStoreContractTests.fetchImagesNeedingRecognitionEmptyWhenNothingPending {
+      try makeStore()
+    }
+  }
+
+  @Test("setRecognizedText also updates normalizedText, so the substring match is case-insensitive")
+  func setRecognizedTextUpdatesNormalizedTextCaseInsensitively() async throws {
+    let store = try makeStore()
+    let item = try await store.insertOrBumpDuplicate(
+      ClipStoreContractTests.makeItem(
+        contentHash: "screenshot", previewText: "Image, 10×10", kind: .image))
+
+    try await store.setRecognizedText(item.id, text: "SHOUTING RECEIPT TOTAL")
+
+    let results = try await store.query(
+      text: "shouting receipt", kind: nil, scope: .history, offset: 0, limit: 10)
+    #expect(results.map(\.id) == [item.id])
+  }
+
   // MARK: - Migration-crash fix (normalizedText default + backfill)
 
   @Test(
@@ -320,12 +387,20 @@ struct SwiftDataClipStoreTests {
 
     // Write one row using the test-local `ClipItemRecord` declared below —
     // the exact pre-fix shape of the production `ClipItemRecord` (every
-    // field except `normalizedText`, which didn't exist yet) — a faithful
-    // stand-in for a real user's existing on-disk `ClipItems.store`. See its
-    // doc comment for why sharing that exact simple name (a *different*
-    // Swift symbol, since both are `private` to their own file) drives a
-    // *real* Core Data lightweight migration below, not just a same-schema
-    // reopen.
+    // field except `normalizedText`, which didn't exist yet — and so, a
+    // fortiori, before `ocrText` existed either; this doubles as T-OCR1's
+    // migration-safety proof for `ocrText`, see the assertions below) — a
+    // faithful stand-in for a real user's existing on-disk `ClipItems.store`.
+    // See its doc comment for why sharing that exact simple name (a
+    // *different* Swift symbol, since both are `private` to their own file)
+    // drives a *real* Core Data lightweight migration below, not just a
+    // same-schema reopen. Deliberately NOT split into a second test file
+    // with its own third `ClipItemRecord` variant — Swift Testing runs
+    // different suites in parallel by default, and two suites each
+    // registering a same-named Core Data entity with a DIFFERENT attribute
+    // set raced in practice during this task's implementation (intermittent
+    // cross-suite `ocrText` read-back failures) until consolidated to reuse
+    // this one legacy record here, inside this already-`.serialized` suite.
     // Explicit Schema built from the test-local `ClipItemRecord`: its simple
     // name drives the same Core Data entity, so the reopen below is a real
     // lightweight migration, and SwiftData maps the model directly instead of
@@ -370,6 +445,17 @@ struct SwiftDataClipStoreTests {
     #expect(results.count == 1)
     #expect(results.first?.previewText == "Legacy Preview Text")
     #expect(results.first?.contentHash == "legacy-hash")
+
+    // T-OCR1: this same legacy row also predates `ocrText` — its additive
+    // `String?` default migrates it in as `nil` (the correct value for
+    // "recognition hasn't run on this row"), and the migrated row still
+    // accepts `setRecognizedText` normally afterward, same as any
+    // freshly-captured item.
+    let migratedID = try #require(results.first?.id)
+    #expect(results.first?.ocrText == nil)
+    try await store.setRecognizedText(migratedID, text: "Recognized after migration")
+    let afterRecognition = try await store.fetchAll()
+    #expect(afterRecognition.first?.ocrText == "Recognized after migration")
   }
 
   // MARK: - Corrupt-store recovery

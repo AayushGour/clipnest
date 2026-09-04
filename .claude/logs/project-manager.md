@@ -1,0 +1,5 @@
+- 2026-09-03 [T-CA1] competitor analysis (Maccy/Paste/Pastebot 3/Raycast/ClipBook/Cliptop/SaneClip/Tahoe Spotlight) + ranked roadmap → docs/competitive-analysis.md
+- 2026-09-03 [T-CA1] revised competitor analysis against main@881b84d: Settings window IS shipped (5 tabs) — matrix + roadmap corrected; OCR reframed as on-demand/opt-in with cost analysis (§4a)
+- 2026-09-03 [T-OCR5] added Vision to coding-standards.md allowed system frameworks (line 75) — import Vision was a standards violation by the letter until now
+- 2026-09-03 [T-OCR1..3] OCR feature done — reviewer PASS + tester PASS (211 core / 103 app tests, verified independently by main thread); 5 follow-ups filed
+- 2026-09-04 [T-REV4] routed 3 inline re-derivations of the OCR predicate through ClipItem.hasRecognizedText (ItemPreview:83, PickerViewModel+Paste:129,218) — found by the second reviewer reading rather than grepping; 239+144 tests green

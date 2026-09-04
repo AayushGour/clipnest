@@ -2,8 +2,12 @@
 //
 // App entry point. Declares the menu-bar presence (MenuBarExtra) — Clipnest's
 // only always-visible surface (no Dock icon, no main window) — and the
-// Settings scene (⌘, / "Settings…"). Settings dependencies come from the one
-// AppEnvironment the AppDelegate builds at launch. The Settings content is a
+// Settings scene ("Settings…"). Reachable three ways: the menu bar's
+// "Settings…" item, ⌘, while the picker is focused (`PickerView`'s key
+// handler), and ⌘, from Settings' own auto-generated app menu once Settings
+// itself is frontmost (T-SET5 — see that task's writeup for why ⌘, was a
+// no-op everywhere before this and the manual verification for all three).
+// Settings dependencies come from the one
 // `SettingsRootView` observing the delegate, NOT an inline `if let` here: the
 // composition root is nil at App-init and only set later in
 // `applicationDidFinishLaunching`, and a SwiftUI `Settings` SCENE does not
@@ -14,7 +18,6 @@
 import AppKit
 import ClipnestCore
 import SwiftUI
-import os
 
 @main
 struct ClipnestApp: App {
@@ -44,16 +47,6 @@ struct ClipnestApp: App {
 /// read `@Environment(\.openSettings)` — environment values are a `View`
 /// concept and are unavailable inside the `App` struct itself.
 private struct MenuBarContent: View {
-  /// SwiftUI's frame-autosave name for the `Settings` scene's window. Public
-  /// API to read (`NSWindow.frameAutosaveName`), and the value is directly
-  /// observable as the `"NSWindow Frame com_apple_SwiftUI_Settings_window"`
-  /// key SwiftUI writes into `UserDefaults`. Used to find that window and
-  /// raise it — see `openSettingsAndFocus()`.
-  private static let settingsWindowAutosaveName = "com_apple_SwiftUI_Settings_window"
-
-  private static let logger = Logger(
-    subsystem: ClipnestLog.subsystem, category: "MenuBarContent")
-
   @ObservedObject var appDelegate: AppDelegate
   @Environment(\.openSettings) private var openSettings
 
@@ -89,60 +82,15 @@ private struct MenuBarContent: View {
   /// own behalf. So the Settings window was ordered in *behind* whatever the
   /// user was looking at, macOS did not switch to Clipnest, and the only way
   /// to reach the window was to find and click it. An accessory app has to
-  /// do this part by hand.
-  ///
-  /// Everything after `openSettings()` is deferred one runloop tick for two
-  /// independent reasons, both of which produced the reported symptom on
-  /// their own:
-  ///
-  ///  1. the menu bar's menu is still tracking while this action runs, and
-  ///     an activation request made mid-tracking is dropped;
-  ///  2. on the very first "Settings…" the window does not exist yet at the
-  ///     moment `openSettings()` returns — SwiftUI creates it during the
-  ///     next update, so there is nothing to raise.
-  ///
-  /// `ignoringOtherApps: true` rather than macOS 14's bare `activate()`:
-  /// the latter honors cooperative activation and simply declines to take
-  /// focus from the app the user is currently in, which is precisely the
-  /// thing that has to happen here.
+  /// do this part by hand — see `SettingsFocusCoordinator.focusAfterOpening()`
+  /// for the actual sequence (extracted there, T-SET5, so `PickerView`'s new
+  /// ⌘, key handler can reuse the exact same sequence rather than growing a
+  /// second, subtly different copy) and `SettingsActivator`'s doc comment for
+  /// the full root-cause story/evidence/rejected-alternatives writeup this
+  /// dance exists to solve.
   private func openSettingsAndFocus() {
     openSettings()
-    // `RunLoop.main.perform(inModes: [.default])`, NOT `DispatchQueue.main
-    // .async`: an NSMenu tracks in `NSEventTrackingRunLoopMode`, and a GCD
-    // main-queue block drains in that mode too — so an `async` block still
-    // ran while the menu was up, which is exactly when an activation request
-    // is dropped. Scheduling for `.default` mode only is what actually
-    // guarantees this runs after the menu has closed.
-    RunLoop.main.perform(inModes: [.default]) {
-      NSApp.activate(ignoringOtherApps: true)
-      guard let window = Self.settingsWindow() else {
-        Self.logger.debug("openSettingsAndFocus: no settings window found to raise")
-        return
-      }
-      Self.logger.debug(
-        "openSettingsAndFocus: raising window, appActive=\(NSApp.isActive, privacy: .public)")
-      // `orderFrontRegardless()` in addition to `makeKeyAndOrderFront(_:)`:
-      // the former raises the window even if the app somehow still is not
-      // the active one, which is exactly the accessory-policy edge case
-      // this whole method exists for.
-      window.makeKeyAndOrderFront(nil)
-      window.orderFrontRegardless()
-    }
-  }
-
-  /// The `Settings` scene's window, matched by frame-autosave name, falling
-  /// back to "a visible ordinary window that is none of Clipnest's own
-  /// panels or the snippet editor" so a future SwiftUI rename degrades to
-  /// still-correct behavior instead of silently doing nothing.
-  private static func settingsWindow() -> NSWindow? {
-    if let match = NSApp.windows.first(where: {
-      $0.frameAutosaveName == settingsWindowAutosaveName
-    }) {
-      return match
-    }
-    return NSApp.windows.first {
-      $0.isVisible && !($0 is NSPanel) && !($0 is SnippetEditorWindow)
-    }
+    SettingsFocusCoordinator.focusAfterOpening()
   }
 }
 
@@ -160,6 +108,7 @@ struct SettingsRootView: View {
       SettingsView(
         settings: environment.settingsStore,
         clipStore: environment.clipStore,
+        ocrBackfillViewModel: environment.ocrBackfillViewModel,
         accessibilityWatcher: environment.accessibilityWatcher,
         updateChecker: environment.updateChecker)
     } else {

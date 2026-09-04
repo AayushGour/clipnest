@@ -236,4 +236,60 @@ struct PasteboardReaderTests {
     #expect(result?.kind == .file)
     #expect(result?.byteSize == 0)
   }
+
+  // MARK: - T-PERF1: pullRawPayload/classify split (off-main classification)
+
+  @Test("pullRawPayload + classify together produce the exact same Classification as read(from:)")
+  func pullRawPayloadPlusClassifyMatchesRead() {
+    let imageData = ImageFixtures.makeTinyImageData(width: 5, height: 7)
+    let pasteboard = FakePasteboard(availableTypes: [.png], datas: [.png: imageData])
+    let reader = PasteboardReader()
+
+    let viaRead = reader.read(from: pasteboard)
+    let raw = reader.pullRawPayload(from: pasteboard)
+    let viaSplit = raw.map(reader.classify)
+
+    #expect(viaSplit?.kind == viaRead?.kind)
+    #expect(viaSplit?.previewText == viaRead?.previewText)
+    #expect(viaSplit?.contentHash == viaRead?.contentHash)
+    #expect(viaSplit?.byteSize == viaRead?.byteSize)
+    #expect(viaSplit?.rawData == viaRead?.rawData)
+  }
+
+  /// T-PERF1's whole point: `classify(_:)` must be safe to run off
+  /// `@MainActor` — `ClipboardMonitor.checkNow()` wraps it in a
+  /// `Task.detached`. This is a genuine structural + runtime proof, not a
+  /// fragile timing assertion: `classify` takes only the `Sendable`
+  /// `RawPayload` (no `PasteboardReading`), so Swift 6's strict concurrency
+  /// checker already requires no `await`/actor context to call it from
+  /// inside `Task.detached` below (a `classify` that secretly needed
+  /// `@MainActor` simply would not compile here) — and the runtime
+  /// `Thread.isMainThread` check confirms it's genuinely NOT running on the
+  /// main thread either, not just compiling as if it could be.
+  @Test("classify(_:) genuinely runs off the main thread when called from Task.detached")
+  @MainActor
+  func classifyRunsOffTheMainThread() async {
+    // `Thread.isMainThread` itself is `NS_SWIFT_UNAVAILABLE_FROM_ASYNC` (it
+    // wants callers to prefer actor checks instead) — wrapped in a plain
+    // synchronous helper so it can still be read from inside the async
+    // closures below; the helper itself does nothing actor-related, so this
+    // doesn't weaken the check.
+    #expect(isCurrentlyOnMainThread())  // sanity: this test itself starts on the main thread
+
+    let reader = PasteboardReader()
+    let raw = PasteboardReader.RawPayload.plainText("off-main classify check")
+
+    let wasMainThread = await Task.detached(priority: .utility) { () -> Bool in
+      _ = reader.classify(raw)
+      return isCurrentlyOnMainThread()
+    }.value
+
+    #expect(!wasMainThread)
+  }
+}
+
+/// See `classifyRunsOffTheMainThread`'s doc comment for why this exists
+/// instead of referencing `Thread.isMainThread` directly.
+private func isCurrentlyOnMainThread() -> Bool {
+  Thread.isMainThread
 }

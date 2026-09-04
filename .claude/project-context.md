@@ -984,3 +984,30 @@ Impact: `.github/workflows/release.yml` (checksum generation + upload), `scripts
 **Not verifiable in this session, stated plainly:** the actual `gh release create`/`upload`/`edit --draft=false` mutating path was never exercised — explicitly out of scope per the routing instructions ("DO NOT create, upload, publish, or delete anything on GitHub"). The already-published guard, the full `--dry-run` build/sign/package/checksum pipeline, `--reuse`, and the cert/designated-requirement mechanics were all proven live and repeatedly; the real publish path is code-reviewed against the same `gh` command shapes `release.yml` and `terminal-hub/scripts/release-local.sh` already use in production, but a real `v0.8.1` cut is the first genuine end-to-end proof of that specific part.
 
 Impact: one new file, `scripts/release-local.sh` (517 lines). No existing script, workflow file, or Swift source touched.
+
+## Decision (2026-09-03): keyboard-glyph / emoji ML recognition — spike failed, not integrated
+
+Vision structurally cannot read ⌘⌥⇧⌃⎋⏎⌫⇥⇪ (verified against `VNRecognizeTextRequest`, the new
+`RecognizeTextRequest`, and macOS 26's `RecognizeDocumentsRequest` — all three; at 240pt on clean
+white it returns an empty string). Apple's docs confirm the character set cannot be extended via API.
+
+T-GLY1 spiked a 74-class Core ML classifier (9 glyphs + 64 emoji + notSymbol), 1.2MB, trained on
+15,870 synthetic renders. **It failed its gate and was not integrated:**
+- Synthetic: notSymbol precision 93.15% (gate 99.5%), glyph recall 82.22% (gate 90%).
+- Real crops harvested from 39 real screenshots in the live store: notSymbol recall **66.9%** (321/480)
+  — roughly 1 in 3 real characters would be rewritten into a glyph/emoji. Real ⌘ recall 0/2.
+
+Root cause is a domain gap, not a data-volume problem: Vision's per-character `boundingBox(for:)` is
+not reliably tight to a single character on real content (a merged ⌥⌘ token returned identical boxes
+for two different offsets), so a model trained on tightly-cropped single glyphs sees a different crop
+shape in production.
+
+**Demand signal is also weak:** across the user's entire 39-image corpus there is exactly ONE real ⌘
+occurrence and ZERO occurrences of ⌥/⇧/⌃/⎋/⏎/⌫/⇥/⇪ or emoji. Real keyboard-glyph rendering is rare
+outside apps specifically documenting shortcuts.
+
+Tooling kept in `tools/glyph-classifier/` (standalone SPM package, never referenced by the shipping
+targets — `GlyphTrainer` links CreateML, which must not reach the app). Dataset/model gitignored.
+If revisited: train on Vision-shaped (loose, possibly multi-character) real crops, not synthetic
+single glyphs. `CFStringTransform(_, nil, "Any-Name", false)` verified as the right API for emoji
+alias derivation.

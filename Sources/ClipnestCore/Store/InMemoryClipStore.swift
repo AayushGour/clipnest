@@ -50,7 +50,12 @@ public actor InMemoryClipStore: ClipStore {
 
     let matching = itemsByID.values.filter { item in
       let matchesScope = scope == .pinned ? item.pinned : !item.pinned
-      let matchesText = !hasText || item.previewText.lowercased().contains(lowercasedText)
+      // T-OCR2: a screenshot's recognized text is searchable too, matching
+      // SwiftDataClipStore's `normalizedText` (previewText + ocrText) —
+      // see `ClipItemRecord.computeNormalizedText(previewText:ocrText:)`.
+      let matchesText =
+        !hasText || item.previewText.lowercased().contains(lowercasedText)
+        || (item.ocrText?.lowercased().contains(lowercasedText) ?? false)
       let matchesKind = kind == nil || item.kind == kind
       return matchesScope && matchesText && matchesKind
     }
@@ -77,6 +82,29 @@ public actor InMemoryClipStore: ClipStore {
     // than copy time. See `ClipItem.pinnedAt`'s doc comment.
     item.pinnedAt = pinned ? Date() : nil
     itemsByID[id] = item
+  }
+
+  /// T-OCR2: records `text` as `id`'s recognized (OCR) text. Unlike
+  /// `SwiftDataClipStore` (which stores a derived, lowercased
+  /// `normalizedText` index field), `query(...)` here matches directly
+  /// against `item.previewText`/`item.ocrText` at query time — see its
+  /// `matchesText` below — so there's no separate index to keep in sync.
+  public func setRecognizedText(_ id: UUID, text: String) async throws {
+    guard var item = itemsByID[id] else { throw ClipStoreError.notFound }
+    item.ocrText = text
+    itemsByID[id] = item
+  }
+
+  /// T-UX1: see `ClipStore.fetchImagesNeedingRecognition()`'s doc comment.
+  /// `blobPath != nil` guards against a hypothetical `.image` item with no
+  /// bytes to recognize — never produced by the real capture path (see
+  /// `ClipboardMonitor.checkNow()`, which never stores an `.image` item
+  /// without a successful blob write), but cheap to guard rather than
+  /// assume.
+  public func fetchImagesNeedingRecognition() async throws -> [ClipItem] {
+    itemsByID.values
+      .filter { $0.kind == .image && $0.blobPath != nil && ($0.ocrText ?? "").isEmpty }
+      .sorted { $0.createdAt > $1.createdAt }
   }
 
   public func delete(_ id: UUID) async throws {

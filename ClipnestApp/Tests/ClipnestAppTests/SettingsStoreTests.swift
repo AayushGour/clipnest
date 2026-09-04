@@ -129,4 +129,36 @@ struct SettingsStoreTests {
     store.automaticallyCheckForUpdates = false
     #expect(SettingsStore(defaults: defaults).automaticallyCheckForUpdates == false)
   }
+
+  /// T-OCR3 gap fix: AC1 ("toggle exists, OFF on a fresh install") was
+  /// previously asserted nowhere in the test suite — `isTextRecognitionEnabled`
+  /// had no coverage at all before this. Unlike `automaticallyCheckForUpdates`
+  /// (defaults true, opt-out), this is the one Bool in this store that must
+  /// default OFF — see the property's own doc comment on why (running Vision
+  /// against every copied image + making its recognized text searchable is a
+  /// real privacy trade-off a user must opt into, not out of).
+  @Test("isTextRecognitionEnabled: defaults false on a fresh install, persists an explicit true")
+  func isTextRecognitionEnabledDefaultsFalseAndPersists() {
+    let defaults = makeDefaults()
+    let store = SettingsStore(defaults: defaults)
+    #expect(store.isTextRecognitionEnabled == false)
+
+    store.isTextRecognitionEnabled = true
+    #expect(SettingsStore(defaults: defaults).isTextRecognitionEnabled == true)
+  }
+
+  /// T-OCR8: unlike `isTextRecognitionEnabled` (defaults OFF), the quality
+  /// picker defaults to the MORE correct level — `.accurate`, not `.fast`
+  /// — since real-world testing showed `.fast` mangling digits, punctuation,
+  /// and arrows badly enough that a user who has already opted into OCR
+  /// shouldn't have to discover the better setting themselves.
+  @Test("textRecognitionQuality: defaults to .accurate, persists an explicit .fast")
+  func textRecognitionQualityDefaultsAccurateAndPersists() {
+    let defaults = makeDefaults()
+    let store = SettingsStore(defaults: defaults)
+    #expect(store.textRecognitionQuality == .accurate)
+
+    store.textRecognitionQuality = .fast
+    #expect(SettingsStore(defaults: defaults).textRecognitionQuality == .fast)
+  }
 }
