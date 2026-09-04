@@ -40,12 +40,39 @@ public struct VisionTextRecognizer: TextRecognizing {
   /// `nil` before even decoding) — a defensive ceiling against a
   /// pathologically large capture stalling the detached OCR task. 50 MB
   /// comfortably covers any realistic screenshot or pasted photo.
+  ///
+  /// T-PF6: deliberately kept as its OWN named constant, not unified with
+  /// `PasteboardReader.maxCapturedImageByteSize` into one shared value, even
+  /// though today they're numerically equal. They answer two different
+  /// questions — "how big a file are we willing to feed to a synchronous,
+  /// queued Vision request" here, vs. "how big a file are we willing to
+  /// persist + hash for every future dedup check" there — that happen to
+  /// land on the same number today because both derive from the same
+  /// "comfortably covers any realistic screenshot/photo" intuition, not
+  /// because one is mechanically defined in terms of the other. Bounding
+  /// Vision request cost/latency has no logical reason to move in lockstep
+  /// with capture/storage policy, and vice versa. Collapsing two
+  /// independently-motivated values into one shared constant would create
+  /// FALSE coupling — a future change to one policy silently changing the
+  /// other — which this codebase's DRY rule does not require: DRY targets
+  /// duplicated LOGIC/facts, not coincidental equality between values that
+  /// could legitimately diverge. If you're re-reviewing this: deliberate,
+  /// not an oversight — see the identical note on
+  /// `PasteboardReader.maxCapturedImageByteSize`.
   public static let maxByteSize = 50_000_000
 
   /// Images whose pixel dimensions exceed this on either axis are skipped
   /// entirely — guards against a decompression-bomb-shaped image (a small
   /// byte count that decodes to an enormous pixel grid), which
   /// `maxByteSize` alone wouldn't catch since it's checked before decoding.
+  ///
+  /// T-PF6: same deliberate non-unification call as `maxByteSize` above —
+  /// this bounds "how large an image are we willing to hand to Vision," a
+  /// different policy question from
+  /// `PasteboardReader.maxCapturedImagePixelDimension`'s "how large a
+  /// decompression-bomb-shaped image are we willing to persist," even though
+  /// both currently land on 20,000px. Not mechanically linked; see that note
+  /// for the full reasoning.
   public static let maxPixelDimension: CGFloat = 20_000
 
   // MARK: - T-HANG1: off the cooperative pool, capped concurrency

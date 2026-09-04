@@ -219,52 +219,61 @@ struct PasterTests {
     #expect(synthesizer.lastTarget == target)
   }
 
-  // MARK: - T-PERF1: `.image` decode/re-encode runs off the calling actor
-
-  /// Structural + empirical proof for T-PERF1's directive ("no heavy work on
-  /// the main actor") — deliberately NOT a fragile exact-timing assertion.
-  /// `paste`'s `.image` case now runs its ImageIO decode/re-encode inside
-  /// `Task.detached(priority: .utility)` (see `Paster.paste`'s doc comment).
-  /// If it instead ran synchronously on the calling actor (the pre-T-PERF1
-  /// behavior — this test would have failed against that code), a
-  /// `@MainActor` counter task racing alongside `paste()` could never get
-  /// scheduled until `paste()` returned, so it would observe `value == 0`.
-  /// Asserting `> 0` (not any specific count) keeps this robust against
-  /// machine speed/CI load while still proving genuine interleaving.
-  @Test("`.image` decode+re-encode does not block the calling MainActor")
-  @MainActor
-  func imageDecodeDoesNotBlockTheCallingActor() async throws {
-    let pasteboard = FakePasteboardWriting()
-    let synthesizer = MockEventSynthesizing()
-    let paster = Paster(
-      pasteboard: pasteboard,
-      eventSynthesizer: synthesizer,
-      isAccessibilityGranted: { false },
-      synthesisDelay: .zero
-    )
-    // Large enough that ImageIO decode+encode takes measurable time even
-    // under a debug (-Onone) build — deterministic synthetic bytes, never a
-    // real user file (per coding-standards.md's testing rules).
-    let largeImageData = ImageFixtures.makeTinyImageData(width: 2000, height: 2000)
-
-    final class Counter: @unchecked Sendable {
-      private(set) var value = 0
-      func increment() { value += 1 }
-    }
-    let counter = Counter()
-    let counterTask = Task { @MainActor in
-      while !Task.isCancelled {
-        counter.increment()
-        await Task.yield()
-      }
-    }
-    defer { counterTask.cancel() }
-
-    try await paster.paste(.image(largeImageData), targetingFrontmostApp: nil)
-
-    #expect(counter.value > 0)
-    #expect(pasteboard.writtenDataType == .tiff)
-  }
+  // MARK: - T-PERF4: `.image` decode/re-encode running off the calling actor
+  // is NOT unit-testable here — see below for why, and what to do instead.
+  //
+  // This suite used to carry `imageDecodeDoesNotBlockTheCallingActor`, which
+  // raced a `@MainActor` counter task against `paster.paste(.image(...))`
+  // and asserted `counter.value > 0` as "proof" the decode didn't block the
+  // caller (originally written for T-PERF1). It was deleted (T-PERF4)
+  // because it is structurally incapable of failing, regardless of what the
+  // production implementation actually does:
+  //
+  // `Paster.paste` is a `nonisolated async` method on a non-actor struct.
+  // Per SE-0338, ANY call to a nonisolated async function from an actor-
+  // isolated context (here, the test's own `@MainActor` func) hops off that
+  // actor at the `await` call site itself, before a single line of the
+  // callee's body runs — independent of whether the callee then does its
+  // work via `Task.detached`, inline, or any other means. That entry hop
+  // alone frees the MainActor to keep running `counterTask`'s loop for the
+  // full duration of `paste()`, so `counter.value > 0` was guaranteed true
+  // even with the `.image` case's `Task.detached(priority: .utility)`
+  // offload (the actual T-PERF1 fix, see `Paster.paste`'s `.image` case)
+  // removed entirely and the decode called synchronously inline instead.
+  //
+  // Proved empirically, not just argued: `Task.detached` was temporarily
+  // deleted from `Paster.paste`'s `.image` case (decode called directly,
+  // inline, no detached child task) and this test was re-run against that
+  // reverted code — it still passed. The production file was restored
+  // immediately after with `git checkout --`, and `git diff`/`git status`
+  // confirmed it was byte-identical to HEAD afterward. See
+  // `.claude/logs/senior-dev.md` (T-PERF4) for the pasted command output of
+  // both the reverted (still-passing) run and the restored run.
+  //
+  // What is genuinely NOT covered as a result: whether the `.image` decode
+  // actually runs via `Task.detached(priority: .utility)` (a separate,
+  // lower-priority child task) versus synchronously inline within
+  // `paste()`'s own already-off-actor frame. That distinction matters for
+  // real-world cooperative-thread-pool contention/priority inversion under
+  // load — NOT for "does it block the caller's actor," which is trivially
+  // guaranteed by nonisolation itself. Nothing in `Paster`'s injectable
+  // surface (`PasteboardWriting`, `EventSynthesizing`,
+  // `FrontmostAppReferenceProviding`, `isAccessibilityGranted`) sits
+  // anywhere near the decode step, so there is no seam this test file can
+  // hook without a production-side change (e.g. an injectable decode
+  // executor/clock) — out of scope for this fix, since production source
+  // ownership for `Paster.swift` sits elsewhere. If that guarantee needs a
+  // regression test, it belongs at the same level T-STRESS1's self-paste
+  // race lives at — `tools/stress-harness` — which can make real
+  // wall-clock/thread-pool observations that a deterministic
+  // `ClipnestCoreTests` unit test structurally cannot (see the T-HANG2
+  // comment on `onPasteboardWriteFiresBeforeSynthesizedKeystroke` below for
+  // why THAT property is asserted by call order here instead of timing, and
+  // why a genuine wall-clock race for it also lives outside this file).
+  //
+  // `accessibilityGrantedWritesImageThenSynthesizes` above still covers the
+  // functional contract (valid `.image` bytes are decoded, re-encoded as
+  // TIFF, and written) — that part was never in question.
 
   @Test(
     "Image content with undecodable bytes throws invalidImageData, never writes to the pasteboard, and never invokes the synthesizer"

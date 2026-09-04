@@ -223,13 +223,39 @@ struct ItemRow: View {
 /// `BlobStore`) and `.file` (via `NSWorkspace`'s file icon) rows, falling
 /// back to the plain SF Symbol icon `ItemRow` used before this task while
 /// loading or on any failure (missing blob, deleted file, undecodable
-/// bytes) — never blocks row rendering: the actual load happens off the
-/// main thread inside `.task`, which SwiftUI cancels automatically if the
-/// row disappears before it finishes (e.g. fast scrolling).
+/// bytes) — never blocks row rendering: the actual FILE READ happens off
+/// the main thread inside `.task`, which SwiftUI cancels automatically if
+/// the row disappears before it finishes (e.g. fast scrolling).
+///
+/// T-PF3 (P0 image-hang fix), D1: an earlier version of this comment also
+/// claimed the *decode* happened off the main thread here — it did not.
+/// `NSImage(data:)` only reads the bytes eagerly; it DEFERS pixel decode to
+/// draw time, so the actual decode of a full-resolution ~25 MB screenshot
+/// TIFF was happening on the main/render thread just to draw this 20pt
+/// icon. `load()` now calls `ImageThumbnailDecoder.decode(_:maxPixelSize:)`
+/// (ImageIO's `CGImageSourceCreateThumbnailAtIndex`), which decodes
+/// straight to a bitmap sized for `Self.rowThumbnailMaxPixelSize` — the
+/// decode cost is now bounded by the 20pt display size, not the source
+/// image's resolution, and it happens entirely inside this `.task`, off the
+/// main thread.
 private struct ItemIconThumbnail: View {
   let item: ClipItem
   let blobStore: BlobStore
   let fallbackSystemImage: String
+
+  /// Longer edge, in pixels, that a row thumbnail is decoded to.
+  /// macOS's maximum display backing scale is 2x (there are no 3x/Retina-HD
+  /// displays on macOS the way there are on iOS), so 2x of the 20pt frame
+  /// (40px) would already be enough — 64 adds headroom for the `.fill`
+  /// aspect crop (which can sample slightly more than the exact frame) at a
+  /// negligible memory cost (64×64×4 bytes ≈ 16 KB per thumbnail).
+  ///
+  /// `nonisolated`: `ItemIconThumbnail` (a `View`) is implicitly
+  /// `@MainActor`, but this is a plain constant read from `load()`'s
+  /// `Task.detached` background decode — a global-actor-isolated stored
+  /// property can't be read from a `nonisolated`/detached context, and this
+  /// value carries no actor-isolated state, so opting it out is safe.
+  nonisolated static let rowThumbnailMaxPixelSize = 64
 
   @State private var image: NSImage?
 
@@ -263,34 +289,74 @@ private struct ItemIconThumbnail: View {
 
   private func load() async {
     guard let cacheKey else { return }
-    if let cached = ItemThumbnailCache.shared.image(for: cacheKey) {
+    if let cached = ItemThumbnailCache.row.image(for: cacheKey) {
       image = cached
       return
     }
-    let loaded = await Task.detached(priority: .utility) { () -> NSImage? in
-      switch item.kind {
-      case .image:
-        guard let blobPath = item.blobPath, let data = try? blobStore.read(blobPath: blobPath)
-        else { return nil }
-        return NSImage(data: data)
-      case .file:
-        // Use a GENERIC type icon from the extension — NOT
-        // `icon(forFile:)`/`fileExists`, which access the real file on disk
-        // and, for TCC-protected folders (Desktop/Documents/Downloads),
-        // trigger a permission gate + QuickLook thumbnail generation that
-        // froze the app for seconds. `icon(for: UTType)` is a pure type→icon
-        // lookup with zero file-system access.
-        guard let fileReference = item.fileReference,
-          let url = URL(string: fileReference), url.isFileURL
-        else { return nil }
-        let type = UTType(filenameExtension: url.pathExtension) ?? .data
-        return NSWorkspace.shared.icon(for: type)
-      case .text, .richText, .link:
-        return nil
-      }
-    }.value
-    guard let loaded else { return }
-    ItemThumbnailCache.shared.store(loaded, for: cacheKey)
-    image = loaded
+    // T-PF3 (P0 image-hang fix), D4: fast-scrolling an image-heavy history
+    // can bring dozens of rows on screen within one runloop tick, each
+    // reaching this `.task` at roughly the same time. `withPermit` bounds
+    // how many of those run their read+decode concurrently instead of
+    // letting every visible row race for disk I/O and CPU at once — see
+    // `RowThumbnailLoadLimiter`'s doc comment.
+    //
+    // The actual read+decode, run under the limiter's permit below. Pulled
+    // into a local closure purely for readability of the two-step `guard`
+    // that follows — see its comment.
+    let loadThumbnail: @Sendable () async -> DecodedThumbnail? = {
+      await Task.detached(priority: .utility) { () -> DecodedThumbnail? in
+        switch item.kind {
+        case .image:
+          guard let blobPath = item.blobPath, let data = try? blobStore.read(blobPath: blobPath)
+          else { return nil }
+          return ImageThumbnailDecoder.decode(
+            data, maxPixelSize: Self.rowThumbnailMaxPixelSize)
+        case .file:
+          // Use a GENERIC type icon from the extension — NOT
+          // `icon(forFile:)`/`fileExists`, which access the real file on disk
+          // and, for TCC-protected folders (Desktop/Documents/Downloads),
+          // trigger a permission gate + QuickLook thumbnail generation that
+          // froze the app for seconds. `icon(for: UTType)` is a pure type→icon
+          // lookup with zero file-system access.
+          guard let fileReference = item.fileReference,
+            let url = URL(string: fileReference), url.isFileURL
+          else { return nil }
+          let type = UTType(filenameExtension: url.pathExtension) ?? .data
+          let icon = NSWorkspace.shared.icon(for: type)
+          return DecodedThumbnail(image: icon, byteCost: Self.approximateByteCost(of: icon))
+        case .text, .richText, .link:
+          return nil
+        }
+      }.value
+    }
+
+    // Two nested optionals to unwrap here, meaning two different things —
+    // both handled the same way (bail without touching the cache or
+    // `image`), but worth naming separately:
+    //  - the OUTER optional (`permitOutcome`) is `nil` when this
+    //    `.task(id:)` was cancelled (row scrolled off-screen/got recycled)
+    //    while still queued for a permit — `loadThumbnail` above never ran
+    //    at all. See `RowThumbnailLoadLimiter.withPermit`'s doc comment.
+    //  - the INNER optional (`loaded`) is `nil` when the load DID run (a
+    //    permit was granted) to completion but produced nothing — missing
+    //    blob, deleted file, or undecodable bytes, same as before this fix.
+    guard let permitOutcome = await RowThumbnailLoadLimiter.shared.withPermit(loadThumbnail)
+    else { return }
+    guard let loaded = permitOutcome else { return }
+    ItemThumbnailCache.row.store(loaded.image, cost: loaded.byteCost, for: cacheKey)
+    image = loaded.image
+  }
+
+  /// Approximate decoded-bitmap byte cost for an `NSImage` that didn't come
+  /// through `ImageThumbnailDecoder` (which computes an exact cost from its
+  /// own `CGImage`) — the `.file` case's `NSWorkspace` type icon. Same
+  /// 4-bytes/pixel estimate `ImageThumbnailDecoder` uses (T-PF6: both now
+  /// derive from `ClipnestCore.RGBAPixelFormat.bytesPerPixel`, the one
+  /// shared source for this fact — see that type's doc comment); `NSCache`
+  /// only needs a relative cost signal, not an exact byte count.
+  /// `nonisolated` for the same reason as `rowThumbnailMaxPixelSize` above —
+  /// called from `load()`'s `Task.detached` background closure.
+  private nonisolated static func approximateByteCost(of image: NSImage) -> Int {
+    max(1, Int(image.size.width * image.size.height) * RGBAPixelFormat.bytesPerPixel)
   }
 }

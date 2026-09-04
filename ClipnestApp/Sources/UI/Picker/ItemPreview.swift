@@ -14,6 +14,19 @@
 // Has its own material background + rounded corners (the hosting panel is
 // transparent) and reports its own hover via `onHover`, so the popover stays
 // open while the pointer is over it and can be scrolled.
+//
+// T-PF3 (P0 image-hang fix), D4: `PickerViewModel+Preview.swift`'s
+// `previewShowDelay` doc comment justifies its 20ms hover cadence with
+// "content is bounded (text capped, files excluded)". That was true for
+// text/file previews but FALSE for `.image` previews — there was no bound
+// at all on the decoded image resolution, which is what made a 20ms-cadence
+// sweep across an image-heavy history hang. That stale invariant lives in a
+// file this task doesn't own (`PickerViewModel+Preview.swift`) so it isn't
+// edited here, but flagging it here since this is the file whose actual
+// behavior falsified it: `imagePreview`/`AsyncBlobImage` below now decode
+// through `ImageThumbnailDecoder` at a bounded `previewImageMaxPixelSize`,
+// so image content is bounded too, same as text/files — the invariant is
+// restored, just not by editing the comment that stated it.
 
 import AppKit
 import ClipnestCore
@@ -41,10 +54,43 @@ struct ItemPreview: View {
   /// reasonable overall popover height.
   private static let ocrTextMaxHeight: CGFloat = 160
   private static let cornerRadius: CGFloat = 10
+  /// Padding around this popover's whole content. Not `private`:
+  /// `ItemPreviewController.boundedImageContentSize` reads this same
+  /// constant to compute the panel's content size analytically for a plain
+  /// image (no recognized text) WITHOUT a synchronous SwiftUI layout pass
+  /// (see that method's doc comment, T-PF3 D4) — one constant, referenced
+  /// from both places, rather than a literal `12` duplicated and liable to
+  /// drift out of sync.
+  static let contentPadding: CGFloat = 12
+  /// Longer edge, in pixels, that a preview image is decoded to
+  /// (`ImageThumbnailDecoder`, used by `AsyncBlobImage` below).
+  /// `ItemPreviewController.update` caps the DISPLAYED width to at most 40%
+  /// of the screen width; even on Apple's widest current display (Pro
+  /// Display XDR, ~3008pt wide at its default scaled resolution) that's
+  /// roughly 1200pt, ~2400px at a 2x Retina backing. 1600 trades a little
+  /// sharpness on that extreme case for meaningfully less memory per cached
+  /// preview (see `ItemThumbnailCache.preview`'s cost-limit math) — still
+  /// far sharper than any practical window size actually needs, and a small
+  /// fraction of a real screenshot's full resolution.
+  ///
+  /// `nonisolated`: `ItemPreview` (a `View`) is implicitly `@MainActor`, but
+  /// this is a plain constant read from `AsyncBlobImage`'s `Task.detached`
+  /// background decode — a global-actor-isolated stored property can't be
+  /// read from a `nonisolated`/detached context, and this value carries no
+  /// actor-isolated state, so opting it out is safe.
+  nonisolated static let previewImageMaxPixelSize = 1_600
+  /// Size of the "still loading" placeholder box `AsyncBlobImage` shows
+  /// before its first decode completes. Not `private`:
+  /// `ItemPreviewController.boundedImageContentSize` reads this same
+  /// constant as the KNOWN size to use for the very first hover on an image
+  /// that isn't cached yet, so the panel's initial size matches exactly
+  /// what this view renders at that moment — no `fittingSize` measurement
+  /// needed (T-PF3 D4).
+  static let imagePlaceholderSize = CGSize(width: 80, height: 80)
 
   var body: some View {
     content
-      .padding(12)
+      .padding(Self.contentPadding)
       .background(.regularMaterial, in: RoundedRectangle(cornerRadius: Self.cornerRadius))
       .overlay(
         RoundedRectangle(cornerRadius: Self.cornerRadius)
@@ -74,7 +120,7 @@ struct ItemPreview: View {
     // that view's doc comment) rather than a second long-text renderer.
     VStack(alignment: .leading, spacing: 10) {
       if let blobPath = item.blobPath,
-        let cached = ItemThumbnailCache.shared.image(for: blobPath)
+        let cached = ItemThumbnailCache.preview.image(for: blobPath)
       {
         ScaledImage(nsImage: cached, maxSide: imageMaxWidth)
       } else {
@@ -99,20 +145,28 @@ struct ItemPreview: View {
 /// by `ItemPreviewController` to size the popover) collapses it to near-zero
 /// and the image renders tiny. Giving it a concrete width/height makes
 /// `fittingSize` report the real image size, so the popover sizes to it.
-private struct ScaledImage: View {
+///
+/// Not `private`: `displaySize(for:maxSide:)` is also called directly by
+/// `ItemPreviewController.boundedImageContentSize` (T-PF3 D4) so the panel
+/// can be sized with the EXACT same aspect-fit math this view renders with,
+/// without needing a synchronous SwiftUI layout pass to discover it — one
+/// formula, two callers, rather than a second copy that could drift.
+struct ScaledImage: View {
   let nsImage: NSImage
   let maxSide: CGFloat
 
   var body: some View {
-    let size = displaySize
+    let size = Self.displaySize(for: nsImage.size, maxSide: maxSide)
     Image(nsImage: nsImage)
       .resizable()
       .interpolation(.medium)
       .frame(width: size.width, height: size.height)
   }
 
-  private var displaySize: CGSize {
-    let source = nsImage.size
+  /// Aspect-fits `source` into a `maxSide` × `maxSide` box, preserving
+  /// aspect ratio. Falls back to a full `maxSide` × `maxSide` square if
+  /// `source` has no usable dimensions yet (e.g. a placeholder image).
+  static func displaySize(for source: CGSize, maxSide: CGFloat) -> CGSize {
     guard source.width > 0, source.height > 0 else {
       return CGSize(width: maxSide, height: maxSide)
     }
@@ -243,8 +297,19 @@ private struct FilePreview: View {
   }
 }
 
-/// Loads full image bytes off the main thread for the preview, showing a
-/// spinner while loading and a fallback icon on failure.
+/// Loads image bytes off the main thread for the preview, showing a spinner
+/// while loading and a fallback icon on failure.
+///
+/// T-PF3 (P0 image-hang fix), D1 + D3: this used to call `NSImage(data:)`,
+/// which DEFERS pixel decode to draw time — so drawing this in `ScaledImage`
+/// (below) forced a full-resolution decode on the main/render thread, same
+/// bug as `ItemRow`'s row thumbnail (see that file's doc comment). Now
+/// decodes through `ImageThumbnailDecoder` at
+/// `ItemPreview.previewImageMaxPixelSize`, entirely inside this `.task`, off
+/// the main thread — and stores into `ItemThumbnailCache.preview` (its own
+/// cache/budget, separate from `ItemRow`'s row-thumbnail cache — see
+/// `ItemThumbnailCache.swift`'s doc comment for why sharing one cache
+/// between very differently-sized images was itself a bug, D3).
 private struct AsyncBlobImage: View {
   let item: ClipItem
   let blobStore: BlobStore
@@ -261,7 +326,10 @@ private struct AsyncBlobImage: View {
           .font(.largeTitle)
           .foregroundStyle(.secondary)
       } else {
-        ProgressView().frame(width: 80, height: 80)
+        ProgressView()
+          .frame(
+            width: ItemPreview.imagePlaceholderSize.width,
+            height: ItemPreview.imagePlaceholderSize.height)
       }
     }
     .task(id: item.blobPath) {
@@ -270,17 +338,18 @@ private struct AsyncBlobImage: View {
         failed = true
         return
       }
-      let loaded = await Task.detached(priority: .utility) { () -> NSImage? in
+      let loaded = await Task.detached(priority: .utility) { () -> DecodedThumbnail? in
         guard let data = try? blobStore.read(blobPath: blobPath) else { return nil }
-        return NSImage(data: data)
+        return ImageThumbnailDecoder.decode(
+          data, maxPixelSize: ItemPreview.previewImageMaxPixelSize)
       }.value
       guard !Task.isCancelled else { return }
       guard let loaded else {
         failed = true
         return
       }
-      ItemThumbnailCache.shared.store(loaded, for: blobPath)
-      image = loaded
+      ItemThumbnailCache.preview.store(loaded.image, cost: loaded.byteCost, for: blobPath)
+      image = loaded.image
     }
   }
 }

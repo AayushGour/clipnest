@@ -179,7 +179,7 @@ struct SwiftDataSnippetStoreTests {
   // MARK: - Migration-crash fix (normalizedText default + backfill)
 
   @Test(
-    "A snippet persisted with empty normalizedText (simulating pre-migration data) is backfilled by init and becomes matchable by query"
+    "A snippet persisted with empty normalizedText (simulating pre-migration data) is backfilled by prepare() and becomes matchable by query"
   )
   func emptyNormalizedTextSnippetIsBackfilledAndBecomesMatchable() async throws {
     let container = try SwiftDataSnippetStore.makeTestContainer()
@@ -188,16 +188,82 @@ struct SwiftDataSnippetStoreTests {
     try SwiftDataSnippetStore.insertRecordWithEmptyNormalizedTextForTesting(
       legacySnippet, in: container)
 
-    // A fresh store construction against the *same* container is what
-    // triggers the one-time backfill in `init` — mirroring app relaunch
-    // reading an existing on-disk store with stale rows.
+    // A fresh store construction against the *same* container, followed by
+    // an explicit `prepare()` call, is what triggers the one-time backfill
+    // (T-PF1: moved out of `init` — see `SwiftDataSnippetStore.prepare()`'s
+    // doc comment) — mirroring `AppEnvironment` awaiting `prepare()` once at
+    // app relaunch, against an existing on-disk store with stale rows.
     let store = SwiftDataSnippetStore(modelContainer: container)
+    await store.prepare()
 
     let byTitle = try await store.query(text: "legacy title", offset: 0, limit: 10)
     let byBody = try await store.query(text: "legacy body", offset: 0, limit: 10)
 
     #expect(byTitle.map(\.id) == [legacySnippet.id])
     #expect(byBody.map(\.id) == [legacySnippet.id])
+  }
+
+  @Test(
+    "Constructing the store does NOT run the normalizedText backfill scan — a legacy snippet stays unmatchable until prepare() is called explicitly"
+  )
+  func constructionDoesNotRunBackfillSynchronously() async throws {
+    let container = try SwiftDataSnippetStore.makeTestContainer()
+    let legacySnippet = SnippetStoreContractTests.makeSnippet(
+      title: "Not Yet Prepared", body: "Not Yet Backfilled")
+    try SwiftDataSnippetStore.insertRecordWithEmptyNormalizedTextForTesting(
+      legacySnippet, in: container)
+
+    // T-PF1 (D1): mirrors `SwiftDataClipStoreTests
+    // .constructionDoesNotRunBackfillSynchronously` — proves, deterministically
+    // (no timing/flakiness), that `init` no longer runs the backfill scan.
+    let store = SwiftDataSnippetStore(modelContainer: container)
+
+    let beforePrepare = try await store.query(text: "not yet backfilled", offset: 0, limit: 10)
+    #expect(beforePrepare.isEmpty)
+
+    await store.prepare()
+
+    let afterPrepare = try await store.query(text: "not yet backfilled", offset: 0, limit: 10)
+    #expect(afterPrepare.map(\.id) == [legacySnippet.id])
+  }
+
+  @Test(
+    "The normalizedText backfill runs at most once per on-disk store file: a second prepare() against the SAME file (a simulated relaunch) does not re-scan, so a row that turned stale after the first prepare() is left unbackfilled"
+  )
+  func backfillRunsOnlyOnceEverPerOnDiskStoreFile() async throws {
+    let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "SwiftDataSnippetStoreTests-oneshot-\(UUID().uuidString).store")
+    let defaultsKey = SwiftDataSnippetStore.backfillCompleteDefaultsKeyPrefix + fileURL.path
+    defer {
+      try? FileManager.default.removeItem(at: fileURL)
+      UserDefaults.standard.removeObject(forKey: defaultsKey)
+    }
+
+    let firstContainer = try SwiftDataSnippetStore.makeContainerForTesting(at: fileURL)
+    let firstLegacySnippet = SnippetStoreContractTests.makeSnippet(
+      title: "First Legacy", body: "First Legacy Body")
+    try SwiftDataSnippetStore.insertRecordWithEmptyNormalizedTextForTesting(
+      firstLegacySnippet, in: firstContainer)
+    let firstStore = SwiftDataSnippetStore(modelContainer: firstContainer)
+    await firstStore.prepare()
+    let firstResults = try await firstStore.query(text: "first legacy", offset: 0, limit: 10)
+    #expect(firstResults.map(\.id) == [firstLegacySnippet.id])
+
+    let secondContainer = try SwiftDataSnippetStore.makeContainerForTesting(at: fileURL)
+    let secondLegacySnippet = SnippetStoreContractTests.makeSnippet(
+      title: "Second Legacy", body: "Second Legacy Body")
+    try SwiftDataSnippetStore.insertRecordWithEmptyNormalizedTextForTesting(
+      secondLegacySnippet, in: secondContainer)
+    let secondStore = SwiftDataSnippetStore(modelContainer: secondContainer)
+    await secondStore.prepare()
+
+    // One-shot: the marker set by the FIRST prepare() call skips the
+    // SECOND scan entirely, so the second stale row is left un-backfilled.
+    let secondResults = try await secondStore.query(text: "second legacy", offset: 0, limit: 10)
+    #expect(secondResults.isEmpty)
+
+    let allResults = try await secondStore.fetchAll()
+    #expect(allResults.contains { $0.id == secondLegacySnippet.id })
   }
 
   @Test(
@@ -240,10 +306,17 @@ struct SwiftDataSnippetStoreTests {
     // throwing.
     let migratedContainer = try SwiftDataSnippetStore.makeContainerForTesting(at: fileURL)
     let store = SwiftDataSnippetStore(modelContainer: migratedContainer)
+    defer {
+      UserDefaults.standard.removeObject(
+        forKey: SwiftDataSnippetStore.backfillCompleteDefaultsKeyPrefix + fileURL.path)
+    }
+    // T-PF1: `prepare()`'s one-time backfill is no longer run by `init` —
+    // see `SwiftDataSnippetStore.prepare()`'s doc comment.
+    await store.prepare()
 
     // The migrated-in row's normalizedText defaulted to "" during
-    // migration, then `init`'s one-time backfill repaired it — so it's
-    // matchable by query, just like the in-memory backfill test above.
+    // migration, then `prepare()`'s one-time backfill repaired it — so
+    // it's matchable by query, just like the in-memory backfill test above.
     let results = try await store.query(text: "legacy title", offset: 0, limit: 10)
 
     #expect(results.count == 1)

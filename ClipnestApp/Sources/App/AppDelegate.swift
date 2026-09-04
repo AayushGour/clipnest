@@ -32,8 +32,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
 
+    // T-PF1 (D1 launch-latency fix): `AppEnvironment.init` used to be a
+    // plain synchronous `throws` initializer called directly here — nothing
+    // in the app (menu bar icon, run loop) could proceed until the on-disk
+    // SwiftData containers finished opening and their one-time backfills
+    // finished scanning, all on the main thread. `AppEnvironment.init` is
+    // now `async` and does that work off the main thread (see its doc
+    // comment); wrapping the call in a `Task` here means THIS method
+    // returns immediately instead of blocking on it, so
+    // `applicationDidFinishLaunching` itself is fast regardless of how long
+    // persistence setup takes. `environment` stays `nil` (already the
+    // documented, handled state — see `SettingsRootView`/`MenuBarContent`
+    // in `ClipnestApp.swift`, both already built around it being nil until
+    // published) for a bit longer than before; nothing observed a
+    // synchronous guarantee that it would be non-nil by the time this
+    // method returned.
+    Task { await self.launchEnvironment() }
+  }
+
+  private func launchEnvironment() async {
     do {
-      let environment = try AppEnvironment()
+      let environment = try await AppEnvironment()
       self.environment = environment
       environment.startCapture()
       environment.registerHotkey()

@@ -9,18 +9,17 @@ import os
 public actor SwiftDataSnippetStore: SnippetStore {
   private let modelContext: ModelContext
 
+  /// T-PF1 (D1 launch-latency fix): deliberately does NOT run the
+  /// `normalizedText` backfill anymore — see `prepare()`'s doc comment
+  /// (mirrors `SwiftDataClipStore.prepare()`'s identical rationale) for why,
+  /// and why this initializer's signature is unchanged.
+  ///
   /// - Parameter modelContainer: Where records are persisted. Production
   ///   code uses `SwiftDataSnippetStore.makeProductionContainer()`; tests
   ///   must pass a container configured `isStoredInMemoryOnly: true` (or
   ///   pointed at a throwaway temp directory) — never the real container.
   public init(modelContainer: ModelContainer) {
-    let modelContext = ModelContext(modelContainer)
-    // Migration-crash fix: repair rows that migrated in with `normalizedText`
-    // defaulted to `""` — see `SwiftDataClipStore.init`'s identical backfill
-    // call and `SnippetRecord.normalizedText`'s doc comment for the full
-    // rationale, which applies identically here.
-    Self.backfillNormalizedText(in: modelContext)
-    self.modelContext = modelContext
+    self.modelContext = ModelContext(modelContainer)
   }
 
   // MARK: - Production container
@@ -29,8 +28,12 @@ public actor SwiftDataSnippetStore: SnippetStore {
 
   /// The production on-disk container: `~/Library/Application
   /// Support/Clipnest/Snippets.store` — the same base-directory family as
-  /// `BlobStore.defaultBaseDirectory()` and `SwiftDataClipStore`. Never
-  /// called by tests.
+  /// `BlobStore.defaultBaseDirectory()` and `SwiftDataClipStore`, INCLUDING
+  /// that method's T-PF8 `CLIPNEST_TEST_DATA_ROOT` override — see
+  /// `SwiftDataClipStore.makeProductionContainer()`'s doc comment for the
+  /// full rationale, which applies identically here. Never called by tests,
+  /// EXCEPT `ProductionStoreIsolationTests` (same exception, same
+  /// rationale).
   ///
   /// Corrupt-store recovery: routed through `ModelContainerRecovery
   /// .openWithRecovery(...)` — see `SwiftDataClipStore
@@ -113,7 +116,7 @@ public actor SwiftDataSnippetStore: SnippetStore {
   /// computation — simulates a row exactly as it looks the moment it
   /// migrates in from a pre-`normalizedText` on-disk store (see
   /// `SnippetRecord.normalizedText`'s doc comment), so tests can prove
-  /// `init`'s backfill repairs it. `SnippetRecord` is `private` to this
+  /// `prepare()`'s backfill repairs it. `SnippetRecord` is `private` to this
   /// file, so this factory is the only way test code can construct one
   /// directly. Never called by production code.
   public static func insertRecordWithEmptyNormalizedTextForTesting(
@@ -130,19 +133,48 @@ public actor SwiftDataSnippetStore: SnippetStore {
     }
   }
 
-  // MARK: - Migration-crash fix: normalizedText backfill
+  // MARK: - Migration-crash fix: normalizedText backfill (T-PF1: one-shot, off `init`)
 
   private static let logger = Logger(
     subsystem: ClipnestLog.subsystem, category: "SwiftDataSnippetStore")
 
+  /// T-PF1 (D1 launch-latency fix): mirrors `SwiftDataClipStore.prepare()`'s
+  /// identical rationale (moved off `init` so the scan never blocks the
+  /// main thread; one-shot cross-launch via the shared
+  /// `OneShotStoreMigration.run(...)` helper, keyed to
+  /// `backfillCompleteDefaultsKeyPrefix` + this store's own on-disk file
+  /// path; safe for a pre-marker legacy store) — applies identically here,
+  /// including the reviewer-finding correctness fix: the marker is set only
+  /// when `backfillNormalizedText(in:)` reports genuine success, so a
+  /// transient failure retries on the next `prepare()` call instead of
+  /// being permanently marked done. See `SwiftDataClipStore.prepare()`'s
+  /// and `OneShotStoreMigration.run`'s doc comments for the full rationale.
+  public func prepare() async {
+    OneShotStoreMigration.run(
+      keyPrefix: Self.backfillCompleteDefaultsKeyPrefix, modelContext: modelContext
+    ) {
+      Self.backfillNormalizedText(in: modelContext)
+    }
+  }
+
+  /// Mirrors `SwiftDataClipStore.backfillCompleteDefaultsKeyPrefix`'s
+  /// identical rationale — exposed for test cleanup, never re-hardcoded.
+  /// Passed to `OneShotStoreMigration.run` as this backfill's `keyPrefix`.
+  static let backfillCompleteDefaultsKeyPrefix =
+    "ClipnestCore.SwiftDataSnippetStore.normalizedTextBackfillComplete."
+
   /// One-time backfill for rows that migrated in with `normalizedText`
-  /// defaulted to `""` — see `SwiftDataClipStore.backfillNormalizedText(in:)`'s
-  /// doc comment for the full rationale (default-value migration mechanics,
-  /// why this is safe to run unconditionally on every `init`, and why
-  /// failures here are logged + swallowed rather than thrown), which applies
-  /// identically here. Matches `update(_:title:body:keyword:)`'s derivation
-  /// exactly: `(title + " " + body).lowercased()`.
-  private static func backfillNormalizedText(in modelContext: ModelContext) {
+  /// defaulted to `""` — called from `prepare()`, guarded by that method's
+  /// persisted one-shot marker (via `OneShotStoreMigration.run`). See
+  /// `SwiftDataClipStore.backfillNormalizedText(in:)`'s doc comment for the
+  /// full rationale (default-value migration mechanics, why this is NOT
+  /// cheap to just re-run every launch without the marker, why failures
+  /// here are logged + swallowed rather than thrown, and why this reports
+  /// success/failure via its `Bool` return so the marker is only set on
+  /// genuine success), which applies identically here. Matches
+  /// `update(_:title:body:keyword:)`'s derivation exactly:
+  /// `(title + " " + body).lowercased()`.
+  private static func backfillNormalizedText(in modelContext: ModelContext) -> Bool {
     let predicate = #Predicate<SnippetRecord> { record in
       record.normalizedText == "" && (record.title != "" || record.body != "")
     }
@@ -154,19 +186,21 @@ public actor SwiftDataSnippetStore: SnippetStore {
       logger.error(
         "SwiftDataSnippetStore: normalizedText backfill fetch failed (\(String(describing: error), privacy: .public))"
       )
-      return
+      return false
     }
-    guard !staleRecords.isEmpty else { return }
+    guard !staleRecords.isEmpty else { return true }
 
     for record in staleRecords {
       record.normalizedText = (record.title + " " + record.body).lowercased()
     }
     do {
       try modelContext.save()
+      return true
     } catch {
       logger.error(
         "SwiftDataSnippetStore: normalizedText backfill save failed (\(String(describing: error), privacy: .public))"
       )
+      return false
     }
   }
 

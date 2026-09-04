@@ -49,11 +49,14 @@ private final class FakeMonitoredPasteboard: MonitoredPasteboard, @unchecked Sen
   }
 
   /// Simulates copying an image (e.g. from Preview): only image bytes, no
-  /// `.string` representation.
-  func simulateImageCopy(data: Data) {
+  /// `.string` representation. `type` defaults to `.png` (matching
+  /// `PasteboardReader.imagePasteboardTypes`'s T-PF2 priority order); pass
+  /// `.tiff` to simulate a source app that only offers the TIFF
+  /// representation.
+  func simulateImageCopy(data: Data, type: NSPasteboard.PasteboardType = .png) {
     strings = [:]
-    datas = [.png: data]
-    availableTypes = [.png]
+    datas = [type: data]
+    availableTypes = [type]
     changeCount += 1
   }
 
@@ -204,6 +207,102 @@ private actor FakeTextRecognizer: TextRecognizing {
   /// Number of `recognizeText(in:)` calls currently suspended, waiting on
   /// `release()`.
   var pendingGateCount: Int { gates.count }
+}
+
+/// A `FileManager` that can pause its very next `fileExists(atPath:)` call
+/// (blocking the calling thread until released) and records every
+/// `removeItem(at:)` call it's asked to perform.
+///
+/// Built for the T-HANG4 second-`ignoredChangeCount`-check regression tests
+/// below: `ClipboardMonitor.checkNow()`'s two `ignoredChangeCount` checks
+/// are evaluated against a `currentChangeCount` captured once at the top of
+/// the call, so the only way to deterministically hit the SECOND check (not
+/// the first, which would already have bailed) is to have a concurrent
+/// `ignore(changeCount:)` call land strictly between them. `checkNow()`
+/// offers no injection point for that window by design (it's a real race
+/// against `Paster`, not something meant to be controllable) — so these
+/// tests synchronize on the one seam `BlobStore` already exposes for
+/// testability instead: its injectable `fileManager:` initializer
+/// parameter (see `BlobStore`'s own doc comment — "tests point it at a
+/// throwaway temp directory"). This subclass extends that same idea to the
+/// `FileManager` `BlobStore` uses, letting a test pause the SPECIFIC
+/// `fileExists(atPath:)` call `write(_:)`'s dedup check makes, with zero
+/// changes to `BlobStore.swift` or `ClipboardMonitor.swift`.
+///
+/// `@unchecked Sendable`: all mutable state is protected by `NSLock`, and
+/// the two `DispatchSemaphore`s are safe to signal/wait on from any thread
+/// by design — mirroring `BlobStore.fileManager`'s own "documented
+/// thread-safety, not language-checked" shape.
+private final class GatingFileManager: FileManager, @unchecked Sendable {
+  private let lock = NSLock()
+  private var deletedFilePaths: [String] = []
+  private var armed = false
+  private var currentlyPaused = false
+  private let releaseGate = DispatchSemaphore(value: 0)
+
+  /// Every path `removeItem(at:)` was asked to delete, in call order. The
+  /// T-HANG4 regression assertion reads this to prove a bail deleted
+  /// nothing.
+  var deletedPaths: [String] {
+    lock.lock()
+    defer { lock.unlock() }
+    return deletedFilePaths
+  }
+
+  /// Arms the gate: the very next `fileExists(atPath:)` call blocks the
+  /// calling thread (a real, synchronous block — `BlobStore.write(_:)` is
+  /// not `async`) until `release()` is called, first flipping `isPaused` to
+  /// `true` for the duration. Disarms itself the moment it fires, so it
+  /// affects exactly one call.
+  func armNextFileExistsCall() {
+    lock.lock()
+    armed = true
+    lock.unlock()
+  }
+
+  /// Whether a gated `fileExists(atPath:)` call is currently paused,
+  /// waiting on `release()` — i.e. proof that `BlobStore.write(_:)` is
+  /// genuinely mid-flight, not yet returned. Polled from `@MainActor` test
+  /// code via the file's `waitUntil` helper rather than blocked on
+  /// directly: reading a lock-protected `Bool` from the main actor never
+  /// risks blocking it, unlike a real semaphore wait would. Only
+  /// `fileExists(atPath:)` itself performs the actual blocking wait, and
+  /// only on whatever background thread `BlobStore.write(_:)`'s
+  /// `Task.detached` runs on.
+  var isPaused: Bool {
+    lock.lock()
+    defer { lock.unlock() }
+    return currentlyPaused
+  }
+
+  /// Lets a currently-paused `fileExists(atPath:)` call return.
+  func release() {
+    releaseGate.signal()
+  }
+
+  override func fileExists(atPath path: String) -> Bool {
+    lock.lock()
+    let shouldPause = armed
+    if shouldPause { armed = false }
+    lock.unlock()
+    if shouldPause {
+      lock.lock()
+      currentlyPaused = true
+      lock.unlock()
+      releaseGate.wait()
+      lock.lock()
+      currentlyPaused = false
+      lock.unlock()
+    }
+    return super.fileExists(atPath: path)
+  }
+
+  override func removeItem(at url: URL) throws {
+    lock.lock()
+    deletedFilePaths.append(url.path)
+    lock.unlock()
+    try super.removeItem(at: url)
+  }
 }
 
 /// Polls `condition` (bounded by `timeout`) instead of a fixed sleep — the
@@ -433,6 +532,21 @@ struct ClipboardMonitorTests {
     return (BlobStore(baseDirectory: baseDirectory), baseDirectory)
   }
 
+  /// Same as `makeTempBlobStore()`, but backed by a `GatingFileManager` so
+  /// the T-HANG4 second-check bail regression tests below can pause a blob
+  /// write mid-flight. See `GatingFileManager`'s doc comment.
+  private func makeGatedTempBlobStore() -> (
+    store: BlobStore, fileManager: GatingFileManager, baseDirectory: URL
+  ) {
+    let baseDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "ClipboardMonitorTests-gated-\(UUID().uuidString)", isDirectory: true)
+    let gatingFileManager = GatingFileManager()
+    return (
+      BlobStore(baseDirectory: baseDirectory, fileManager: gatingFileManager), gatingFileManager,
+      baseDirectory
+    )
+  }
+
   @Test("Capturing an image writes its bytes to BlobStore and sets a valid blobPath + byteSize")
   func capturesImageWithBlob() async throws {
     let (blobStore, baseDirectory) = makeTempBlobStore()
@@ -471,6 +585,216 @@ struct ClipboardMonitorTests {
     let blobsDirectory = baseDirectory.appendingPathComponent(BlobStore.blobsDirectoryName)
     let contents = try FileManager.default.contentsOfDirectory(atPath: blobsDirectory.path)
     #expect(contents.count == 1)
+  }
+
+  // MARK: - T-HANG4: second ignoredChangeCount check's blob-safety bail path
+  //
+  // Regression coverage for the P0 data-loss bug the reviewer flagged as
+  // having zero test coverage: `checkNow()`'s SECOND `ignoredChangeCount`
+  // check (added for T-HANG4 — see `ClipboardMonitor.swift`'s doc comment
+  // on `ignoredChangeCount`) used to call `blobStore.delete(blobPath:)` on
+  // its bail path. Since `BlobStore` is content-addressed with no
+  // reference counting, `write(_:)` returns an EXISTING file's path
+  // whenever those exact bytes are already on disk — the bail fires on a
+  // self-paste race where the bytes are, by construction, an existing
+  // history item's own content round-tripped through the pasteboard, so
+  // that delete call very often deleted a blob a different, still-visible
+  // item was the sole referrer of, corrupting it. senior-dev removed the
+  // delete call from `ClipboardMonitor.swift`; the tests below prove it
+  // stays removed (1) and that removing it didn't trade that bug for a new
+  // "legitimate capture gets dropped" one (2), plus one more sanity check
+  // that the match is exact, not a blanket suppression (3).
+
+  @Test(
+    "T-HANG4 regression: when the second ignoredChangeCount check bails, no blob is deleted — a blob an existing item still references survives byte-for-byte"
+  )
+  func secondCheckBailDeletesNoBlobs() async throws {
+    let (blobStore, gatingFileManager, baseDirectory) = makeGatedTempBlobStore()
+    defer { try? FileManager.default.removeItem(at: baseDirectory) }
+    let pasteboard = FakeMonitoredPasteboard(changeCount: 0)
+    let store = InMemoryClipStore(blobStore: blobStore)
+    let monitor = ClipboardMonitor(store: store, blobStore: blobStore, pasteboard: pasteboard)
+    let imageData = ImageFixtures.makeTinyImageData(width: 7, height: 7)
+
+    // Establish a real, live, on-disk item first — content X, an ordinary
+    // ungated write.
+    pasteboard.simulateImageCopy(data: imageData)
+    let existing = try #require(await monitor.checkNow())
+    let existingBlobPath = try #require(existing.blobPath)
+
+    // The self-paste race: the SAME bytes arrive again (exactly why the
+    // write below is a dedup hit against `existingBlobPath`, not a fresh
+    // file — see this section's doc comment). Arm the gate so
+    // `write(_:)`'s dedup `fileExists` check pauses mid-flight, giving this
+    // test a deterministic window to land `ignore(changeCount:)` strictly
+    // between `checkNow()`'s first (already-passed, since
+    // `ignoredChangeCount` is still nil at that point) and second
+    // `ignoredChangeCount` checks — i.e. guarantees the SECOND check, not
+    // the first, is the one that bails.
+    gatingFileManager.armNextFileExistsCall()
+    pasteboard.simulateImageCopy(data: imageData)
+    let racingChangeCount = pasteboard.changeCount
+
+    let checkTask = Task { @MainActor in
+      await monitor.checkNow()
+    }
+    // Poll (never block the main actor) until `write(_:)`'s gated
+    // `fileExists` call has genuinely paused — proof `checkNow()` is
+    // mid-flight past its first check, not yet at its second.
+    await waitUntil { gatingFileManager.isPaused }
+    try #require(gatingFileManager.isPaused)
+    monitor.ignore(changeCount: racingChangeCount)
+    gatingFileManager.release()
+
+    let bailedResult = await checkTask.value
+    #expect(bailedResult == nil)
+
+    // The regression assertion: zero deletes, on any path, for this bail.
+    #expect(gatingFileManager.deletedPaths.isEmpty)
+    // The concrete consequence that matters: the EXISTING item's blob is
+    // still there, byte-identical — not corrupted by a delete that used to
+    // fire right here.
+    #expect(try blobStore.read(blobPath: existingBlobPath) == imageData)
+    // Nothing new was persisted for the bailed cycle.
+    let all = try await store.fetchAll()
+    #expect(all.count == 1)
+    #expect(all.first?.id == existing.id)
+  }
+
+  @Test(
+    "A legitimate external copy arriving right after a second-check bail is still captured on the very next cycle — the bail does not wedge the monitor or drop the following capture"
+  )
+  func secondCheckBailDoesNotDropSubsequentLegitimateCapture() async throws {
+    let (blobStore, gatingFileManager, baseDirectory) = makeGatedTempBlobStore()
+    defer { try? FileManager.default.removeItem(at: baseDirectory) }
+    let pasteboard = FakeMonitoredPasteboard(changeCount: 0)
+    let store = InMemoryClipStore(blobStore: blobStore)
+    let monitor = ClipboardMonitor(store: store, blobStore: blobStore, pasteboard: pasteboard)
+    let imageData = ImageFixtures.makeTinyImageData(width: 9, height: 9)
+
+    // Same race setup as `secondCheckBailDeletesNoBlobs` above — see that
+    // test for the full choreography explanation.
+    pasteboard.simulateImageCopy(data: imageData)
+    let existing = try #require(await monitor.checkNow())
+
+    gatingFileManager.armNextFileExistsCall()
+    pasteboard.simulateImageCopy(data: imageData)
+    let racingChangeCount = pasteboard.changeCount
+
+    let checkTask = Task { @MainActor in
+      await monitor.checkNow()
+    }
+    // Same choreography as `secondCheckBailDeletesNoBlobs` above — see that
+    // test for the full explanation.
+    await waitUntil { gatingFileManager.isPaused }
+    try #require(gatingFileManager.isPaused)
+    monitor.ignore(changeCount: racingChangeCount)
+    gatingFileManager.release()
+
+    let bailedResult = await checkTask.value
+    #expect(bailedResult == nil)
+
+    // This is the property that matters most: trading a rare duplicate row
+    // for a rare LOST clipboard entry would be a strictly worse bug than
+    // the one being fixed. A genuinely different, external copy arriving
+    // right after the bail must still be captured normally on the next
+    // cycle — the bail must not leave `ignoredChangeCount` (or anything
+    // else) in a state that swallows unrelated future captures.
+    pasteboard.simulateCopy(text: "a real external copy, not a self-write")
+    let captured = await monitor.checkNow()
+
+    #expect(captured?.previewText == "a real external copy, not a self-write")
+    let all = try await store.fetchAll()
+    #expect(all.count == 2)
+    #expect(all.contains(where: { $0.id == existing.id }))
+    #expect(all.contains(where: { $0.id == captured?.id }))
+  }
+
+  @Test(
+    "A stale/mismatched ignoredChangeCount never bails a different cycle's capture — the check is an exact match, not a blanket suppression"
+  )
+  func mismatchedIgnoredChangeCountNeverBails() async throws {
+    let pasteboard = FakeMonitoredPasteboard(changeCount: 0)
+    let store = InMemoryClipStore()
+    let monitor = ClipboardMonitor(store: store, pasteboard: pasteboard)
+
+    // Registers an ignored changeCount that will never actually be the
+    // pasteboard's current changeCount below — simulating a stale/unrelated
+    // self-write registration (see `ignoredChangeCount`'s "only one
+    // tracked at a time" doc comment).
+    monitor.ignore(changeCount: 999)
+
+    pasteboard.simulateCopy(text: "genuinely external copy")
+    let captured = await monitor.checkNow()
+
+    #expect(captured?.previewText == "genuinely external copy")
+    let all = try await store.fetchAll()
+    #expect(all.count == 1)
+  }
+
+  // MARK: - T-PF2: PNG-preferred capture + capture-time ceilings, full pipeline
+
+  @Test(
+    "A TIFF-only image copy still writes its bytes to BlobStore, unaffected by the PNG-first change"
+  )
+  func capturesTIFFOnlyImageWithBlob() async throws {
+    let (blobStore, baseDirectory) = makeTempBlobStore()
+    defer { try? FileManager.default.removeItem(at: baseDirectory) }
+    let pasteboard = FakeMonitoredPasteboard(changeCount: 0)
+    let store = InMemoryClipStore(blobStore: blobStore)
+    let monitor = ClipboardMonitor(store: store, blobStore: blobStore, pasteboard: pasteboard)
+    let tiffData = ImageFixtures.makeTinyImageData(width: 3, height: 3, format: .tiff)
+
+    pasteboard.simulateImageCopy(data: tiffData, type: .tiff)
+    let captured = await monitor.checkNow()
+
+    #expect(captured?.kind == .image)
+    #expect(captured?.byteSize == tiffData.count)
+    let blobPath = try #require(captured?.blobPath)
+    #expect(try blobStore.read(blobPath: blobPath) == tiffData)
+  }
+
+  @Test(
+    "An over-byte-ceiling image capture is rejected cleanly: nothing stored, no blob written, no crash"
+  )
+  func rejectsOverByteCeilingImageCaptureCleanly() async throws {
+    let (blobStore, baseDirectory) = makeTempBlobStore()
+    defer { try? FileManager.default.removeItem(at: baseDirectory) }
+    let pasteboard = FakeMonitoredPasteboard(changeCount: 0)
+    let store = InMemoryClipStore(blobStore: blobStore)
+    let monitor = ClipboardMonitor(store: store, blobStore: blobStore, pasteboard: pasteboard)
+    let oversized = Data(count: PasteboardReader.maxCapturedImageByteSize + 1)
+
+    pasteboard.simulateImageCopy(data: oversized)
+    let captured = await monitor.checkNow()
+
+    #expect(captured == nil)
+    let all = try await store.fetchAll()
+    #expect(all.isEmpty)
+    // No blob directory should even be created — the write path is never
+    // reached for a rejected capture (no partial write).
+    let blobsDirectory = baseDirectory.appendingPathComponent(BlobStore.blobsDirectoryName)
+    #expect(!FileManager.default.fileExists(atPath: blobsDirectory.path))
+  }
+
+  @Test(
+    "An over-pixel-dimension-ceiling image capture is rejected cleanly: nothing stored, no crash"
+  )
+  func rejectsOverPixelDimensionCeilingImageCaptureCleanly() async throws {
+    let (blobStore, baseDirectory) = makeTempBlobStore()
+    defer { try? FileManager.default.removeItem(at: baseDirectory) }
+    let pasteboard = FakeMonitoredPasteboard(changeCount: 0)
+    let store = InMemoryClipStore(blobStore: blobStore)
+    let monitor = ClipboardMonitor(store: store, blobStore: blobStore, pasteboard: pasteboard)
+    let oversizedWidth = Int(PasteboardReader.maxCapturedImagePixelDimension) + 1
+    let imageData = ImageFixtures.makeTinyImageData(width: oversizedWidth, height: 1)
+
+    pasteboard.simulateImageCopy(data: imageData)
+    let captured = await monitor.checkNow()
+
+    #expect(captured == nil)
+    let all = try await store.fetchAll()
+    #expect(all.isEmpty)
   }
 
   // MARK: - File capture (T20)
@@ -1064,6 +1388,150 @@ struct ClipboardMonitorTests {
     let all = try await store.fetchAll()
     #expect(all.isEmpty)
   }
+
+  // MARK: - T-OCR6: OCR store-write failures route through the injected handler
+
+  @Test(
+    "T-OCR6: a store-write failure during capture-time recognition is routed through the injected captureFailureHandler, not the static default logger"
+  )
+  func recognitionWriteFailureRoutesThroughInjectedCaptureFailureHandler() async throws {
+    let (blobStore, baseDirectory) = makeTempBlobStore()
+    defer { try? FileManager.default.removeItem(at: baseDirectory) }
+    let pasteboard = FakeMonitoredPasteboard(changeCount: 0)
+    let store = InMemoryClipStore(blobStore: blobStore)
+    let recognizer = FakeTextRecognizer(result: "recognized after delete", gated: true)
+    let recorder = CaptureFailureRecorder()
+    let monitor = ClipboardMonitor(
+      store: store,
+      blobStore: blobStore,
+      pasteboard: pasteboard,
+      textRecognizer: recognizer,
+      textRecognitionEnabledProvider: { true },
+      captureFailureHandler: recorder.handle
+    )
+    let imageData = ImageFixtures.makeTinyImageData(width: 4, height: 4)
+
+    pasteboard.simulateImageCopy(data: imageData)
+    let captured = try #require(await monitor.checkNow())
+    await waitUntil { await recognizer.pendingGateCount == 1 }
+
+    // Delete the item while recognition is still in flight (same setup as
+    // `recognitionWriteAfterDeleteDoesNotResurrectItem`) so
+    // `store.setRecognizedText` throws `.notFound` once recognition
+    // completes -- this test's own assertion is on WHERE that failure goes,
+    // not on the resurrection behavior itself (already covered elsewhere).
+    try await store.delete(captured.id)
+
+    await recognizer.release()
+    await waitUntil { recorder.reportedError != nil }
+
+    #expect(recorder.reportedError as? ClipStoreError == .notFound)
+  }
+
+  // MARK: - T-HANG5: capture-time OCR backlog cancellation
+
+  @Test("T-HANG5: cancelPendingRecognition(for:) for an id with no pending job is a safe no-op")
+  func cancelPendingRecognitionNoOpForUnknownID() async throws {
+    let pasteboard = FakeMonitoredPasteboard(changeCount: 0)
+    let store = InMemoryClipStore()
+    let monitor = ClipboardMonitor(store: store, pasteboard: pasteboard)
+
+    monitor.cancelPendingRecognition(for: UUID())
+    monitor.cancelAllPendingRecognition()
+
+    // No crash, and normal (non-OCR) capture still works afterward.
+    pasteboard.simulateCopy(text: "still works")
+    let result = await monitor.checkNow()
+    #expect(result?.previewText == "still works")
+  }
+
+  @Test(
+    "T-HANG5: cancelPendingRecognition(for:) called while recognition is in flight suppresses the write and the onCapture refire, even though Vision already returned text"
+  )
+  func cancelPendingRecognitionSuppressesLateWrite() async throws {
+    let (blobStore, baseDirectory) = makeTempBlobStore()
+    defer { try? FileManager.default.removeItem(at: baseDirectory) }
+    let pasteboard = FakeMonitoredPasteboard(changeCount: 0)
+    let store = InMemoryClipStore(blobStore: blobStore)
+    let recognizer = FakeTextRecognizer(result: "recognized text", gated: true)
+    let recorder = CaptureRecorder()
+    let monitor = ClipboardMonitor(
+      store: store,
+      blobStore: blobStore,
+      pasteboard: pasteboard,
+      textRecognizer: recognizer,
+      textRecognitionEnabledProvider: { true }
+    )
+    monitor.onCapture = { item in recorder.record(item) }
+    let imageData = ImageFixtures.makeTinyImageData(width: 4, height: 4)
+
+    pasteboard.simulateImageCopy(data: imageData)
+    let captured = try #require(await monitor.checkNow())
+    await waitUntil { await recognizer.pendingGateCount == 1 }
+
+    // Recognition has genuinely started (recorded the image, suspended
+    // inside recognizeText, i.e. `scheduleTextRecognition`'s pre-Vision
+    // Task.isCancelled check has already passed) -- cancel now, strictly
+    // BEFORE `release()` lets it return. `cancel()` is synchronous and
+    // completes before `release()` is even called below, so the resumed
+    // task's post-recognition `Task.isCancelled` check is guaranteed (not
+    // racy) to observe cancellation -- see `pendingRecognitionTasks`'s doc
+    // comment for why this ordering, not real timing, is what makes this
+    // deterministic.
+    monitor.cancelPendingRecognition(for: captured.id)
+    await recognizer.release()
+    await waitUntil { await recognizer.pendingGateCount == 0 }
+    // Give the cancelled task's own remaining (non-awaited) steps a moment
+    // to run past its `Task.isCancelled` check and return.
+    await Task.yield()
+    await Task.yield()
+    await Task.yield()
+
+    let all = try await store.fetchAll()
+    #expect(all.first?.ocrText == nil)
+    // Only the original capture's onCapture fired -- no refire for the
+    // cancelled recognition's (never-written) result.
+    #expect(recorder.capturedItems.count == 1)
+  }
+
+  @Test(
+    "T-HANG5: cancelAllPendingRecognition() cancels every currently-pending job, suppressing all their writes"
+  )
+  func cancelAllPendingRecognitionSuppressesAllPendingWrites() async throws {
+    let (blobStore, baseDirectory) = makeTempBlobStore()
+    defer { try? FileManager.default.removeItem(at: baseDirectory) }
+    let pasteboard = FakeMonitoredPasteboard(changeCount: 0)
+    let store = InMemoryClipStore(blobStore: blobStore)
+    let recognizer = FakeTextRecognizer(result: "recognized text", gated: true)
+    let monitor = ClipboardMonitor(
+      store: store,
+      blobStore: blobStore,
+      pasteboard: pasteboard,
+      textRecognizer: recognizer,
+      textRecognitionEnabledProvider: { true }
+    )
+
+    pasteboard.simulateImageCopy(data: ImageFixtures.makeTinyImageData(width: 4, height: 4))
+    let first = try #require(await monitor.checkNow())
+    await waitUntil { await recognizer.pendingGateCount == 1 }
+
+    pasteboard.simulateImageCopy(data: ImageFixtures.makeTinyImageData(width: 6, height: 6))
+    let second = try #require(await monitor.checkNow())
+    await waitUntil { await recognizer.pendingGateCount == 2 }
+
+    monitor.cancelAllPendingRecognition()
+    await recognizer.release()
+    await recognizer.release()
+    await waitUntil { await recognizer.pendingGateCount == 0 }
+    await Task.yield()
+    await Task.yield()
+    await Task.yield()
+
+    let all = try await store.fetchAll()
+    #expect(all.first(where: { $0.id == first.id })?.ocrText == nil)
+    #expect(all.first(where: { $0.id == second.id })?.ocrText == nil)
+  }
+
   // MARK: - T-PERF3: checkNow's classify step genuinely runs off the main actor
 
   @Test(

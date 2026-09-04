@@ -24,6 +24,7 @@ own `Error` enum — see [Error handling](#error-handling).
 - [Model](#model) — `ClipItem`, `Snippet`, `ItemKind`
 - [Store](#store) — `ClipStore`, `SnippetStore`, `BlobStore`
 - [Clipboard](#clipboard) — `PasteboardReader`, `PrivacyFilter`, `ClipboardMonitor`
+- [Media](#media) — `ImagePixelHashing`, `CoreGraphicsImagePixelHasher`
 - [OCR](#ocr) — `TextRecognizing`, `VisionTextRecognizer`, `OCRBackfillCoordinator`
 - [Search](#search) — `SearchQuery`, `SearchHighlighter`
 - [Paste](#paste) — `Paster`, `PasteContent`, `FrontmostAppTracker`
@@ -237,23 +238,78 @@ must point it at a throwaway temp directory; production code uses
 
 ```swift
 public struct PasteboardReader: Sendable {
-  public init()
+  public static let maxCapturedImageByteSize: Int              // 50,000,000 (50 MB)
+  public static let maxCapturedImagePixelDimension: CGFloat    // 20,000 px, either axis
+  public static let maxPixelHashPixelCount: Int                // 40,000,000 px (40 MP)
+
+  public enum RawPayload: Sendable {
+    case file(urlString: String)
+    case image(Data)
+    case richText(rtf: Data, fallbackPlainText: String?)
+    case plainText(String)
+  }
+
+  public init(pixelHasher: any ImagePixelHashing = CoreGraphicsImagePixelHasher())
   public func read(from pasteboard: PasteboardReading) -> Classification?
+  public func pullRawPayload(from pasteboard: PasteboardReading) -> RawPayload?
+  public func classify(_ raw: RawPayload) -> Classification?
 }
 ```
 Classifies the *current* contents of a pasteboard into an `ItemKind` +
 preview text + content hash + byte size, checking types in priority order
-(`.fileURL` → image `.tiff`/`.png` → `.rtf` → `.string`, most-specific
+(`.fileURL` → image `.png`/`.tiff` → `.rtf` → `.string`, most-specific
 first — a Finder file copy often also carries a text/image representation,
-so a generic type must never win over a more specific one). Pure/I/O-free:
-it never writes to `BlobStore` itself — `Classification.rawData` (populated
-only for `.image` and `.richText`, the two kinds whose bytes must be
-persisted) is the caller's job to persist (`ClipboardMonitor` does this,
-off the main actor via `Task.detached`). `Classification.fileURL` is
-populated only for `.file`. Returns `nil` if the pasteboard holds nothing
-this reader understands. `PasteboardReading` is the injectable protocol
-(`NSPasteboard` conforms) used so this is testable without a real
-pasteboard.
+so a generic type must never win over a more specific one). `.png` is
+checked before `.tiff` (T-PF2: reversed from an earlier `.tiff`-first order
+— a stored TIFF blob runs roughly 10x larger on disk than the equivalent
+PNG, and asking `NSPasteboard` for `.tiff` when a source app offers `.png`
+only forces an in-process TIFF synthesis on the main actor at request time;
+both representations are still checked, since some apps offer only one).
+Pure/I/O-free: it never writes to `BlobStore` itself —
+`Classification.rawData` (populated only for `.image` and `.richText`, the
+two kinds whose bytes must be persisted) is the caller's job to persist
+(`ClipboardMonitor` does this, off the main actor via `Task.detached`).
+`Classification.fileURL` is populated only for `.file`. `PasteboardReading`
+is the injectable protocol (`NSPasteboard` conforms) used so this is
+testable without a real pasteboard.
+
+- **`read(from:)`** — the single entry point for callers with no actor
+  boundary to preserve between "fetch" and "classify" (e.g. tests) —
+  equivalent to `pullRawPayload(from:)` immediately followed by
+  `classify(_:)`. Returns `nil` if the pasteboard holds nothing this reader
+  currently understands, OR if it holds an `.image` payload that exceeds
+  `maxCapturedImageByteSize`/`maxCapturedImagePixelDimension` (below).
+- **`pullRawPayload(from:)`** — the `@MainActor`-bound half: every real
+  `PasteboardReading` call (`availableTypes`/`string(forType:)`/
+  `data(forType:)`) happens here, and only here, fetching just the ONE
+  representation the type-priority order resolves to. `ClipboardMonitor
+  .checkNow()` calls this directly on the main actor.
+- **`classify(_:)`** — the CPU-only half: `ItemKind` decision, preview-text
+  construction, and the SHA-256/pixel content hash, touching no
+  `PasteboardReading` — safe to run off the main actor (`ClipboardMonitor`
+  wraps this in `Task.detached`). Returns `Classification?` (optional,
+  not a non-optional `Classification`) since a `RawPayload.image` case can
+  still fail the two size ceilings below even after a representation was
+  successfully fetched.
+- **`maxCapturedImageByteSize`** (50 MB) — a captured `.image` payload over
+  this many bytes is rejected (`classify(_:)` returns `nil` for it) before
+  its bytes are ever hashed or handed off for a `BlobStore` write. Mirrors
+  `VisionTextRecognizer.maxByteSize`'s value — deliberately NOT the same
+  shared constant, since the two bound different policies that could
+  legitimately diverge (see that constant's own doc comment).
+  `maxCapturedImagePixelDimension` (20,000 px, either axis) is the
+  companion check against a decompression-bomb-shaped image (small encoded
+  bytes, enormous decoded grid) — same "rejected, not just capped" contract,
+  same deliberate non-unification with `VisionTextRecognizer
+  .maxPixelDimension`.
+- **`maxPixelHashPixelCount`** (40 MP) — separate from the two ceilings
+  above: an image whose total pixel count (`width × height`) exceeds this
+  is still captured, just with pixel-content hashing skipped in favor of the
+  raw-byte `BlobStore.contentHash(of:)` fallback — a defensive ceiling
+  against the multi-gigabyte peak-memory cost `CoreGraphicsImagePixelHasher`
+  (see [Media](#media)) can incur on a very large image. The byte hash
+  stays exact either way, so this only costs format-independence for
+  pathologically large images, never dedup correctness.
 
 ### `PrivacyFilter`
 
@@ -320,6 +376,60 @@ it immediately after any write your own code makes, with the pasteboard's
 resulting `changeCount`. A store failure during capture is surfaced to
 `captureFailureHandler` (default: `os.Logger`, metadata only — case name,
 never clipboard content) rather than silently discarded.
+
+---
+
+## Media
+
+```swift
+public protocol ImagePixelHashing: Sendable {
+  func pixelContentHash(of imageData: Data) -> String?
+}
+
+public struct CoreGraphicsImagePixelHasher: ImagePixelHashing {
+  public init()
+  public func pixelContentHash(of imageData: Data) -> String?
+}
+```
+`ImagePixelHashing` produces a format-independent content hash over an
+image's **decoded pixel content**, not its raw encoded container bytes —
+so the same picture hashes identically whether it arrived as PNG, TIFF, or
+any other `ImageIO`-decodable container. `PasteboardReader` (see
+[Clipboard](#clipboard)) uses it for `.image` `Classification.contentHash`,
+falling back to the raw-byte `BlobStore.contentHash(of:)` when the pixel
+hasher can't decode the bytes or the image exceeds
+`PasteboardReader.maxPixelHashPixelCount`. `CoreGraphicsImagePixelHasher` is
+the production conformance — decodes via `ImageIO`, re-renders into a
+canonical 8-bit/component, RGBA premultiplied-last, sRGB buffer via
+`CGContext` (so two containers of the same picture, or the same picture
+tagged with two different color profiles, hash identically), and streams
+the result through `CryptoKit`'s incremental `SHA256` in fixed-size
+row-band chunks rather than materializing the whole decoded image at once.
+Returns `nil` on undecodable input — never throws or crashes.
+
+**Two documented caveats to the "no false dedup" guarantee** (two images
+that differ by even one *visible* pixel must never hash the same):
+- **EXIF/TIFF orientation is not normalized.** The decode step
+  (`CGImageSourceCreateImageAtIndex`) is called with no orientation option,
+  so a rotated/mirrored image is hashed by its stored pixel grid, not its
+  displayed orientation — unlike `ImageThumbnailDecoder.decode(_:maxPixelSize:)`
+  in `ClipnestApp`, which does apply orientation
+  (`kCGImageSourceCreateThumbnailWithTransform`) for what the picker
+  actually displays. This is safe in direction: it can only cause a
+  **missed** dedup (an extra history row), never a false one. Deliberately
+  left as-is — normalizing it would change the hash of every already-rotated
+  image already hashed by shipped code. Candidate follow-up, not a bug.
+- **Premultiplied alpha collapses RGB beneath fully-transparent pixels.**
+  Under the canonical premultiplied-last render, any pixel with alpha `== 0`
+  stores `R=G=B=0` regardless of its original RGB — so two images differing
+  *only* in the RGB values beneath invisible (alpha `== 0`) pixels hash
+  identically. This is the one genuine false-dedup case in this design;
+  real-world impact is negligible since the differing bytes are, by
+  construction, never displayed.
+
+See `CoreGraphicsImagePixelHasher.swift`'s "KNOWN LIMITATIONS" doc comment
+for the full technical rationale on both, and
+`CoreGraphicsImagePixelHasherTests` for the regression tests pinning each.
 
 ---
 

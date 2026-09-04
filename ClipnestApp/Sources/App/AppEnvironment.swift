@@ -94,6 +94,22 @@ final class AppEnvironment {
   /// forever otherwise.
   let accessibilityWatcher: AccessibilityPermissionWatcher
 
+  /// T-PF1 (D2 fix): the in-flight debounced `enforceRetention` call
+  /// scheduled by `scheduleRetentionEnforcement()`, if any — see that
+  /// method's doc comment. `nil` when no capture-triggered retention pass
+  /// is currently pending or running.
+  private var pendingRetentionTask: Task<Void, Never>?
+
+  /// How long `scheduleRetentionEnforcement()` waits after the LAST capture
+  /// in a burst before actually running `enforceRetention` — long enough to
+  /// coalesce a realistic rapid multi-copy burst (e.g. selecting and
+  /// copying several items in quick succession, or a script/automation
+  /// pasting a sequence of items), short enough that retention still runs
+  /// promptly once things settle. Not user-configurable — a purely internal
+  /// coalescing window, so it lives here as a named constant rather than a
+  /// bare literal at the call site.
+  private static let retentionDebounceInterval: Duration = .milliseconds(750)
+
   /// - Throws: whatever `SwiftDataClipStore`/`SwiftDataSnippetStore`'s
   ///   production `ModelContainer` construction throws (typed
   ///   `ClipStoreError`/`SnippetStoreError.ioFailure`) — e.g. the on-disk
@@ -101,22 +117,62 @@ final class AppEnvironment {
   ///   from "persistence didn't come up," so this is surfaced to the caller
   ///   (`AppDelegate`) rather than silently degrading to a store the user
   ///   didn't ask for.
-  init() throws {
+  ///
+  /// T-PF1 (D1 launch-latency fix): `async` — previously this was a plain
+  /// synchronous `init() throws`, called directly from
+  /// `AppDelegate.applicationDidFinishLaunching`, which meant NOTHING in
+  /// the app (menu bar icon, run loop) could proceed until it returned.
+  /// Two things made that slow: `ModelContainer` construction is blocking
+  /// disk I/O (opening/creating the SQLite-backed store, including
+  /// `ModelContainerRecovery`'s corrupt-store move-aside retry), and each
+  /// store's one-time `normalizedText` backfill (`SwiftDataClipStore
+  /// .prepare()`/`SwiftDataSnippetStore.prepare()`) used to run inline in
+  /// this same synchronous `init`, an unindexed full-table scan. Both now
+  /// run inside `Task.detached`, which hops them onto a background thread
+  /// (detached, so they do NOT inherit this initializer's `@MainActor`
+  /// isolation) — and the two stores' setups run concurrently with each
+  /// other via `async let`, so launch is bounded by the slower of the two,
+  /// not their sum. `AppDelegate` now calls this via `try await
+  /// AppEnvironment()` from inside its own `Task`, so
+  /// `applicationDidFinishLaunching` itself returns immediately.
+  init() async throws {
     // One shared BlobStore instance — see the file's doc comment.
+    //
+    // T-PF8: `BlobStore.defaultBaseDirectory()` (and, transitively,
+    // `SwiftDataClipStore`/`SwiftDataSnippetStore.makeProductionContainer()`
+    // below, which resolve their on-disk store file the same way) honors the
+    // `CLIPNEST_TEST_DATA_ROOT` override — see that method's doc comment.
+    // This line is otherwise unchanged production code: with the variable
+    // unset (every real launch), this resolves to the exact same
+    // `~/Library/Application Support/Clipnest` it always has. The override
+    // exists so `ClipnestAppTests` (a *hosted* unit-test target — see
+    // `ClipnestApp/project.yml`'s `TEST_HOST`, which genuinely launches this
+    // very `init` inside the real app binary under `xcodebuild test`) never
+    // opens/migrates/writes the user's real clipboard database and blobs.
     let blobStore = BlobStore(baseDirectory: BlobStore.defaultBaseDirectory())
     let privacyFilter = PrivacyFilter()
     let settingsStore = SettingsStore()
     let pasteboardReader = PasteboardReader()
-    let clipStore = SwiftDataClipStore(
-      modelContainer: try SwiftDataClipStore.makeProductionContainer(), blobStore: blobStore)
+
+    async let clipStoreSetup: SwiftDataClipStore = Task.detached(priority: .userInitiated) {
+      let container = try SwiftDataClipStore.makeProductionContainer()
+      let store = SwiftDataClipStore(modelContainer: container, blobStore: blobStore)
+      await store.prepare()
+      return store
+    }.value
+    async let snippetStoreSetup: SwiftDataSnippetStore = Task.detached(priority: .userInitiated) {
+      let container = try SwiftDataSnippetStore.makeProductionContainer()
+      let store = SwiftDataSnippetStore(modelContainer: container)
+      await store.prepare()
+      return store
+    }.value
+    let (clipStore, snippetStore) = try await (clipStoreSetup, snippetStoreSetup)
 
     self.blobStore = blobStore
     self.privacyFilter = privacyFilter
     self.settingsStore = settingsStore
     self.pasteboardReader = pasteboardReader
     self.clipStore = clipStore
-    let snippetStore = SwiftDataSnippetStore(
-      modelContainer: try SwiftDataSnippetStore.makeProductionContainer())
     self.snippetStore = snippetStore
 
     // T-OCR2/T-UX1: one shared `VisionTextRecognizer` instance for both the
@@ -332,18 +388,13 @@ final class AppEnvironment {
     // (above) pasteboard observations already share. See
     // `PickerViewModel.handleNewCapture()`'s doc comment for why this is a
     // single bounded page-0 requery, not a full-table refetch.
-    let retentionStore = clipStore
-    monitor.onCapture = { [weak viewModel] _ in
+    monitor.onCapture = { [weak self, weak viewModel] _ in
       viewModel?.handleNewCapture()
-      let cap = settingsStore.retentionCap
-      Task {
-        do {
-          try await retentionStore.enforceRetention(cap: cap)
-        } catch {
-          Self.logger.error(
-            "retention enforcement failed after capture: \(String(describing: error))")
-        }
-      }
+      // T-PF1 (D2 fix): was an unconditional `Task { ... enforceRetention
+      // ... }` fired on EVERY capture — a rapid burst of copies used to run
+      // one full retention pass per capture. `scheduleRetentionEnforcement`
+      // debounces this into (at most) one pass per burst.
+      self?.scheduleRetentionEnforcement()
     }
 
     // Snippet-expansion clipboard fallback (`ClipboardSelectionReplacer`):
@@ -434,10 +485,12 @@ final class AppEnvironment {
   }
 
   /// Trims history down to the user's configured cap once, now — called at
-  /// launch (also runs after each capture via `onCapture`). Fire-and-forget;
-  /// a failure is logged (metadata only), never surfaced, since retention is
+  /// launch (a debounced pass also runs after each capture, via
+  /// `scheduleRetentionEnforcement()`). Fire-and-forget; a failure is
+  /// logged (metadata only), never surfaced, since retention is
   /// best-effort housekeeping, not a user action. Pinned items are always
-  /// kept (guaranteed by `enforceRetention`).
+  /// kept (guaranteed by `enforceRetention`). Not debounced itself — this
+  /// runs exactly once, at launch, so there is no burst to coalesce.
   func enforceRetentionNow() {
     let cap = settingsStore.retentionCap
     let retentionStore = clipStore
@@ -447,6 +500,51 @@ final class AppEnvironment {
       } catch {
         Self.logger.error("retention enforcement failed at launch: \(String(describing: error))")
       }
+    }
+  }
+
+  /// T-PF1 (D2 fix): schedules a single debounced `enforceRetention` pass,
+  /// cancelling and replacing any pass already waiting — so a burst of N
+  /// captures in quick succession (e.g. selecting and copying several items
+  /// in a row) results in roughly ONE retention pass after the burst goes
+  /// quiet for `retentionDebounceInterval`, not N. Called from
+  /// `clipboardMonitor.onCapture` (see `init`); never called for the
+  /// launch-time pass, which has no burst to coalesce (`enforceRetentionNow()`).
+  ///
+  /// Re-reads `settingsStore.retentionCap` AFTER the debounce delay (not at
+  /// schedule time) so a setting changed mid-burst is honored by the pass
+  /// that actually runs, rather than whatever was current when the first
+  /// capture in the burst arrived.
+  ///
+  /// Cancelling a pending (still-sleeping) task reliably stops it before it
+  /// calls `enforceRetention` at all. If a previous pass has already moved
+  /// past the sleep and is actively running on `clipStore`'s actor when a
+  /// new capture arrives, cancellation does not interrupt that in-flight
+  /// actor call (it has no cancellation checkpoints) — it simply finishes,
+  /// and the newly-scheduled pass runs independently after its own delay.
+  /// That is an accepted, intentionally simple tradeoff for a best-effort
+  /// housekeeping pass: still bounded (never more passes than there are
+  /// quiet gaps in the capture stream), just not a hard guarantee of
+  /// exactly one pass per burst under every possible timing.
+  private func scheduleRetentionEnforcement() {
+    pendingRetentionTask?.cancel()
+    let retentionStore = clipStore
+    pendingRetentionTask = Task { [weak self] in
+      do {
+        try await Task.sleep(for: Self.retentionDebounceInterval)
+      } catch {
+        // Cancelled by a newer capture superseding this scheduled pass.
+        return
+      }
+      guard let self else { return }
+      let cap = self.settingsStore.retentionCap
+      do {
+        try await retentionStore.enforceRetention(cap: cap)
+      } catch {
+        Self.logger.error(
+          "retention enforcement failed after capture: \(String(describing: error))")
+      }
+      self.pendingRetentionTask = nil
     }
   }
 }

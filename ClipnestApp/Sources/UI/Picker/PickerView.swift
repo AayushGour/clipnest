@@ -191,17 +191,35 @@ struct PickerView: View {
   /// same method, and since this case returns `.handled`, the event is
   /// consumed here rather than also reaching `.onSubmit` for the same
   /// physical keypress — no risk of double-pasting.
+  ///
+  /// T-BUG1 (bug fix): the bare `.return` case used to match ANY modifier
+  /// combination — so ⌘Return/⌃Return/⇧Return silently ran the exact same
+  /// action as plain Return, with no indication to the user that a distinct
+  /// chord did nothing different. Which `ReturnAction` a Return keystroke
+  /// should trigger is now decided by the pure, unit-tested
+  /// `returnAction(for:)` below, rather than by chained `case .return
+  /// where ...` clauses on `press.modifiers` directly — see that method's
+  /// doc comment for why (and see `PickerViewTests.swift` for the coverage
+  /// this enables that `KeyPress` itself can't be constructed for).
   private func handle(_ press: KeyPress) -> KeyPress.Result {
     switch press.key {
     case .escape:
       viewModel.dismiss()
       return .handled
-    case .return where press.modifiers.contains(.option):
-      viewModel.selectHighlighted(plainText: true)
-      return .handled
     case .return:
-      viewModel.selectHighlighted()
-      return .handled
+      switch Self.returnAction(for: press.modifiers) {
+      case .select:
+        viewModel.selectHighlighted()
+        return .handled
+      case .selectPlainText:
+        viewModel.selectHighlighted(plainText: true)
+        return .handled
+      case .ignore:
+        // A modifier combination the picker doesn't implement (⌘Return,
+        // ⌃Return, ⇧Return, ...) — do NOT silently alias it to plain
+        // Return; let it fall through unhandled instead.
+        return .ignored
+      }
     case .upArrow:
       viewModel.moveSelection(by: -1)
       return .handled
@@ -236,6 +254,56 @@ struct PickerView: View {
     default:
       return .ignored
     }
+  }
+
+  /// The action a Return keystroke should trigger. `internal` (not
+  /// `private`) so `PickerViewTests.swift` can exercise it via `@testable
+  /// import Clipnest` — same visibility rationale as
+  /// `PickerViewModel.pasteContent`/`resolvedSelection` (see
+  /// `PickerViewModelTests.swift`'s top doc comment).
+  enum ReturnAction: Equatable {
+    /// Plain Return: select the highlighted row using its default action.
+    case select
+    /// ⌥Return: select the highlighted row, stripped to plain text/OCR
+    /// text — the shipped, documented "paste without formatting" feature.
+    /// Must keep working exactly as today.
+    case selectPlainText
+    /// Any modifier combination Return doesn't implement (⌘Return,
+    /// ⌃Return, ⇧Return, ...). NOT the same as plain Return — see
+    /// `returnAction(for:)`'s doc comment.
+    case ignore
+  }
+
+  /// T-BUG1 (bug fix): maps a Return keystroke's `EventModifiers` to the
+  /// `ReturnAction` it should trigger. Extracted out of `handle(_:)`'s
+  /// switch (which used to chain `case .return where
+  /// press.modifiers.contains(.option)` followed by a bare `case .return`)
+  /// because that bare case matched ANY *other* modifier combination too —
+  /// so ⌘Return/⌃Return/⇧Return silently ran the exact same action as plain
+  /// Return, with no indication anything differed.
+  ///
+  /// `EventModifiers` (unlike `KeyPress`, which has no public initializer —
+  /// see `PickerViewTests.swift`'s top doc comment) is a plain `OptionSet`
+  /// and so can be constructed directly in a test, which is why this
+  /// decision is pulled out as its own pure function rather than left
+  /// inline in the `.onKeyPress` switch.
+  ///
+  /// Only `.shift`/`.control`/`.command` (plus `.option`, handled first)
+  /// count as "held" here. `.capsLock`/`.numericPad` are incidental flags
+  /// SwiftUI can set on a keypress regardless of the user's intent — a
+  /// naive `press.modifiers.isEmpty` check would wrongly disqualify a plain
+  /// Return whenever one of those happens to be set, so they're excluded
+  /// from the check rather than compared for exact equality against
+  /// `[]`/`.option`.
+  static func returnAction(for modifiers: EventModifiers) -> ReturnAction {
+    if modifiers.contains(.option) {
+      return .selectPlainText
+    }
+    let unimplementedReturnModifiers: EventModifiers = [.shift, .control, .command]
+    guard modifiers.isDisjoint(with: unimplementedReturnModifiers) else {
+      return .ignore
+    }
+    return .select
   }
 
   /// The single header row: search field on the left (taking the

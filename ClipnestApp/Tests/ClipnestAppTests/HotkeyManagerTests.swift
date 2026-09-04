@@ -22,7 +22,8 @@ struct HotkeyManagerTests {
   /// Carbon virtual keycode for "B" (`kVK_ANSI_B`) — an arbitrary other key.
   private static let bKeyCode: UInt16 = 0x0B
 
-  private static let optionCommandV = KeyboardShortcuts.Shortcut(.v, modifiers: [.command, .option])
+  private static let optionCommandV = KeyboardShortcuts.Shortcut(
+    .v, modifiers: [.command, .option])
 
   private func keyDown(
     keyCode: UInt16,

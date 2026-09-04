@@ -132,7 +132,83 @@ public final class ClipboardMonitor {
   /// `ignore(changeCount:)`) and that `checkNow()` should treat as
   /// already-seen instead of a new external copy. `nil` when nothing is
   /// pending. See `ignore(changeCount:)`'s doc comment.
+  ///
+  /// **T-HANG4 (residual self-paste race — down from 18/18 to a rare,
+  /// load-dependent race after T-HANG2's fix):** the one remaining hop is
+  /// in `Paster.paste` (`Sources/ClipnestCore/Paste/Paster.swift`, not this
+  /// file) — `await onPasteboardWrite?(pasteboard.changeCount)`, which
+  /// calls back into `ignore(changeCount:)` via
+  /// `PickerViewModel+Paste.performPaste`'s closure. That `await`, on a
+  /// value of a `@MainActor`-isolated function type, elides its executor
+  /// hop and runs synchronously whenever the Swift runtime can prove the
+  /// caller is already on `MainActor`'s executor (the common case here,
+  /// since `paste()` is entered from an already-`@MainActor`-isolated
+  /// caller) — but that elision is a runtime optimization, not a language
+  /// guarantee; under contention it can still suspend and re-enqueue as a
+  /// fresh job on `MainActor`'s serial queue, where it can land BEHIND an
+  /// already-queued `checkNow()` tick from the 0.4s poll `Timer`. If that
+  /// happens, `checkNow()` reads the new `changeCount` before `ignore(...)`
+  /// has registered it. Confirmed real and reproducible with a standalone
+  /// harness mirroring `tools/stress-harness`'s `SelfPasteRaceScenario`
+  /// (11/780 trials raced, all at a single narrow offset — see this task's
+  /// report) — genuinely rare, and outside this file's edit boundary to
+  /// close at the source. What IS closeable here, and implemented below:
+  /// `checkNow()` re-checks `ignoredChangeCount` a second time, immediately
+  /// before the store write that would otherwise create the duplicate row
+  /// — see that check's own doc comment for why this reliably narrows (not
+  /// eliminates) the window: it gives a same-cycle `ignore(...)` call the
+  /// FULL duration of `checkNow()`'s own off-main hops (`classify`'s
+  /// `Task.detached`, at minimum) to land, not just the single hop above.
   private var ignoredChangeCount: Int?
+
+  /// T-HANG5: `Task` handle for a capture-time text-recognition job
+  /// currently scheduled or in flight, keyed by the `ClipItem.id` it
+  /// targets. Lets a caller that knows an item's row is gone (deleted, or
+  /// `clearHistory()`) cancel that item's still-pending recognition instead
+  /// of letting it run Vision + a doomed `store.setRecognizedText` write to
+  /// completion — the capture-time analogue of `OCRBackfillCoordinator
+  /// .run`'s own cooperative-cancellation model (see that type's doc
+  /// comment; this file does not edit it, per this task's boundary).
+  ///
+  /// **Known limitation (T-HANG5):** nothing in this file calls
+  /// `cancelPendingRecognition(for:)`/`cancelAllPendingRecognition()` yet.
+  /// `ClipboardMonitor` has no visibility into deletions or `clearHistory()`
+  /// today — `PickerViewModel.delete(_:)` and `HistorySettingsView`'s
+  /// "Clear All History…" action call `ClipStore.delete`/`clearHistory`
+  /// directly, never through this monitor (confirmed by inspection: no
+  /// call site outside this file references either method). Wiring one of
+  /// those call sites to invoke a method below is required to actually
+  /// close the gap, and both files (`PickerViewModel.swift`,
+  /// `HistorySettingsView.swift`) are outside this task's edit boundary —
+  /// see this task's report for the exact wiring a full fix would add.
+  /// Even once wired, cancellation here is best-effort, not a guarantee:
+  /// it only pre-empts a job that hasn't yet reached (or resumed past) the
+  /// `Task.isCancelled` checks around `recognizer.recognizeText(in:quality:)`
+  /// in `scheduleTextRecognition` below — once Vision is actually running
+  /// (inside `VisionTextRecognizer`'s own serial `recognitionQueue`, also
+  /// outside this file), cancelling the wrapping `Task` cannot interrupt it
+  /// mid-recognition, mirroring `OCRBackfillCoordinator`'s own "never
+  /// mid-item" cancellation contract. Until wired, today's existing
+  /// outcome stands unchanged: an already-running job that outlives its
+  /// target row fails harmlessly at the `store.setRecognizedText` write
+  /// (`.notFound`, routed through `captureFailureHandler` — see T-OCR6)
+  /// with no ghost row created, exactly as verified at 100-image scale
+  /// before this change.
+  ///
+  /// If two recognition jobs are ever in flight for the same item id at
+  /// once (see `ClipboardMonitorTests
+  /// .recognitionHandlesConcurrentDuplicateCopiesBeforeFirstPassCompletes`
+  /// for when that happens), this dictionary tracks only the most recently
+  /// scheduled job for that id — an earlier job's own completion (success
+  /// or failure) then removes whichever entry is CURRENTLY stored for that
+  /// id, which may by then be the newer job's, not its own. Never a
+  /// correctness issue (every job still independently completes-or-fails
+  /// safely on its own, per `scheduleTextRecognition`'s existing resilience
+  /// contract, and a stale removal only ever makes a future
+  /// `cancelPendingRecognition(for:)` call a no-op, never cancels the wrong
+  /// job) — just a note that cancellation coverage in that edge case is
+  /// partial, consistent with this feature's overall best-effort nature.
+  private var pendingRecognitionTasks: [UUID: Task<Void, Never>] = [:]
 
   /// Whether capture is currently paused. Honored by `checkNow()`; wired to
   /// UI (menu + Settings) in plan task T31.
@@ -236,6 +312,26 @@ public final class ClipboardMonitor {
     ignoredChangeCount = changeCount
   }
 
+  /// T-HANG5: cancels the capture-time recognition job for `id`, if one is
+  /// still pending, and removes its tracking entry. No-op if none is
+  /// pending — safe to call unconditionally (e.g. right after a delete,
+  /// regardless of whether that item ever had OCR scheduled). See
+  /// `pendingRecognitionTasks`'s doc comment for what this can and cannot
+  /// pre-empt, and for the caller-side wiring still needed for this to run
+  /// in production (outside this task's edit boundary).
+  public func cancelPendingRecognition(for id: UUID) {
+    pendingRecognitionTasks.removeValue(forKey: id)?.cancel()
+  }
+
+  /// T-HANG5: cancels every currently-pending capture-time recognition job
+  /// — the "Clear All History…" analogue of `cancelPendingRecognition(for:)`
+  /// above, since a full `clearHistory()` invalidates every row at once.
+  public func cancelAllPendingRecognition() {
+    let tasks = pendingRecognitionTasks.values
+    pendingRecognitionTasks.removeAll()
+    for task in tasks { task.cancel() }
+  }
+
   /// Performs one check-and-capture cycle synchronously with respect to test
   /// control flow: reads the pasteboard's current `changeCount`, and if it
   /// differs from the last observed value, classifies and (if accepted by
@@ -278,9 +374,15 @@ public final class ClipboardMonitor {
     // is `Sendable` by construction (`PasteboardReader.RawPayload`).
     guard let rawPayload = reader.pullRawPayload(from: pasteboard) else { return nil }
     let reader = self.reader
-    let result = await Task.detached(priority: .utility) {
+    let classified = await Task.detached(priority: .utility) {
       reader.classify(rawPayload)
     }.value
+    // T-PF2: `classify` can now return `nil` for an image that exceeds
+    // `PasteboardReader.maxCapturedImageByteSize`/`maxCapturedImagePixelDimension`
+    // (see its doc comment) — same "nothing to capture this cycle" outcome
+    // as `pullRawPayload` returning `nil` just above, not a failure worth
+    // routing through `captureFailureHandler`.
+    guard let result = classified else { return nil }
 
     let blobPath: String?
     do {
@@ -303,6 +405,36 @@ public final class ClipboardMonitor {
       // (a dangling blobPath is worse than not capturing this cycle) — same
       // "surface, don't swallow" pattern as a `ClipStore` failure below.
       captureFailureHandler(error)
+      return nil
+    }
+
+    // T-HANG4: re-check `ignoredChangeCount` a second time, right before the
+    // one step that actually creates/bumps a persisted row — not just once,
+    // at this method's very top. Everything between that first check and
+    // here (`classify`'s `Task.detached` hop above, at minimum, plus the
+    // blob write's own hop when one runs) gives a same-cycle
+    // `Paster.paste` real wall-clock time to report its write via
+    // `onPasteboardWrite` and call `ignore(changeCount:)` — see
+    // `ignoredChangeCount`'s doc comment (T-HANG4) for the exact hop this
+    // is closing the tail of. Same semantics as the early check: bail out
+    // with nothing stored, no `onCapture`, no OCR scheduling — nothing has
+    // been persisted to `store` yet, only (possibly) a blob written above.
+    //
+    // That blob is deliberately NOT deleted here. `BlobStore` is content-
+    // addressed with NO reference counting: `write(_:)` returns an
+    // EXISTING file's path unchanged whenever those bytes are already on
+    // disk. This bail fires on a self-paste race, where the bytes are by
+    // construction an existing history item's own content round-tripped
+    // through the pasteboard — for `.richText`, `Paster.writeRichText` and
+    // `PasteboardReader.readRichText` preserve the stored RTF byte-for-byte
+    // — so `blobPath` here is very often the SAME path a live, visible item
+    // still references. Deleting it corrupts that unrelated item (its next
+    // blob read throws `.notFound`), trading a harmless duplicate row for
+    // real data loss. Not deleting costs nothing: if the bytes were already
+    // present no new file was created, and if they weren't, the next
+    // capture of the same content reuses this exact blob.
+    if ignoredChangeCount == currentChangeCount {
+      ignoredChangeCount = nil
       return nil
     }
 
@@ -373,25 +505,50 @@ public final class ClipboardMonitor {
   /// method itself returns immediately (it only *schedules* the detached
   /// task), so capture latency is unaffected regardless of how long
   /// recognition takes. Every failure — recognition finding nothing,
-  /// recognition failing, or the store write failing — is swallowed to
-  /// `captureFailureHandler`/silently, exactly like every other best-effort
-  /// path in this file; it can never surface as a capture failure, since
-  /// the item itself was already captured successfully before this runs.
+  /// recognition failing, or the store write failing — is routed through
+  /// `captureFailureHandler` (T-OCR6 — previously the store-write failure
+  /// went straight to the static `Self.logCaptureFailure`, unlike every
+  /// other failure path in this file, which made it untestable and
+  /// unable to honor an injected handler) rather than surfaced as a
+  /// capture failure, since the item itself was already captured
+  /// successfully before this runs.
+  ///
+  /// T-HANG5: tracks its own `Task` in `pendingRecognitionTasks`, keyed by
+  /// `item.id`, for the lifetime of the job (removed on every exit path —
+  /// success, "nothing recognized," or a store-write failure), and checks
+  /// `Task.isCancelled` both before starting recognition and again before
+  /// persisting its result, so a caller with a handle to this monitor CAN
+  /// cancel a still-pending job via `cancelPendingRecognition(for:)`/
+  /// `cancelAllPendingRecognition()` — see `pendingRecognitionTasks`'s doc
+  /// comment for what's wired today vs. what a full fix still needs.
   private func scheduleTextRecognition(
     for item: ClipItem, imageData: Data, recognizer: any TextRecognizing,
     quality: TextRecognitionQuality
   ) {
     let store = self.store
-    Task.detached(priority: .utility) { [weak self] in
+    let captureFailureHandler = self.captureFailureHandler
+    let itemID = item.id
+    let task = Task.detached(priority: .utility) { [weak self] in
+      defer {
+        Task { @MainActor [weak self] in
+          self?.pendingRecognitionTasks.removeValue(forKey: itemID)
+        }
+      }
+
+      guard !Task.isCancelled else { return }
+
       guard let text = await recognizer.recognizeText(in: imageData, quality: quality),
         !text.isEmpty
       else {
         return
       }
+
+      guard !Task.isCancelled else { return }
+
       do {
-        try await store.setRecognizedText(item.id, text: text)
+        try await store.setRecognizedText(itemID, text: text)
       } catch {
-        Self.logCaptureFailure(error)
+        captureFailureHandler(error)
         return
       }
       guard let self else { return }
@@ -401,5 +558,6 @@ public final class ClipboardMonitor {
         self.onCapture(recognized)
       }
     }
+    pendingRecognitionTasks[itemID] = task
   }
 }

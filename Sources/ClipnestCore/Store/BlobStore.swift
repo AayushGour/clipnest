@@ -29,6 +29,65 @@ public struct BlobStore: Sendable {
 
   private static let appDirectoryName = "Clipnest"
 
+  /// T-PF8 (P0 safety fix): name of the environment variable that, when set
+  /// to a non-empty value, overrides the directory `defaultBaseDirectory()`
+  /// resolves to.
+  ///
+  /// EXISTS SOLELY to stop `xcodebuild test` from touching the real,
+  /// production `~/Library/Application Support/Clipnest` store + blobs.
+  /// `ClipnestAppTests` is a *hosted* unit-test target (`ClipnestApp/project.yml`
+  /// sets `TEST_HOST` to the built `Clipnest.app`), which means `xcodebuild
+  /// test` genuinely LAUNCHES the production app binary as the process under
+  /// test — `AppDelegate.applicationDidFinishLaunching` runs for real,
+  /// builds a real `AppEnvironment`, and (pre-fix) opened/migrated/wrote the
+  /// user's live clipboard database and blobs on every single test run, with
+  /// no rollback if a migration went wrong.
+  ///
+  /// `ClipnestApp/project.yml`'s `ClipnestApp` scheme sets this via the
+  /// `test.environmentVariables` key to a throwaway directory outside
+  /// `~/Library/Application Support`. For a *hosted* unit-test target there
+  /// is no separate "test runner" process to worry about losing the
+  /// variable across (unlike a UI-test target's runner-app-launches-AUT-as-
+  /// a-child-process shape): the host app IS the one process `xcodebuild`
+  /// launches to run the injected test bundle, so a `Test` action
+  /// environment variable set in the scheme reaches it directly, the same
+  /// way any other process inherits variables set on it at launch — verified
+  /// empirically for this fix (see the T-PF8 handoff: `ClipItems.store`'s
+  /// mtime before/after an `xcodebuild test` run with this override set).
+  ///
+  /// Read in exactly one place — `defaultBaseDirectory(fileManager:environment:)`
+  /// below — per coding-standards.md's "config in one place" rule.
+  /// `BlobStore.init`, `SwiftDataClipStore.makeProductionContainer()`, and
+  /// `SwiftDataSnippetStore.makeProductionContainer()` all already resolve
+  /// their on-disk root through that one method (see each call site), so
+  /// this override reaches all three with no separate plumbing anywhere
+  /// else — the fix that actually redirects blobs, not just the metadata
+  /// stores.
+  ///
+  /// A missing/absent variable is the untouched, byte-identical production
+  /// path (see `defaultBaseDirectory(fileManager:environment:)`) — the
+  /// default never depends on this variable being unset in any fragile way,
+  /// it simply falls through unchanged when it's not present.
+  ///
+  /// **T-SEC1 (P0 security fix):** the branch that actually reads this
+  /// variable is compiled ONLY into Debug builds (`#if DEBUG` around it in
+  /// `defaultBaseDirectory(fileManager:environment:)` below) — a notarized
+  /// Release build has no such code path in the shipped binary at all, so
+  /// nothing in the user's environment (an inherited shell export,
+  /// `launchctl setenv`, a malicious LaunchAgent) can silently redirect
+  /// where a released Clipnest reads/writes clipboard data. This is safe
+  /// because every legitimate reason to read this variable — `swift test`
+  /// (builds Debug by default) and `xcodebuild test`'s `Test` action (this
+  /// scheme's `TestAction buildConfiguration` is explicitly `"Debug"`, see
+  /// `ClipnestApp/project.yml`'s `schemes.ClipnestApp.test.config: Debug`)
+  /// — only ever needs it in a Debug build; a Release build (what
+  /// `scripts/build.sh`/notarization actually ships) legitimately never
+  /// does. Verified empirically that SwiftPM defines the `DEBUG`
+  /// compilation condition for `-c debug` and NOT for `-c release` (the
+  /// T-SEC1 handoff records the throwaway probe-package output proving
+  /// this, independent of any assumption about Xcode/SwiftPM defaults).
+  public static let testDataRootEnvironmentVariableName = "CLIPNEST_TEST_DATA_ROOT"
+
   private let baseDirectory: URL
   // `FileManager` isn't `Sendable` in this SDK's overlay even though Apple
   // documents the shared/default instance (and any instance used only for
@@ -44,12 +103,41 @@ public struct BlobStore: Sendable {
   }
 
   /// The real production base directory (`~/Library/Application
-  /// Support/Clipnest`). Never referenced internally by `write`/`read`/
+  /// Support/Clipnest`) — or, T-PF8, whatever
+  /// `testDataRootEnvironmentVariableName` is set to, when it's set to a
+  /// non-empty value. Never referenced internally by `write`/`read`/
   /// `delete` — only offered as a convenience default for production callers
   /// (e.g. `ClipboardMonitor`'s and `InMemoryClipStore`'s default initializer
-  /// parameters). Tests always construct `BlobStore` with an explicit temp
-  /// directory instead of calling this.
-  public static func defaultBaseDirectory(fileManager: FileManager = .default) -> URL {
+  /// parameters, and `SwiftDataClipStore`/`SwiftDataSnippetStore`'s
+  /// `makeProductionContainer()`). Tests always construct `BlobStore` with an
+  /// explicit temp directory instead of calling this (except this file's
+  /// own tests for the override logic itself, and the dedicated T-PF8
+  /// isolation test proving the SwiftData production containers honor it
+  /// too — see `ProductionStoreIsolationTests.swift`).
+  ///
+  /// - Parameter environment: Injectable so this override can be tested
+  ///   deterministically without mutating the real process environment (see
+  ///   `BlobStoreTests`'s override tests) — defaults to the real
+  ///   `ProcessInfo.processInfo.environment` for every production call site,
+  ///   none of which pass this parameter explicitly.
+  ///
+  /// T-SEC1: the override branch below is `#if DEBUG`-gated — see
+  /// `testDataRootEnvironmentVariableName`'s doc comment for why that's the
+  /// correct, sufficient gate for every real caller (`swift test`,
+  /// `xcodebuild test`'s Debug-configured Test action) and why a Release
+  /// build must never honor it. A Release build takes the exact same
+  /// fallback path as an absent/empty variable in a Debug build — this
+  /// function's production behavior with no override present is unchanged
+  /// in either configuration.
+  public static func defaultBaseDirectory(
+    fileManager: FileManager = .default,
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> URL {
+    #if DEBUG
+      if let override = environment[testDataRootEnvironmentVariableName], !override.isEmpty {
+        return URL(fileURLWithPath: override, isDirectory: true)
+      }
+    #endif
     let appSupport =
       fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
       ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent(
@@ -96,14 +184,36 @@ public struct BlobStore: Sendable {
   }
 
   /// Reads the bytes at `blobPath`.
-  /// - Throws: `BlobStoreError.notFound` if no blob exists at that path.
+  ///
+  /// T-PF4: uses `.mappedIfSafe` so real blobs (captured images run ~25MB —
+  /// `.claude/logs/stress-artifacts/senior-dev-after-fix-run.txt:5`) are
+  /// paged in from disk on demand rather than fully copied into a heap
+  /// allocation up front. `.mappedIfSafe` only maps when Foundation judges
+  /// it safe to (contiguous local-disk file, page-aligned) and transparently
+  /// falls back to a normal read otherwise — never less correct, just not
+  /// always mapped.
+  ///
+  /// Lifetime note (checked against every read call site — `ItemRow.swift`,
+  /// `ItemPreview.swift`, `PickerViewModel+Paste.swift`,
+  /// `OCRBackfillCoordinator.swift` — none holds the returned `Data` past
+  /// its own immediate, synchronous consumption; see this task's handoff
+  /// for the full site-by-site reasoning): a mapped `Data`'s bytes are
+  /// backed by the file on disk, not copied at read time, so a caller that
+  /// stashes the `Data` and reads its bytes only AFTER the blob has been
+  /// `delete(blobPath:)`-ed risks a fault. Deleting a still-open-mapped file
+  /// on a local volume is ordinarily safe (the OS keeps the underlying
+  /// storage alive for the life of the mapping — the same "unlink an
+  /// open/mapped file" guarantee any Unix file descriptor gets), but this is
+  /// still a real constraint future call sites must respect: consume mapped
+  /// bytes before/without racing a delete of the same blob, don't cache the
+  /// raw `Data` itself across a delete.
   public func read(blobPath: String) throws -> Data {
     let source = fileURL(forBlobPath: blobPath)
     guard fileManager.fileExists(atPath: source.path) else {
       throw BlobStoreError.notFound
     }
     do {
-      return try Data(contentsOf: source)
+      return try Data(contentsOf: source, options: .mappedIfSafe)
     } catch {
       throw BlobStoreError.ioFailure(underlying: String(describing: error))
     }
