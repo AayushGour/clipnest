@@ -12,6 +12,22 @@
 // `NSApp.activate(...)`. `AppEnvironment` owns the single instance of this
 // controller and drives `update(...)` from
 // `PickerView`'s `.onChange(of: viewModel.previewTargetID)`.
+//
+// T-PF3 (P0 image-hang fix), D4: `update(...)` used to (1) build a BRAND NEW
+// `NSHostingController` on every call — every hover, at the picker's ~20ms
+// hover cadence (`PickerViewModel+Preview.previewShowDelay`) — and (2) call
+// `hostingController.view.fittingSize`, forcing a full synchronous SwiftUI
+// layout pass before the panel could be sized. Combined with D1's unbounded
+// image decode, that synchronous layout pass on an `.image` preview is what
+// produced the reported hang. Two fixes, below: `hostingController` is now a
+// single instance reused across calls (`.rootView` reassigned, not
+// recreated — `ItemPreview`'s own `.id(item.id)` still resets its internal
+// `@State` per item, so reuse doesn't change behavior); and a plain `.image`
+// preview (no recognized-text section) computes its content size directly
+// from known/bounded quantities (`boundedImageContentSize`) instead of
+// calling `fittingSize` at all. `fittingSize` is still used for text/file
+// previews and for an image WITH a recognized-text section — those need
+// real text layout to size correctly, same as before.
 
 import AppKit
 import ClipnestCore
@@ -25,8 +41,20 @@ final class ItemPreviewController {
   /// the width cap in `update` and the placement in `positionPanel` — they
   /// have to agree or the panel is sized for one gap and placed with another.
   private static let gap: CGFloat = 24
+  /// Floor on the panel's content size — small enough to never be hit by
+  /// real content, just a guard against a near-empty popover if a preview's
+  /// content were ever pathologically tiny.
+  private static let minPanelWidth: CGFloat = 200
+  private static let minPanelHeight: CGFloat = 100
 
   private var panel: NSPanel?
+  /// Reused across every `update(...)` call instead of rebuilding an
+  /// `NSHostingController` (and its whole SwiftUI view hierarchy) on every
+  /// hover — see this file's top doc comment. `AnyView`-erased because a
+  /// stored property needs a concrete type, and each call's rootView is
+  /// `ItemPreview(...).id(item.id)`, an opaque `some View` whose concrete
+  /// type isn't nameable here.
+  private var hostingController: NSHostingController<AnyView>?
 
   /// Shows `item`'s preview beside `anchorRect` (in screen coordinates), or
   /// hides the preview if `item` (or `anchorRect`) is `nil`. Never becomes
@@ -76,16 +104,17 @@ final class ItemPreviewController {
     // the previous item's already-loaded image while the new one loads.
     // `onHover` reports pointer hover over the popover back to the view model
     // so it stays open (and scrollable) while hovered.
-    let hostingController = NSHostingController(
-      rootView: ItemPreview(
+    let hostingController =
+      self.hostingController ?? NSHostingController(rootView: AnyView(EmptyView()))
+    self.hostingController = hostingController
+    hostingController.rootView = AnyView(
+      ItemPreview(
         item: item, blobStore: blobStore, imageMaxWidth: imageMaxWidth, onHover: onPreviewHover
       ).id(item.id))
     panel.contentViewController = hostingController
-    let fittingSize = hostingController.view.fittingSize
-    panel.setContentSize(
-      NSSize(
-        width: max(fittingSize.width, 200),
-        height: max(fittingSize.height, 100)))
+    let size = contentSize(
+      for: item, hostingController: hostingController, imageMaxWidth: imageMaxWidth)
+    panel.setContentSize(size)
     // Vertically center the popover on the pointer (which is over the hovered
     // row), so it appears beside that row rather than at the picker's top.
     positionPanel(
@@ -99,6 +128,52 @@ final class ItemPreviewController {
   /// hidden/never shown.
   func hide() {
     panel?.orderOut(nil)
+  }
+
+  /// The panel's content size for `item`. A plain `.image` item (no
+  /// recognized-text section) uses `boundedImageContentSize` — computed
+  /// directly from known/bounded quantities, no SwiftUI layout involved.
+  /// Everything else (text, file, or an image WITH a recognized-text
+  /// section) still measures `hostingController.view.fittingSize`: those
+  /// all legitimately depend on real text layout to size correctly (text is
+  /// already length-capped per chunk, see `ItemPreview.TextPreview`, so
+  /// this remaining `fittingSize` use is bounded/cheap, unlike the removed
+  /// image case which had no such cap before T-PF3).
+  private func contentSize(
+    for item: ClipItem, hostingController: NSHostingController<AnyView>, imageMaxWidth: CGFloat
+  ) -> NSSize {
+    if item.kind == .image, !item.hasRecognizedText {
+      return boundedImageContentSize(for: item, maxSide: imageMaxWidth)
+    }
+    let fittingSize = hostingController.view.fittingSize
+    return NSSize(
+      width: max(fittingSize.width, Self.minPanelWidth),
+      height: max(fittingSize.height, Self.minPanelHeight))
+  }
+
+  /// Computes the popover's content size for a plain image preview (no
+  /// recognized-text section) WITHOUT invoking SwiftUI layout — see this
+  /// file's top doc comment (T-PF3 D4) for why that synchronous layout pass
+  /// was the direct cause of the reported hang. The size is always exactly
+  /// `ItemPreview.contentPadding` × 2 plus the image's own aspect-fit box
+  /// (`ScaledImage.displaySize`, the SAME formula `ItemPreview` itself
+  /// renders with — see that type's doc comment): if the image is already
+  /// decoded and cached (`ItemThumbnailCache.preview`, a repeat hover), its
+  /// real pixel size is used; on the very first hover of an image that
+  /// isn't cached yet, `ItemPreview.imagePlaceholderSize` is used instead —
+  /// the exact size `AsyncBlobImage` renders its "still loading" spinner
+  /// box at, so this matches what's actually on screen at that moment
+  /// (identical to what `fittingSize` would have measured then anyway,
+  /// since the async decode hasn't produced a result yet either way).
+  private func boundedImageContentSize(for item: ClipItem, maxSide: CGFloat) -> NSSize {
+    let pixelSize =
+      item.blobPath.flatMap { ItemThumbnailCache.preview.image(for: $0)?.size }
+      ?? ItemPreview.imagePlaceholderSize
+    let display = ScaledImage.displaySize(for: pixelSize, maxSide: maxSide)
+    let chrome = ItemPreview.contentPadding * 2
+    return NSSize(
+      width: max(display.width + chrome, Self.minPanelWidth),
+      height: max(display.height + chrome, Self.minPanelHeight))
   }
 
   private func makePanel() -> NSPanel {

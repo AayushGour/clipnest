@@ -46,6 +46,35 @@ final class UpdateChecker {
   private nonisolated static let releasesAPIURL =
     "https://api.github.com/repos/AayushGour/clipnest/releases/latest"
 
+  /// T-PF4: `curl`'s `--max-time` — the ceiling (seconds) on the WHOLE
+  /// request (connect + transfer) before curl gives up and exits non-zero.
+  /// This runs on an unattended 24h background timer, not a user-interactive
+  /// path, so a merely-slow-but-working connection costs nothing extra; the
+  /// point is bounding a genuinely stuck connection, which previously could
+  /// pin a worker thread indefinitely (see `fetchLatestReleaseJSON()`'s doc
+  /// comment). 10s comfortably covers a slow GitHub API response.
+  private nonisolated static let curlMaxTimeSeconds = 10
+
+  /// T-PF4: `curl`'s `--connect-timeout` — a tighter ceiling (seconds) on
+  /// just establishing the TCP/TLS connection, strictly less than
+  /// `curlMaxTimeSeconds`. Lets a fully unreachable host (no response at
+  /// all, e.g. offline / DNS failure) fail fast instead of waiting out the
+  /// full transfer budget.
+  private nonisolated static let curlConnectTimeoutSeconds = 5
+
+  /// T-PF4: dedicated serial queue that Swift Concurrency does not own —
+  /// exactly the pattern `VisionTextRecognizer.recognitionQueue` documents
+  /// (`Sources/ClipnestCore/OCR/VisionTextRecognizer.swift`). Moves the
+  /// synchronous, blocking `Process`/`Pipe` wait in
+  /// `fetchLatestReleaseJSON()` off the cooperative thread pool entirely —
+  /// without this, that `nonisolated static func ... async` method (which
+  /// contains no `await`) runs its ENTIRE body, including
+  /// `readDataToEndOfFile()`/`waitUntilExit()`, on whatever cooperative-pool
+  /// worker thread picks it up (per SE-0338), pinning it for the full
+  /// network round trip.
+  private nonisolated static let processQueue = DispatchQueue(
+    label: "com.clipnest.updatechecker.processQueue", qos: .utility)
+
   private enum Key {
     /// Scoped to this type, not `SettingsStore` — this is internal cache
     /// state (when did we last poll GitHub), not user-facing configuration,
@@ -240,37 +269,63 @@ final class UpdateChecker {
     return tag
   }
 
-  /// Spawns `/usr/bin/curl -fsSL releasesAPIURL` (same strategy as
-  /// `AppUpdater`/`scripts/update.sh` — no `URLSession`/sockets anywhere in
-  /// the codebase) and returns its captured stdout, or `nil` on any failure
-  /// (missing binary, non-zero exit, offline). `nonisolated` so the
-  /// synchronous `Process`/`Pipe` wait happens off the main actor — this
-  /// check runs on a 24h background timer, and there's no reason to hold up
-  /// the UI thread on it.
+  /// The exact argument list `fetchLatestReleaseJSON()` spawns `curl` with —
+  /// factored out as a pure, `Process`-free function (same "pure logic,
+  /// unit-tested directly" spirit as `isUpdateAvailable`/`parseTagName`
+  /// above) so the `--max-time`/`--connect-timeout` fix is unit-testable
+  /// without actually spawning a process or touching the network. `-fsSL`
+  /// is unchanged from the original invocation (fail on HTTP errors,
+  /// silent, show errors, follow redirects).
+  nonisolated static func curlArguments(for urlString: String) -> [String] {
+    [
+      "--max-time", String(curlMaxTimeSeconds),
+      "--connect-timeout", String(curlConnectTimeoutSeconds),
+      "-fsSL", urlString,
+    ]
+  }
+
+  /// Spawns `/usr/bin/curl` (same strategy as `AppUpdater`/
+  /// `scripts/update.sh` — no `URLSession`/sockets anywhere in the
+  /// codebase) with `curlArguments(for: releasesAPIURL)` and returns its
+  /// captured stdout, or `nil` on any failure (missing binary, non-zero
+  /// exit — including a `--max-time`/`--connect-timeout` timeout, offline).
   ///
-  /// Known, accepted limitation, flagged rather than silently assumed fine:
-  /// `curl` is given no `--max-time`, matching `scripts/update.sh`'s own
-  /// invocation exactly (kept as the single source of truth for the request
-  /// shape) — a genuinely stuck connection could hold this background
-  /// worker thread longer than usual. Not fixed here since it would
-  /// diverge from that shared invocation and isn't part of the routed spec.
+  /// T-PF4: the actual `Process.run()`/`readDataToEndOfFile()`/
+  /// `waitUntilExit()` sequence — all synchronous, blocking calls — now runs
+  /// entirely inside `processQueue.async`, not on this `async` function's
+  /// caller-visible cooperative-pool thread. `withCheckedContinuation`
+  /// bridges that queue's completion back to `async`, mirroring
+  /// `VisionTextRecognizer.recognizeText(in:quality:)`'s exact pattern (see
+  /// `processQueue`'s doc comment above for why this matters: without it, a
+  /// stuck/slow connection would pin a Swift Concurrency cooperative-pool
+  /// worker thread for the duration, same class of bug T-HANG1 fixed for
+  /// OCR). `--max-time`/`--connect-timeout` now also bound how long that can
+  /// ever be, regardless.
   private nonisolated static func fetchLatestReleaseJSON() async -> Data? {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
-    process.arguments = ["-fsSL", releasesAPIURL]
-    let stdout = Pipe()
-    process.standardOutput = stdout
-    process.standardError = Pipe()
+    await withCheckedContinuation { continuation in
+      processQueue.async {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
+        process.arguments = curlArguments(for: releasesAPIURL)
+        let stdout = Pipe()
+        process.standardOutput = stdout
+        process.standardError = Pipe()
 
-    do {
-      try process.run()
-    } catch {
-      return nil
+        do {
+          try process.run()
+        } catch {
+          continuation.resume(returning: nil)
+          return
+        }
+
+        let data = stdout.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+          continuation.resume(returning: nil)
+          return
+        }
+        continuation.resume(returning: data)
+      }
     }
-
-    let data = stdout.fileHandleForReading.readDataToEndOfFile()
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else { return nil }
-    return data
   }
 }

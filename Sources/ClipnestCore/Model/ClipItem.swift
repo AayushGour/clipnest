@@ -16,6 +16,22 @@ public struct ClipItem: Identifiable, Codable, Equatable, Sendable {
   public var createdAt: Date
   public var kind: ItemKind
   public var previewText: String
+  /// A stable content identifier used for dedup (`ClipStore`'s
+  /// consecutive-duplicate collapse). For every `ItemKind` except
+  /// `.image`, this is a raw-byte SHA-256 (`BlobStore.contentHash(of:)`).
+  /// For `.image` (T-PF5b), `PasteboardReader` instead prefers a
+  /// format-independent hash of the DECODED PIXEL CONTENT
+  /// (`ImagePixelHashing`/`CoreGraphicsImagePixelHasher`) — so the same
+  /// picture dedups identically regardless of whether it was captured as
+  /// PNG or TIFF — falling back to the same raw-byte hash every other kind
+  /// uses when: the pixel hasher can't decode the bytes, OR the image's
+  /// total pixel count exceeds `PasteboardReader.maxPixelHashPixelCount`
+  /// (T-PF5e's defensive ceiling against the multi-gigabyte peak-memory
+  /// cost of decoding a very large image — see that constant's doc
+  /// comment for the measured numbers and arithmetic). Either way, the
+  /// hash stays exact — never a downsampled/perceptual digest — so a
+  /// fallback never risks a false dedup, only a loss of
+  /// format-independence for the images it applies to.
   public var contentHash: String
   public var pinned: Bool
   /// When this item was pinned — set by `ClipStore.setPinned(_:pinned:)`

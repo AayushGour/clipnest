@@ -50,6 +50,14 @@ struct SwiftDataClipStoreTests {
     }
   }
 
+  @Test("Same contentHash with a different blobPath dedups and keeps the original blobPath")
+  func dedupWithSameContentHashDifferentBlobPathPreservesOriginalBlobPath() async throws {
+    try await ClipStoreContractTests
+      .dedupWithSameContentHashDifferentBlobPathPreservesOriginalBlobPath {
+        try makeStore()
+      }
+  }
+
   @Test("fetchAll returns items newest-first by createdAt")
   func fetchAllOrdersNewestFirst() async throws {
     try await ClipStoreContractTests.fetchAllOrdersNewestFirst {
@@ -197,6 +205,49 @@ struct SwiftDataClipStoreTests {
     try await ClipStoreContractTests.enforceRetentionMaxAgeNeverDeletesPinnedItems {
       try makeStore()
     }
+  }
+
+  @Test(
+    "enforceRetention(.maxCount) at a larger scale, with pinned items interleaved chronologically, still keeps exactly the newest `maxCount` unpinned items and every pinned item — proving the fetchCount()+fetchLimit-windowed delete matches the old full-materialization semantics exactly, not just at toy sizes"
+  )
+  func enforceRetentionMaxCountBoundedFetchMatchesOldSemanticsAtScale() async throws {
+    let store = try makeStore()
+    let totalUnpinned = 25
+    let maxCount = 10
+    // Every 5th item (indices 4, 9, 14, 19, 24 — 5 total) is pinned, so
+    // pinned rows are interleaved among the oldest AND the newest unpinned
+    // ones, not conveniently segregated at one end of `createdAt` order.
+    var pinnedIDs: Set<UUID> = []
+    var unpinnedOldestFirst: [ClipItem] = []
+    for index in 0..<totalUnpinned {
+      let isPinned = (index + 1).isMultiple(of: 5)
+      let item = try await store.insertOrBumpDuplicate(
+        ClipStoreContractTests.makeItem(
+          contentHash: "scale-\(index)",
+          createdAt: Date(timeIntervalSince1970: TimeInterval(index)),
+          pinned: isPinned))
+      if isPinned {
+        pinnedIDs.insert(item.id)
+      } else {
+        unpinnedOldestFirst.append(item)
+      }
+    }
+    #expect(pinnedIDs.count == 5)
+    #expect(unpinnedOldestFirst.count == totalUnpinned - 5)
+
+    try await store.enforceRetention(cap: .maxCount(maxCount))
+
+    let remaining = try await store.fetchAll()
+    let remainingUnpinnedIDs = Set(remaining.filter { !$0.pinned }.map(\.id))
+    let expectedSurvivingUnpinnedIDs = Set(unpinnedOldestFirst.suffix(maxCount).map(\.id))
+
+    // Every pinned item survives regardless of age/count.
+    #expect(Set(remaining.filter(\.pinned).map(\.id)) == pinnedIDs)
+    // Exactly the `maxCount` newest unpinned items survive; every older
+    // unpinned item was trimmed.
+    #expect(remainingUnpinnedIDs == expectedSurvivingUnpinnedIDs)
+    #expect(remainingUnpinnedIDs.count == maxCount)
+    #expect(remaining.count == maxCount + pinnedIDs.count)
   }
 
   // MARK: - query (T49)
@@ -355,7 +406,7 @@ struct SwiftDataClipStoreTests {
   // MARK: - Migration-crash fix (normalizedText default + backfill)
 
   @Test(
-    "A record persisted with empty normalizedText (simulating pre-migration data) is backfilled by init and becomes matchable by query"
+    "A record persisted with empty normalizedText (simulating pre-migration data) is backfilled by prepare() and becomes matchable by query"
   )
   func emptyNormalizedTextRecordIsBackfilledAndBecomesMatchable() async throws {
     let container = try SwiftDataClipStore.makeTestContainer()
@@ -364,17 +415,108 @@ struct SwiftDataClipStoreTests {
     try SwiftDataClipStore.insertRecordWithEmptyNormalizedTextForTesting(
       legacyItem, in: container)
 
-    // A fresh store construction against the *same* container is what
-    // triggers the one-time backfill in `init` — mirroring app relaunch
-    // reading an existing on-disk store with stale rows.
+    // A fresh store construction against the *same* container, followed by
+    // an explicit `prepare()` call, is what triggers the one-time backfill
+    // (T-PF1: moved out of `init`, which no longer does this work — see
+    // `SwiftDataClipStore.prepare()`'s doc comment) — mirroring
+    // `AppEnvironment` awaiting `prepare()` once at app relaunch, against an
+    // existing on-disk store with stale rows.
     let store = SwiftDataClipStore(
       modelContainer: container,
       blobStore: BlobStore(baseDirectory: FileManager.default.temporaryDirectory))
+    await store.prepare()
 
     let results = try await store.query(
       text: "legacy preview", kind: nil, scope: .history, offset: 0, limit: 10)
 
     #expect(results.map(\.id) == [legacyItem.id])
+  }
+
+  @Test(
+    "Constructing the store does NOT run the normalizedText backfill scan — a legacy row stays unmatchable until prepare() is called explicitly"
+  )
+  func constructionDoesNotRunBackfillSynchronously() async throws {
+    let container = try SwiftDataClipStore.makeTestContainer()
+    let legacyItem = ClipStoreContractTests.makeItem(
+      contentHash: "not-yet-prepared", previewText: "Not Yet Backfilled")
+    try SwiftDataClipStore.insertRecordWithEmptyNormalizedTextForTesting(
+      legacyItem, in: container)
+
+    // T-PF1 (D1): the one-time normalizedText backfill used to run inline
+    // in `init`, synchronously, on whatever thread constructed the store —
+    // the main thread in production (`AppEnvironment`). It must now only
+    // run when `prepare()` is called explicitly (off the main actor, by
+    // `AppEnvironment.init`) — proven here deterministically (no timing/
+    // flakiness) by NOT calling `prepare()` and confirming the legacy row
+    // is still unmatchable immediately after construction.
+    let store = SwiftDataClipStore(
+      modelContainer: container,
+      blobStore: BlobStore(baseDirectory: FileManager.default.temporaryDirectory))
+
+    let beforePrepare = try await store.query(
+      text: "not yet backfilled", kind: nil, scope: .history, offset: 0, limit: 10)
+    #expect(beforePrepare.isEmpty)
+
+    await store.prepare()
+
+    let afterPrepare = try await store.query(
+      text: "not yet backfilled", kind: nil, scope: .history, offset: 0, limit: 10)
+    #expect(afterPrepare.map(\.id) == [legacyItem.id])
+  }
+
+  @Test(
+    "The normalizedText backfill runs at most once per on-disk store file: a second prepare() against the SAME file (a simulated relaunch) does not re-scan, so a row that turned stale after the first prepare() is left unbackfilled"
+  )
+  func backfillRunsOnlyOnceEverPerOnDiskStoreFile() async throws {
+    let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "SwiftDataClipStoreTests-oneshot-\(UUID().uuidString).store")
+    let defaultsKey = SwiftDataClipStore.backfillCompleteDefaultsKeyPrefix + fileURL.path
+    defer {
+      try? FileManager.default.removeItem(at: fileURL)
+      UserDefaults.standard.removeObject(forKey: defaultsKey)
+    }
+    let blobStore = BlobStore(baseDirectory: FileManager.default.temporaryDirectory)
+
+    // First "launch": a genuinely stale legacy row exists; prepare()
+    // backfills it and — per the one-shot design — persists a completion
+    // marker for this exact on-disk file.
+    let firstContainer = try SwiftDataClipStore.makeContainerForTesting(at: fileURL)
+    let firstLegacyItem = ClipStoreContractTests.makeItem(
+      contentHash: "first-legacy", previewText: "First Legacy Text")
+    try SwiftDataClipStore.insertRecordWithEmptyNormalizedTextForTesting(
+      firstLegacyItem, in: firstContainer)
+    let firstStore = SwiftDataClipStore(modelContainer: firstContainer, blobStore: blobStore)
+    await firstStore.prepare()
+    let firstResults = try await firstStore.query(
+      text: "first legacy", kind: nil, scope: .history, offset: 0, limit: 10)
+    #expect(firstResults.map(\.id) == [firstLegacyItem.id])
+
+    // A second stale row inserted directly into the SAME on-disk file,
+    // simulating data that arrived between "launches" (e.g. from an even
+    // older app version reusing this store). A fresh `SwiftDataClipStore`
+    // reopening the SAME file is a real app relaunch.
+    let secondContainer = try SwiftDataClipStore.makeContainerForTesting(at: fileURL)
+    let secondLegacyItem = ClipStoreContractTests.makeItem(
+      contentHash: "second-legacy", previewText: "Second Legacy Text")
+    try SwiftDataClipStore.insertRecordWithEmptyNormalizedTextForTesting(
+      secondLegacyItem, in: secondContainer)
+    let secondStore = SwiftDataClipStore(modelContainer: secondContainer, blobStore: blobStore)
+    await secondStore.prepare()
+
+    // One-shot: the marker set by the FIRST prepare() call skips the
+    // SECOND scan entirely, so the second stale row is left un-backfilled
+    // (its normalizedText is still "" and it does not match a text query)
+    // — proving prepare() did not re-scan on the second call, not merely
+    // that repeated backfills are idempotent.
+    let secondResults = try await secondStore.query(
+      text: "second legacy", kind: nil, scope: .history, offset: 0, limit: 10)
+    #expect(secondResults.isEmpty)
+
+    // The row still exists and the store is otherwise fully functional —
+    // just not yet searchable, matching pre-backfill legacy-row behavior
+    // exactly (`ClipItemRecord.normalizedText`'s doc comment).
+    let allResults = try await secondStore.fetchAll()
+    #expect(allResults.contains { $0.id == secondLegacyItem.id })
   }
 
   @Test(
@@ -435,10 +577,17 @@ struct SwiftDataClipStoreTests {
     let store = SwiftDataClipStore(
       modelContainer: migratedContainer,
       blobStore: BlobStore(baseDirectory: FileManager.default.temporaryDirectory))
+    defer {
+      UserDefaults.standard.removeObject(
+        forKey: SwiftDataClipStore.backfillCompleteDefaultsKeyPrefix + fileURL.path)
+    }
+    // T-PF1: `prepare()`'s one-time backfill is no longer run by `init` —
+    // see `SwiftDataClipStore.prepare()`'s doc comment.
+    await store.prepare()
 
     // The migrated-in row's normalizedText defaulted to "" during
-    // migration, then `init`'s one-time backfill repaired it — so it's
-    // matchable by query, just like the in-memory backfill test above.
+    // migration, then `prepare()`'s one-time backfill repaired it — so
+    // it's matchable by query, just like the in-memory backfill test above.
     let results = try await store.query(
       text: "legacy preview", kind: nil, scope: .history, offset: 0, limit: 10)
 
@@ -535,6 +684,494 @@ struct SwiftDataClipStoreTests {
     #expect(backupURL.lastPathComponent.contains(ModelContainerRecovery.backupSuffixPrefix))
     let backedUpBytes = try Data(contentsOf: backupURL)
     #expect(backedUpBytes == garbageBytes)
+  }
+
+  // MARK: - Image contentHash backfill (T-PF5c: decoded-pixel hash, D44/D45; restructured after reviewer rejection)
+  //
+  // Every test below inserts its "legacy" row(s) via
+  // `insertRecordNeedingImageContentHashBackfillForTesting` (never
+  // `store.insertOrBumpDuplicate`, which — since this restructure — marks a
+  // freshly-captured row already-migrated; see `ClipItemRecord
+  // .pixelContentHashMigrated`'s doc comment) directly into an explicitly-
+  // built container, then constructs the store and explicitly waits for the
+  // now-backgrounded pass via `waitForImageContentHashBackfillForTesting()`
+  // — `prepare()` itself only SCHEDULES the pass and returns immediately
+  // (see `SwiftDataClipStore.prepare()`'s doc comment), so a test that
+  // asserted right after `await store.prepare()` with no wait would be
+  // racing the background Task.
+
+  @Test(
+    "A legacy byte-hash image row with a real blob is backfilled to the blob's decoded-pixel hash"
+  )
+  func legacyByteHashImageRowIsBackfilledToPixelHash() async throws {
+    let blobStore = BlobStore(
+      baseDirectory: FileManager.default.temporaryDirectory.appendingPathComponent(
+        "SwiftDataClipStoreTests-imagehash-\(UUID().uuidString)", isDirectory: true))
+    let imageData = ImageFixtures.makePatternImageData(width: 4, height: 4)
+    let blobPath = try blobStore.write(imageData)
+    let expectedPixelHash = try #require(
+      CoreGraphicsImagePixelHasher().pixelContentHash(of: imageData))
+
+    let container = try SwiftDataClipStore.makeTestContainer()
+    let legacyItem = ClipStoreContractTests.makeItem(
+      contentHash: "legacy-byte-hash", kind: .image, blobPath: blobPath)
+    try SwiftDataClipStore.insertRecordNeedingImageContentHashBackfillForTesting(
+      legacyItem, in: container)
+    let store = SwiftDataClipStore(modelContainer: container, blobStore: blobStore)
+
+    await store.prepare()
+    await store.waitForImageContentHashBackfillForTesting()
+
+    let results = try await store.fetchAll()
+    #expect(results.first(where: { $0.id == legacyItem.id })?.contentHash == expectedPixelHash)
+  }
+
+  @Test(
+    "The image contentHash backfill runs at most once per on-disk store file: a second prepare() against the SAME file does not invoke the hasher again"
+  )
+  func imageContentHashBackfillRunsOnlyOnceEverPerOnDiskStoreFile() async throws {
+    let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "SwiftDataClipStoreTests-imagehash-oneshot-\(UUID().uuidString).store")
+    let defaultsKey =
+      SwiftDataClipStore.imageContentHashBackfillCompleteDefaultsKeyPrefix + fileURL.path
+    let blobBaseDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "SwiftDataClipStoreTests-imagehash-oneshot-blobs-\(UUID().uuidString)", isDirectory: true)
+    defer {
+      try? FileManager.default.removeItem(at: fileURL)
+      try? FileManager.default.removeItem(at: blobBaseDirectory)
+      UserDefaults.standard.removeObject(forKey: defaultsKey)
+      UserDefaults.standard.removeObject(
+        forKey: SwiftDataClipStore.backfillCompleteDefaultsKeyPrefix + fileURL.path)
+    }
+    let blobStore = BlobStore(baseDirectory: blobBaseDirectory)
+    let imageData = ImageFixtures.makePatternImageData(width: 3, height: 3)
+    let blobPath = try blobStore.write(imageData)
+    let countingHasher = CountingImagePixelHasher()
+
+    let firstContainer = try SwiftDataClipStore.makeContainerForTesting(at: fileURL)
+    let legacyItem = ClipStoreContractTests.makeItem(
+      contentHash: "legacy-oneshot", kind: .image, blobPath: blobPath)
+    try SwiftDataClipStore.insertRecordNeedingImageContentHashBackfillForTesting(
+      legacyItem, in: firstContainer)
+    let firstStore = SwiftDataClipStore(
+      modelContainer: firstContainer, blobStore: blobStore, imagePixelHasher: countingHasher)
+    await firstStore.prepare()
+    await firstStore.waitForImageContentHashBackfillForTesting()
+    #expect(countingHasher.callCount == 1)
+
+    let secondContainer = try SwiftDataClipStore.makeContainerForTesting(at: fileURL)
+    let secondStore = SwiftDataClipStore(
+      modelContainer: secondContainer, blobStore: blobStore, imagePixelHasher: countingHasher)
+    await secondStore.prepare()
+    await secondStore.waitForImageContentHashBackfillForTesting()
+
+    #expect(countingHasher.callCount == 1)
+  }
+
+  @Test(
+    "An image row whose blobPath points at a nonexistent file is left with its old contentHash, and the background backfill completes without throwing"
+  )
+  func imageRowWithMissingBlobLeftUnchanged() async throws {
+    let container = try SwiftDataClipStore.makeTestContainer()
+    let legacyItem = ClipStoreContractTests.makeItem(
+      contentHash: "legacy-missing-blob", kind: .image,
+      blobPath: "blobs/does-not-exist-\(UUID().uuidString)")
+    try SwiftDataClipStore.insertRecordNeedingImageContentHashBackfillForTesting(
+      legacyItem, in: container)
+    let store = SwiftDataClipStore(
+      modelContainer: container,
+      blobStore: BlobStore(baseDirectory: FileManager.default.temporaryDirectory))
+
+    await store.prepare()
+    await store.waitForImageContentHashBackfillForTesting()
+
+    let results = try await store.fetchAll()
+    #expect(
+      results.first(where: { $0.id == legacyItem.id })?.contentHash == "legacy-missing-blob")
+  }
+
+  @Test(
+    "The image contentHash backfill only touches .image rows that have a blob — text rows and blob-less image rows keep their original contentHash"
+  )
+  func nonImageAndBlobLessImageRowsAreUntouched() async throws {
+    // Neither row here is ever a backfill candidate regardless of how it
+    // was inserted (the predicate excludes non-`.image` kinds and
+    // blob-less rows outright), so the normal `insertOrBumpDuplicate` path
+    // is fine here, unlike the other tests in this section.
+    let store = try makeStore()
+    let textItem = try await store.insertOrBumpDuplicate(
+      ClipStoreContractTests.makeItem(contentHash: "text-hash-unchanged", kind: .text))
+    let blobLessImageItem = try await store.insertOrBumpDuplicate(
+      ClipStoreContractTests.makeItem(
+        contentHash: "image-no-blob-unchanged", kind: .image, blobPath: nil))
+
+    await store.prepare()
+    await store.waitForImageContentHashBackfillForTesting()
+
+    let results = try await store.fetchAll()
+    #expect(results.first(where: { $0.id == textItem.id })?.contentHash == "text-hash-unchanged")
+    #expect(
+      results.first(where: { $0.id == blobLessImageItem.id })?.contentHash
+        == "image-no-blob-unchanged")
+  }
+
+  @Test(
+    "An image row whose blob doesn't decode as an image (hasher returns nil) is left unchanged, and this permanent failure does NOT fail the overall migration"
+  )
+  func undecodableBlobIsSkippedPermanentlyAndMigrationStillSucceeds() async throws {
+    let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "SwiftDataClipStoreTests-imagehash-undecodable-\(UUID().uuidString).store")
+    let defaultsKey =
+      SwiftDataClipStore.imageContentHashBackfillCompleteDefaultsKeyPrefix + fileURL.path
+    let blobBaseDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "SwiftDataClipStoreTests-imagehash-undecodable-blobs-\(UUID().uuidString)",
+      isDirectory: true)
+    defer {
+      try? FileManager.default.removeItem(at: fileURL)
+      try? FileManager.default.removeItem(at: blobBaseDirectory)
+      UserDefaults.standard.removeObject(forKey: defaultsKey)
+      UserDefaults.standard.removeObject(
+        forKey: SwiftDataClipStore.backfillCompleteDefaultsKeyPrefix + fileURL.path)
+    }
+    let blobStore = BlobStore(baseDirectory: blobBaseDirectory)
+    let garbageBlobPath = try blobStore.write(Data("not an image".utf8))
+
+    let container = try SwiftDataClipStore.makeContainerForTesting(at: fileURL)
+    let legacyItem = ClipStoreContractTests.makeItem(
+      contentHash: "legacy-undecodable", kind: .image, blobPath: garbageBlobPath)
+    try SwiftDataClipStore.insertRecordNeedingImageContentHashBackfillForTesting(
+      legacyItem, in: container)
+    let store = SwiftDataClipStore(modelContainer: container, blobStore: blobStore)
+
+    await store.prepare()
+    await store.waitForImageContentHashBackfillForTesting()
+
+    let results = try await store.fetchAll()
+    #expect(
+      results.first(where: { $0.id == legacyItem.id })?.contentHash == "legacy-undecodable")
+    // Permanent skip: this row can never decode, so retrying forever would
+    // be pointless — the row is flagged resolved, the run reports
+    // `.completedCleanly` (no TRANSIENT failure occurred), and the
+    // completion marker IS set.
+    #expect(UserDefaults.standard.bool(forKey: defaultsKey))
+  }
+
+  @Test(
+    "A transient blob-read failure (not 'missing') reports .completedWithTransientFailures, so the marker stays unset and a later prepare() call against the same store file retries only that row — an already-migrated sibling row inserted in the same run is never redone"
+  )
+  func transientBlobReadFailureRetriesOnlyThatRowAndDoesNotRedoAnAlreadyMigratedSibling()
+    async throws
+  {
+    let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "SwiftDataClipStoreTests-imagehash-transient-\(UUID().uuidString).store")
+    let defaultsKey =
+      SwiftDataClipStore.imageContentHashBackfillCompleteDefaultsKeyPrefix + fileURL.path
+    let blobBaseDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "SwiftDataClipStoreTests-imagehash-transient-blobs-\(UUID().uuidString)", isDirectory: true)
+    defer {
+      try? FileManager.default.removeItem(at: fileURL)
+      try? FileManager.default.removeItem(at: blobBaseDirectory)
+      UserDefaults.standard.removeObject(forKey: defaultsKey)
+      UserDefaults.standard.removeObject(
+        forKey: SwiftDataClipStore.backfillCompleteDefaultsKeyPrefix + fileURL.path)
+    }
+    let blobStore = BlobStore(baseDirectory: blobBaseDirectory)
+    // A DIRECTORY at the blob's path — `BlobStore.read`'s `fileExists` check
+    // doesn't distinguish files from directories, so it passes, but
+    // `Data(contentsOf:)` then throws attempting to read it: a real
+    // `BlobStoreError.ioFailure` (not `.notFound`), deterministically, with
+    // no chmod/permission trick required.
+    let flakyBlobPath = "blobs/directory-not-a-file"
+    try FileManager.default.createDirectory(
+      at: blobBaseDirectory.appendingPathComponent(flakyBlobPath),
+      withIntermediateDirectories: true)
+    // A second, always-good row inserted in the SAME run, with a real
+    // blob — proves per-item persistence (T-PF5c requirement 2): even
+    // though the overall run does not report `.completedCleanly`, this
+    // row's migration must still be saved and never redone once the flaky
+    // one is eventually fixed.
+    let goodBlobPath = try blobStore.write(ImageFixtures.makePatternImageData(width: 3, height: 3))
+    let countingHasher = CountingImagePixelHasher()
+
+    let firstContainer = try SwiftDataClipStore.makeContainerForTesting(at: fileURL)
+    let goodItem = ClipStoreContractTests.makeItem(
+      contentHash: "legacy-good", kind: .image, blobPath: goodBlobPath)
+    let flakyItem = ClipStoreContractTests.makeItem(
+      contentHash: "legacy-transient", kind: .image, blobPath: flakyBlobPath)
+    try SwiftDataClipStore.insertRecordNeedingImageContentHashBackfillForTesting(
+      goodItem, in: firstContainer)
+    try SwiftDataClipStore.insertRecordNeedingImageContentHashBackfillForTesting(
+      flakyItem, in: firstContainer)
+    let firstStore = SwiftDataClipStore(
+      modelContainer: firstContainer, blobStore: blobStore, imagePixelHasher: countingHasher)
+
+    await firstStore.prepare()
+    await firstStore.waitForImageContentHashBackfillForTesting()
+
+    let afterFirstPrepare = try await firstStore.fetchAll()
+    #expect(
+      afterFirstPrepare.first(where: { $0.id == flakyItem.id })?.contentHash
+        == "legacy-transient")
+    #expect(
+      afterFirstPrepare.first(where: { $0.id == goodItem.id })?.contentHash
+        == countingHasher.fixedHash)
+    #expect(!UserDefaults.standard.bool(forKey: defaultsKey))
+    // Only the good row ever reached the hasher — the flaky row's blob
+    // read fails before the hasher is ever called.
+    #expect(countingHasher.callCount == 1)
+
+    // Fix the transient condition: replace the directory with a real blob
+    // at the exact same path, then reopen the same store file (a simulated
+    // relaunch) — the still-unset marker means prepare() retries the work
+    // set, which by now (per-row tracking) only still contains "flaky".
+    try FileManager.default.removeItem(
+      at: blobBaseDirectory.appendingPathComponent(flakyBlobPath))
+    try ImageFixtures.makePatternImageData(width: 2, height: 2).write(
+      to: blobBaseDirectory.appendingPathComponent(flakyBlobPath))
+
+    let secondContainer = try SwiftDataClipStore.makeContainerForTesting(at: fileURL)
+    let secondStore = SwiftDataClipStore(
+      modelContainer: secondContainer, blobStore: blobStore, imagePixelHasher: countingHasher)
+    await secondStore.prepare()
+    await secondStore.waitForImageContentHashBackfillForTesting()
+
+    let afterSecondPrepare = try await secondStore.fetchAll()
+    #expect(
+      afterSecondPrepare.first(where: { $0.id == flakyItem.id })?.contentHash
+        == countingHasher.fixedHash)
+    #expect(UserDefaults.standard.bool(forKey: defaultsKey))
+    // "good" was attempted exactly once, in the FIRST run — never redone
+    // in the second run, which only re-attempts "flaky". Two total calls
+    // across both runs (not three) is the proof.
+    #expect(countingHasher.callCount == 2)
+  }
+
+  @Test(
+    "prepare() returns without waiting for the image contentHash backfill to finish, even with many candidates and a slow hasher — the migration must never gate store/app readiness (T-PF5c requirement 1). Honest about scope: this proves prepare() itself doesn't block; it cannot exercise AppEnvironment's hotkey/capture wiring, which lives outside ClipnestCore."
+  )
+  func prepareReturnsPromptlyEvenWithManySlowImageHashCandidates() async throws {
+    let blobBaseDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "SwiftDataClipStoreTests-imagehash-slow-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: blobBaseDirectory) }
+    let blobStore = BlobStore(baseDirectory: blobBaseDirectory)
+    let blobPath = try blobStore.write(ImageFixtures.makePatternImageData(width: 2, height: 2))
+    let container = try SwiftDataClipStore.makeTestContainer()
+    let candidateCount = 15
+    for index in 0..<candidateCount {
+      let item = ClipStoreContractTests.makeItem(
+        contentHash: "legacy-slow-\(index)", kind: .image, blobPath: blobPath)
+      try SwiftDataClipStore.insertRecordNeedingImageContentHashBackfillForTesting(
+        item, in: container)
+    }
+    // 50ms/call * 15 candidates = 750ms+ if this ran on prepare()'s
+    // critical path (the exact shape of the rejected version, measured at
+    // 10-82ms/image against the real hasher) — prepare() must return in a
+    // small fraction of that.
+    let slowHasher = CountingImagePixelHasher(delay: 0.05)
+    let store = SwiftDataClipStore(
+      modelContainer: container, blobStore: blobStore, imagePixelHasher: slowHasher)
+
+    let clock = ContinuousClock()
+    let start = clock.now
+    await store.prepare()
+    let elapsed = start.duration(to: clock.now)
+
+    #expect(elapsed < .milliseconds(300))
+
+    // Let the background pass actually finish before this test function
+    // returns (and its temp directory gets cleaned up).
+    await store.waitForImageContentHashBackfillForTesting()
+    #expect(slowHasher.callCount == candidateCount)
+  }
+
+  @Test(
+    "Cancelling the in-flight background image contentHash backfill (simulating a force-quit mid-migration) leaves the one-shot marker unset; a later prepare() call against the same store file resumes and finishes the remaining candidates without re-attempting whichever ones already completed before the cancel. Timing-based (bounded, generous margins) — see this test's own comments for exactly what is and isn't pinned deterministically here vs. in ImageContentHashBackfillCoordinatorTests's gate-based cancellation test."
+  )
+  func cancellingBackfillLeavesMarkerUnsetAndLaterPrepareResumesWithoutRedoingCompletedRows()
+    async throws
+  {
+    let fileURL = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "SwiftDataClipStoreTests-imagehash-cancel-\(UUID().uuidString).store")
+    let defaultsKey =
+      SwiftDataClipStore.imageContentHashBackfillCompleteDefaultsKeyPrefix + fileURL.path
+    let blobBaseDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "SwiftDataClipStoreTests-imagehash-cancel-blobs-\(UUID().uuidString)", isDirectory: true)
+    defer {
+      try? FileManager.default.removeItem(at: fileURL)
+      try? FileManager.default.removeItem(at: blobBaseDirectory)
+      UserDefaults.standard.removeObject(forKey: defaultsKey)
+      UserDefaults.standard.removeObject(
+        forKey: SwiftDataClipStore.backfillCompleteDefaultsKeyPrefix + fileURL.path)
+    }
+    let blobStore = BlobStore(baseDirectory: blobBaseDirectory)
+    let blobPath = try blobStore.write(ImageFixtures.makePatternImageData(width: 2, height: 2))
+    let itemCount = 5
+    // 15ms/call makes the whole 5-item pass take >=75ms if uninterrupted —
+    // generous headroom against `cancelImageContentHashBackfillForTesting()`
+    // below, which fires essentially as soon as `prepare()` itself returns
+    // (an in-flight item still always finishes first — see
+    // `ImageContentHashBackfillCoordinator.run`'s doc comment).
+    let slowHasher = CountingImagePixelHasher(delay: 0.015)
+
+    let container = try SwiftDataClipStore.makeContainerForTesting(at: fileURL)
+    var itemIDs: [UUID] = []
+    for index in 0..<itemCount {
+      let item = ClipStoreContractTests.makeItem(
+        contentHash: "legacy-cancel-\(index)", kind: .image, blobPath: blobPath)
+      try SwiftDataClipStore.insertRecordNeedingImageContentHashBackfillForTesting(
+        item, in: container)
+      itemIDs.append(item.id)
+    }
+    let store = SwiftDataClipStore(
+      modelContainer: container, blobStore: blobStore, imagePixelHasher: slowHasher)
+
+    await store.prepare()
+    await store.cancelImageContentHashBackfillForTesting()
+    await store.waitForImageContentHashBackfillForTesting()
+
+    let afterCancel = try await store.fetchAll()
+    let migratedAfterCancel = afterCancel.filter {
+      itemIDs.contains($0.id) && $0.contentHash == slowHasher.fixedHash
+    }
+    // Not every candidate could have finished — cancellation stopped the
+    // run before it reached the end (see the timing note above).
+    #expect(migratedAfterCancel.count < itemCount)
+    #expect(!UserDefaults.standard.bool(forKey: defaultsKey))
+
+    // "Restart": a fresh store instance reopening the SAME on-disk file —
+    // the real-world equivalent of relaunching after a force-quit.
+    let resumedContainer = try SwiftDataClipStore.makeContainerForTesting(at: fileURL)
+    let resumedStore = SwiftDataClipStore(
+      modelContainer: resumedContainer, blobStore: blobStore, imagePixelHasher: slowHasher)
+    await resumedStore.prepare()
+    await resumedStore.waitForImageContentHashBackfillForTesting()
+
+    let afterResume = try await resumedStore.fetchAll()
+    let migratedAfterResume = afterResume.filter {
+      itemIDs.contains($0.id) && $0.contentHash == slowHasher.fixedHash
+    }
+    #expect(migratedAfterResume.count == itemCount)
+    #expect(UserDefaults.standard.bool(forKey: defaultsKey))
+    // Exactly `itemCount` hasher calls total, across BOTH runs combined —
+    // proves whichever rows already migrated before the cancel were never
+    // re-attempted by the resumed run.
+    #expect(slowHasher.callCount == itemCount)
+  }
+
+  // MARK: - query() not blocked behind blob deletion (T-PF1 concurrency claim, moved from T-PF6)
+
+  @Test(
+    "query() is not queued behind enforceRetention's in-flight blob deletion — pins T-PF1's Task.detached offload with a real (if bounded, timing-based) test instead of leaving that concurrency claim asserted-only-in-comments"
+  )
+  func queryIsNotBlockedBehindEnforceRetentionsInFlightBlobDeletion() async throws {
+    // A `FileManager` whose `removeItem(at:)` is artificially slow — a
+    // controllable-delay stand-in for a "fake BlobStore," realized via the
+    // SAME injection point `BlobStore.init(baseDirectory:fileManager:)`
+    // already exposes, rather than changing `BlobStore` itself (out of
+    // this task's scope; owned by a parallel agent). If `enforceRetention`'s
+    // `Task.detached` blob-deletion offload (this same file) ever
+    // regresses to deleting blobs inline on this actor, `query()` below
+    // would be stuck behind this whole delay instead of returning almost
+    // immediately.
+    let removalDelay: TimeInterval = 0.3
+    let fileManager = DelayedRemovalFileManager(delay: removalDelay)
+    let baseDirectory = FileManager.default.temporaryDirectory.appendingPathComponent(
+      "SwiftDataClipStoreTests-blobdelete-\(UUID().uuidString)", isDirectory: true)
+    defer { try? FileManager.default.removeItem(at: baseDirectory) }
+    let blobStore = BlobStore(baseDirectory: baseDirectory, fileManager: fileManager)
+    let store = try makeStore(blobStore: blobStore)
+
+    let blobPath = try blobStore.write(Data("trimmed-blob-bytes".utf8))
+    _ = try await store.insertOrBumpDuplicate(
+      ClipStoreContractTests.makeItem(contentHash: "to-trim", kind: .image, blobPath: blobPath))
+
+    // Trims every unpinned item (cap 0) — the one inserted above. Metadata
+    // delete+save happens synchronously first, on this actor; the blob
+    // delete (where the artificial delay lives) is the part
+    // `enforceRetention` offloads to `Task.detached` — see that method's
+    // doc comment.
+    let retentionTask = Task { try await store.enforceRetention(cap: .maxCount(0)) }
+    // Generous warm-up: give `enforceRetention` time to finish its (fast,
+    // in-memory) metadata delete+save and reach the detached blob-deletion
+    // phase, well before the query below runs — the actual proof this test
+    // makes is the elapsed-time assertion after the query, not this sleep.
+    try await Task.sleep(for: .milliseconds(50))
+
+    let clock = ContinuousClock()
+    let queryStart = clock.now
+    _ = try await store.query(text: "", kind: nil, scope: .history, offset: 0, limit: 10)
+    let queryElapsed = queryStart.duration(to: clock.now)
+
+    #expect(queryElapsed < .milliseconds(150))
+
+    try await retentionTask.value
+    let afterRetention = try await store.fetchAll()
+    #expect(afterRetention.isEmpty)
+  }
+}
+
+// MARK: - CountingImagePixelHasher (test-local call-counting ImagePixelHashing double)
+
+/// Call-counting `ImagePixelHashing` double — proves `SwiftDataClipStore`'s
+/// image `contentHash` backfill (T-PF5c) is genuinely resumable: a row
+/// already resolved on an earlier run must never invoke this again. Every
+/// call returns the SAME `fixedHash` regardless of `imageData`, which is
+/// exactly what several tests below rely on to recognize "this row has been
+/// migrated" (`item.contentHash == countingHasher.fixedHash`) without
+/// needing to separately compute the real per-image expected hash.
+/// `@unchecked Sendable` mirrors this codebase's existing test-double
+/// convention (`OneShotStoreMigrationTests.FakeOneShotMigrationStorage`) —
+/// `callCount` is mutated from inside `SwiftDataClipStore
+/// .migrateOneImageContentHash(_:)`'s `Task.detached` closure, but the
+/// coordinator's loop awaits each item fully before starting the next (see
+/// `ImageContentHashBackfillCoordinator.run`'s doc comment), so calls are
+/// always strictly sequential — never concurrent — even across the
+/// two-separate-store-instance "simulated relaunch" pattern several tests
+/// below use.
+private final class CountingImagePixelHasher: ImagePixelHashing, @unchecked Sendable {
+  private(set) var callCount = 0
+  let fixedHash: String
+  /// Optional artificial per-call delay (`Thread.sleep`) — lets a test make
+  /// the backfill's per-item work genuinely slow/measurable without
+  /// depending on `CoreGraphicsImagePixelHasher`'s real decode cost. `0` (no
+  /// delay) for every test that doesn't care about timing.
+  private let delay: TimeInterval
+
+  init(fixedHash: String = "counted-pixel-hash", delay: TimeInterval = 0) {
+    self.fixedHash = fixedHash
+    self.delay = delay
+  }
+
+  func pixelContentHash(of imageData: Data) -> String? {
+    callCount += 1
+    if delay > 0 {
+      Thread.sleep(forTimeInterval: delay)
+    }
+    return fixedHash
+  }
+}
+
+/// A `FileManager` whose `removeItem(at:)` sleeps for a fixed, injected
+/// duration before actually deleting — lets
+/// `queryIsNotBlockedBehindEnforceRetentionsInFlightBlobDeletion` hold
+/// `enforceRetention`'s background blob-deletion phase open long enough to
+/// prove a concurrent `query()` call is not queued behind it. `@unchecked
+/// Sendable`: only ever reads its own immutable `delay`; `FileManager`
+/// subclasses used only for read/write/delete-by-path calls (never
+/// delegate-based) are documented safe for concurrent use, the same
+/// guarantee `BlobStore`'s own `nonisolated(unsafe) fileManager` already
+/// relies on (see that type's doc comment).
+private final class DelayedRemovalFileManager: FileManager, @unchecked Sendable {
+  private let delay: TimeInterval
+
+  init(delay: TimeInterval) {
+    self.delay = delay
+    super.init()
+  }
+
+  override func removeItem(at URL: URL) throws {
+    Thread.sleep(forTimeInterval: delay)
+    try super.removeItem(at: URL)
   }
 }
 

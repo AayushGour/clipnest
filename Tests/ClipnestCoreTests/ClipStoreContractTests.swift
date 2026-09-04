@@ -90,6 +90,44 @@ enum ClipStoreContractTests {
     #expect(all.count == 2)
   }
 
+  /// D44/D45: image `contentHash` is now a format-independent hash of
+  /// decoded pixels, while the blob FILENAME stays a hash of the raw bytes —
+  /// so the same picture captured once as PNG and once as TIFF produces the
+  /// SAME `contentHash` (one dedup row) but TWO distinct `blobPath`s on
+  /// disk. `insertOrBumpDuplicate`'s bump path (see
+  /// `dedupCollapsesConsecutiveIdenticalCopies` above) updates only
+  /// `createdAt` on a hash collision — never `blobPath` — so this pins that
+  /// accepted consequence end to end: the second capture's blob is written
+  /// to disk but never referenced by the surviving row, i.e. deliberately
+  /// orphaned. A future change to the bump path that starts overwriting
+  /// `blobPath` must fail this test, not slip through silently.
+  static func dedupWithSameContentHashDifferentBlobPathPreservesOriginalBlobPath(
+    makeStore: () async throws -> any ClipStore
+  ) async throws {
+    let store = try await makeStore()
+    let firstTime = Date(timeIntervalSince1970: 1_000)
+    let secondTime = Date(timeIntervalSince1970: 2_000)
+
+    _ = try await store.insertOrBumpDuplicate(
+      makeItem(
+        contentHash: "same-pixel-hash", createdAt: firstTime, blobPath: "blobs/png-hash"))
+    let bumped = try await store.insertOrBumpDuplicate(
+      makeItem(
+        contentHash: "same-pixel-hash", createdAt: secondTime, blobPath: "blobs/tiff-hash"))
+
+    let all = try await store.fetchAll()
+
+    #expect(all.count == 1)
+    #expect(all.first?.contentHash == "same-pixel-hash")
+    #expect(all.first?.createdAt == secondTime)
+    #expect(bumped.createdAt == secondTime)
+    // The part that matters: the ORIGINAL blobPath is preserved, not
+    // overwritten by the second capture's blobPath — the second capture's
+    // blob is orphaned on disk (see D45).
+    #expect(all.first?.blobPath == "blobs/png-hash")
+    #expect(bumped.blobPath == "blobs/png-hash")
+  }
+
   // MARK: - fetchAll ordering
 
   static func fetchAllOrdersNewestFirst(

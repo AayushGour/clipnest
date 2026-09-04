@@ -102,6 +102,25 @@ struct BlobStoreTests {
     try store.delete(blobPath: "\(BlobStore.blobsDirectoryName)/does-not-exist")
   }
 
+  @Test("T-PF4: mapped read (.mappedIfSafe) round-trips a large binary payload byte-for-byte")
+  func mappedReadRoundTripsLargeBinaryPayloadExactly() throws {
+    let baseDirectory = makeTempBaseDirectory()
+    defer { try? FileManager.default.removeItem(at: baseDirectory) }
+    let store = BlobStore(baseDirectory: baseDirectory)
+    // Large enough (~2MB) to exercise real multi-page mapped I/O, and
+    // pseudo-random (not repetitive) so a partially-wrong mapped read
+    // couldn't accidentally still compare equal.
+    var generator = SystemRandomNumberGenerator()
+    let payload = Data(
+      (0..<2_000_003).map { _ in UInt8.random(in: .min ... .max, using: &generator) })
+
+    let blobPath = try store.write(payload)
+    let readBack = try store.read(blobPath: blobPath)
+
+    #expect(readBack.count == payload.count)
+    #expect(readBack == payload)
+  }
+
   @Test("contentHash(of:) is stable for identical bytes and differs for different bytes")
   func contentHashStableAndDistinct() {
     let dataA1 = Data("payload A".utf8)
@@ -111,4 +130,109 @@ struct BlobStoreTests {
     #expect(BlobStore.contentHash(of: dataA1) == BlobStore.contentHash(of: dataA2))
     #expect(BlobStore.contentHash(of: dataA1) != BlobStore.contentHash(of: dataB))
   }
+
+  // MARK: - T-PF8: defaultBaseDirectory's CLIPNEST_TEST_DATA_ROOT override
+  //
+  // These exercise `defaultBaseDirectory(fileManager:environment:)`'s pure
+  // path-resolution logic via the injectable `environment` parameter —
+  // never the real process environment (see `ProductionStoreIsolationTests`
+  // for the end-to-end proof that the actual production factory methods,
+  // unmodified, honor a REAL process environment variable of this name).
+  // What a test at this level can prove: the override, when present and
+  // non-empty, always wins and always resolves somewhere other than the
+  // real production directory; what it can NOT prove on its own: that
+  // `xcodebuild test`'s hosted test-host process actually receives the
+  // variable — that is proven separately by the T-PF8 handoff's before/after
+  // `ClipItems.store` mtime check against a real `xcodebuild test` run.
+  //
+  // T-SEC1: `defaultBaseDirectoryHonorsOverride` and
+  // `defaultBaseDirectoryOverrideNeverAliasesProductionPath` below assert
+  // that a non-empty override IS honored — a claim that's only true in a
+  // Debug build now that `defaultBaseDirectory`'s override branch is `#if
+  // DEBUG`-gated (see that method's doc comment). `#if DEBUG`-gating these
+  // two tests themselves keeps the suite honest in both configurations:
+  // `swift test` (Debug, the standard/CI command per coding-standards.md)
+  // still runs and passes them exactly as before, while a `swift test -c
+  // release` run — verified empirically as part of the T-SEC1 fix; see the
+  // handoff for the real command output — no longer sees them fail for a
+  // reason that's actually the security fix working as intended, not a
+  // regression. `defaultBaseDirectoryOverrideIsCompiledOutInReleaseBuilds`
+  // below is this suite's Release-side counterpart proving the opposite
+  // direction.
+
+  @Test("defaultBaseDirectory with no override resolves to the real production path")
+  func defaultBaseDirectoryWithNoOverrideResolvesToProductionPath() {
+    let resolved = BlobStore.defaultBaseDirectory(environment: [:])
+
+    let expectedAppSupport =
+      FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+    #expect(resolved == expectedAppSupport?.appendingPathComponent("Clipnest", isDirectory: true))
+  }
+
+  #if DEBUG
+    @Test("defaultBaseDirectory honors a non-empty CLIPNEST_TEST_DATA_ROOT override")
+    func defaultBaseDirectoryHonorsOverride() {
+      let overridePath = "/tmp/BlobStoreTests-override-\(UUID().uuidString)"
+
+      let resolved = BlobStore.defaultBaseDirectory(environment: [
+        BlobStore.testDataRootEnvironmentVariableName: overridePath
+      ])
+
+      #expect(resolved.path == overridePath)
+    }
+
+    @Test(
+      "defaultBaseDirectory's override never resolves inside the real production directory (isolation proof)"
+    )
+    func defaultBaseDirectoryOverrideNeverAliasesProductionPath() {
+      let productionPath = BlobStore.defaultBaseDirectory(environment: [:])
+      let overridden = BlobStore.defaultBaseDirectory(environment: [
+        BlobStore.testDataRootEnvironmentVariableName: "/tmp/BlobStoreTests-isolation-proof"
+      ])
+
+      #expect(overridden != productionPath)
+      #expect(!overridden.path.hasPrefix(productionPath.path))
+    }
+  #endif
+
+  @Test(
+    "defaultBaseDirectory treats an empty-string override as absent, falling back to production")
+  func defaultBaseDirectoryTreatsEmptyOverrideAsAbsent() {
+    let withEmptyOverride = BlobStore.defaultBaseDirectory(environment: [
+      BlobStore.testDataRootEnvironmentVariableName: ""
+    ])
+    let withNoOverride = BlobStore.defaultBaseDirectory(environment: [:])
+
+    #expect(withEmptyOverride == withNoOverride)
+  }
+
+  // MARK: - T-SEC1: the override is compiled out entirely in Release builds
+
+  #if !DEBUG
+    // This test only EXISTS in a non-Debug (Release) compile — under the
+    // normal `swift test` (Debug by default), it is not even compiled in,
+    // so it never affects the Debug baseline test count. It exists purely
+    // to be run via `swift test -c release`, which builds both
+    // `ClipnestCore` AND this test target without the `DEBUG` compilation
+    // condition — the exact same condition a real notarized Release build
+    // ships under. If it runs and passes, that's direct proof (not an
+    // assumption) that `defaultBaseDirectory`'s `#if DEBUG` gate actually
+    // compiled the override branch out of THIS binary.
+    @Test(
+      "T-SEC1: in a Release build, CLIPNEST_TEST_DATA_ROOT has zero effect — defaultBaseDirectory always resolves to the real production path"
+    )
+    func defaultBaseDirectoryOverrideIsCompiledOutInReleaseBuilds() {
+      let overridePath = "/tmp/BlobStoreTests-release-inert-\(UUID().uuidString)"
+
+      let resolvedWithOverride = BlobStore.defaultBaseDirectory(environment: [
+        BlobStore.testDataRootEnvironmentVariableName: overridePath
+      ])
+      let resolvedWithNoOverride = BlobStore.defaultBaseDirectory(environment: [:])
+
+      // Same result whether or not the variable is present — the branch
+      // that would have read it doesn't exist in this build.
+      #expect(resolvedWithOverride == resolvedWithNoOverride)
+      #expect(resolvedWithOverride.path != overridePath)
+    }
+  #endif
 }

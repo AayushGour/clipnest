@@ -43,7 +43,7 @@ targets:
       base:
         PRODUCT_NAME: Clipnest
         PRODUCT_BUNDLE_IDENTIFIER: com.clipnest.app
-        MARKETING_VERSION: "0.9.0"
+        MARKETING_VERSION: "0.9.1"
         CURRENT_PROJECT_VERSION: "1"
         SWIFT_VERSION: "6.0"
         ENABLE_HARDENED_RUNTIME: YES
@@ -118,3 +118,36 @@ schemes:
       config: Debug
       targets:
         - ClipnestAppTests
+      # T-PF8 (P0 safety fix): `ClipnestAppTests` is a *hosted* unit-test
+      # target — `TEST_HOST` above points at the built `Clipnest.app`, so
+      # `xcodebuild test` genuinely LAUNCHES the production app binary as the
+      # process under test (`AppDelegate.applicationDidFinishLaunching` runs
+      # for real). Without this override, that meant every test run opened,
+      # migrated, and wrote the user's real, live clipboard database at
+      # `~/Library/Application Support/Clipnest` — with no rollback if a
+      # migration went wrong. `CLIPNEST_TEST_DATA_ROOT` (read in exactly one
+      # place, `BlobStore.defaultBaseDirectory()` — see that method's doc
+      # comment) redirects `AppEnvironment`'s `BlobStore` AND both SwiftData
+      # stores' production containers to this throwaway directory instead.
+      #
+      # For a *hosted* unit-test target (unlike a UI-test target, which runs
+      # a separate "test runner" app that launches the app-under-test as its
+      # own child process) there is no separate process to lose this
+      # variable across: the host app IS the one process xcodebuild launches
+      # to run the injected test bundle, so a Test-action environment
+      # variable set here is inherited by it directly, the same as any
+      # process inherits variables set on it at launch. Verified empirically
+      # for this fix — see the T-PF8 handoff for the before/after
+      # `ClipItems.store` mtime proof.
+      #
+      # A fixed literal path (not a `$(...)`-expanded one) deliberately, to
+      # keep this independent of Xcode's scheme-variable-expansion behavior —
+      # the one thing this fix actually depends on is env-var propagation to
+      # the host process, not string interpolation. `/tmp` is always
+      # writable and is never the real `~/Library/Application Support`
+      # family of paths, so this can never resolve back to production
+      # regardless. The directory is intentionally NOT cleaned up between
+      # runs (a reused throwaway SwiftData store is still fully isolated;
+      # this is not a "fresh fixture per run" requirement).
+      environmentVariables:
+        CLIPNEST_TEST_DATA_ROOT: "/tmp/clipnest-test-data-root"

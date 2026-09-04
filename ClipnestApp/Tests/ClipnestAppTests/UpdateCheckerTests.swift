@@ -97,6 +97,46 @@ struct UpdateCheckerTests {
     #expect(UpdateChecker.parseTagName(fromReleaseJSON: Data()) == nil)
   }
 
+  // MARK: - curlArguments(for:) — T-PF4
+
+  @Test("curl argument list includes both --max-time and --connect-timeout")
+  func curlArgumentsIncludesTimeoutFlags() {
+    let arguments = UpdateChecker.curlArguments(for: "https://example.com/releases/latest")
+
+    #expect(arguments.contains("--max-time"))
+    #expect(arguments.contains("--connect-timeout"))
+  }
+
+  @Test("curl argument list still carries -fsSL and the exact URL passed in")
+  func curlArgumentsPreservesFlagsAndURL() {
+    let url = "https://api.github.com/repos/AayushGour/clipnest/releases/latest"
+
+    let arguments = UpdateChecker.curlArguments(for: url)
+
+    #expect(arguments.contains("-fsSL"))
+    #expect(arguments.contains(url))
+  }
+
+  @Test(
+    "--max-time/--connect-timeout are each paired with a positive integer, connect-timeout no looser than max-time"
+  )
+  func curlArgumentsTimeoutValuesArePositiveAndOrdered() {
+    let arguments = UpdateChecker.curlArguments(for: "https://example.com")
+
+    guard let maxTimeIndex = arguments.firstIndex(of: "--max-time"),
+      let connectTimeoutIndex = arguments.firstIndex(of: "--connect-timeout"),
+      let maxTime = Int(arguments[arguments.index(after: maxTimeIndex)]),
+      let connectTimeout = Int(arguments[arguments.index(after: connectTimeoutIndex)])
+    else {
+      Issue.record("expected --max-time and --connect-timeout each followed by an integer value")
+      return
+    }
+
+    #expect(maxTime > 0)
+    #expect(connectTimeout > 0)
+    #expect(connectTimeout <= maxTime)
+  }
+
   // MARK: - Instance state (no `start`/`checkNow` — see this file's top doc comment)
 
   @MainActor

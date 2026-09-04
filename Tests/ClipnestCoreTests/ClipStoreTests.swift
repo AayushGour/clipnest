@@ -26,6 +26,14 @@ struct ClipStoreTests {
     }
   }
 
+  @Test("Same contentHash with a different blobPath dedups and keeps the original blobPath")
+  func dedupWithSameContentHashDifferentBlobPathPreservesOriginalBlobPath() async throws {
+    try await ClipStoreContractTests
+      .dedupWithSameContentHashDifferentBlobPathPreservesOriginalBlobPath {
+        InMemoryClipStore()
+      }
+  }
+
   @Test("fetchAll returns items newest-first by createdAt")
   func fetchAllOrdersNewestFirst() async throws {
     try await ClipStoreContractTests.fetchAllOrdersNewestFirst {

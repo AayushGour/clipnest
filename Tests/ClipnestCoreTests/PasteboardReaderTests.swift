@@ -173,6 +173,106 @@ struct PasteboardReaderTests {
     #expect(result?.kind == .image)
   }
 
+  // MARK: - T-PF2: PNG-preferred image capture + capture-time ceilings
+
+  @Test("PNG is preferred over TIFF when both representations are offered")
+  func prefersPNGOverTIFFWhenBothOffered() {
+    let pngData = ImageFixtures.makeTinyImageData(width: 2, height: 2, format: .png)
+    let tiffData = ImageFixtures.makeTinyImageData(width: 5, height: 5, format: .tiff)
+    let pasteboard = FakePasteboard(
+      availableTypes: [.tiff, .png],
+      datas: [.tiff: tiffData, .png: pngData]
+    )
+
+    let result = PasteboardReader().read(from: pasteboard)
+
+    #expect(result?.kind == .image)
+    #expect(result?.rawData == pngData)
+    #expect(result?.byteSize == pngData.count)
+    // T-PF2 finding (now superseded by T-PF5b, see below): whenever both
+    // representations are offered, `rawData`/`byteSize` are derived from
+    // the PNG bytes, never the TIFF bytes.
+    //
+    // T-PF5b: `contentHash` itself is no longer a raw-byte hash for
+    // `.image` — it's `PasteboardReader`'s default (real, uninjected)
+    // `CoreGraphicsImagePixelHasher`'s format-independent PIXEL-content
+    // hash of `pngData`. This is exactly what fixes the T-PF2-era
+    // "container changes the digest" problem the old version of this
+    // comment described: the SAME picture now hashes identically whether
+    // it's captured as PNG or TIFF (proven directly, chunk-size and
+    // container-independence both, by `CoreGraphicsImagePixelHasherTests`)
+    // — this test only additionally confirms `PasteboardReader`'s default
+    // init wires that real hasher in, not a stub.
+    let expectedHash = CoreGraphicsImagePixelHasher().pixelContentHash(of: pngData)
+    #expect(result?.contentHash == expectedHash)
+    #expect(result?.contentHash != BlobStore.contentHash(of: pngData))
+    #expect(result?.contentHash != BlobStore.contentHash(of: tiffData))
+  }
+
+  @Test("TIFF is used when it's the only image representation offered")
+  func usesTIFFWhenOnlyTIFFOffered() {
+    let tiffData = ImageFixtures.makeTinyImageData(width: 4, height: 4, format: .tiff)
+    let pasteboard = FakePasteboard(availableTypes: [.tiff], datas: [.tiff: tiffData])
+
+    let result = PasteboardReader().read(from: pasteboard)
+
+    #expect(result?.kind == .image)
+    #expect(result?.rawData == tiffData)
+    #expect(result?.byteSize == tiffData.count)
+  }
+
+  @Test("An image exactly at the byte-size ceiling is still captured (boundary is inclusive)")
+  func acceptsImageAtByteSizeCeiling() {
+    // Zero-filled, undecodable-as-a-real-image bytes at exactly the
+    // ceiling — mirrors `ClipboardMonitorTests`'s T-PERF3 fixture shape
+    // (byte-count cost, not decode cost, is what's under test here).
+    let atCeiling = Data(count: PasteboardReader.maxCapturedImageByteSize)
+    let pasteboard = FakePasteboard(availableTypes: [.png], datas: [.png: atCeiling])
+
+    let result = PasteboardReader().read(from: pasteboard)
+
+    #expect(result?.kind == .image)
+    #expect(result?.byteSize == atCeiling.count)
+  }
+
+  @Test("An image over the byte-size ceiling is rejected cleanly — read(from:) returns nil")
+  func rejectsImageOverByteSizeCeiling() {
+    let oversized = Data(count: PasteboardReader.maxCapturedImageByteSize + 1)
+    let pasteboard = FakePasteboard(availableTypes: [.png], datas: [.png: oversized])
+
+    let result = PasteboardReader().read(from: pasteboard)
+
+    #expect(result == nil)
+  }
+
+  @Test(
+    "An image over the pixel-dimension ceiling is rejected cleanly — read(from:) returns nil")
+  func rejectsImageOverPixelDimensionCeiling() {
+    let oversizedWidth = Int(PasteboardReader.maxCapturedImagePixelDimension) + 1
+    // A single-row image keeps this fixture cheap to construct/encode while
+    // still genuinely exceeding the ceiling on its width axis.
+    let imageData = ImageFixtures.makeTinyImageData(width: oversizedWidth, height: 1)
+    let pasteboard = FakePasteboard(availableTypes: [.png], datas: [.png: imageData])
+
+    let result = PasteboardReader().read(from: pasteboard)
+
+    #expect(result == nil)
+  }
+
+  @Test("A well-formed image under both ceilings is unaffected — captured exactly as before")
+  func underCeilingImageIsUnaffected() {
+    let imageData = ImageFixtures.makeTinyImageData(width: 10, height: 12, format: .png)
+    let pasteboard = FakePasteboard(availableTypes: [.png], datas: [.png: imageData])
+
+    let result = PasteboardReader().read(from: pasteboard)
+
+    #expect(result?.kind == .image)
+    #expect(result?.rawData == imageData)
+    #expect(result?.byteSize == imageData.count)
+    #expect(result?.previewText.contains("10") == true)
+    #expect(result?.previewText.contains("12") == true)
+  }
+
   // MARK: - File (T20)
 
   @Test(
@@ -247,7 +347,10 @@ struct PasteboardReaderTests {
 
     let viaRead = reader.read(from: pasteboard)
     let raw = reader.pullRawPayload(from: pasteboard)
-    let viaSplit = raw.map(reader.classify)
+    // T-PF2: `classify` is itself now `(RawPayload) -> Classification?`, so
+    // `flatMap` (not `map`) keeps `viaSplit` a single-level `Classification?`
+    // instead of double-wrapping it.
+    let viaSplit = raw.flatMap(reader.classify)
 
     #expect(viaSplit?.kind == viaRead?.kind)
     #expect(viaSplit?.previewText == viaRead?.previewText)
@@ -292,4 +395,190 @@ struct PasteboardReaderTests {
 /// instead of referencing `Thread.isMainThread` directly.
 private func isCurrentlyOnMainThread() -> Bool {
   Thread.isMainThread
+}
+
+// MARK: - T-PF5b/T-PF5e: injected pixel hash + megapixel memory ceiling
+
+/// A fake `ImagePixelHashing` — proves `PasteboardReader` wires the
+/// injected hasher into `.image` classification (`stubbedHash`), and lets
+/// the T-PF5e memory-safety tests below assert the hasher is never even
+/// CALLED for an over-`maxPixelHashPixelCount` image (`callCount`). A
+/// plain `final class` guarded by a lock, not the `actor` shape
+/// `OCRBackfillCoordinatorTests`'s `FakeBackfillRecognizer` uses, because
+/// `ImagePixelHashing.pixelContentHash(of:)` is a SYNCHRONOUS protocol
+/// requirement — an actor could only satisfy that `nonisolated`, which
+/// can't touch actor-isolated state — so this stays genuinely `Sendable`
+/// under Swift 6 strict concurrency via `NSLock` instead, while remaining
+/// callable synchronously from `PasteboardReader.classify(_:)`.
+private final class FakeImagePixelHashing: ImagePixelHashing, @unchecked Sendable {
+  private let lock = NSLock()
+  private var callCountStorage = 0
+  private let stubbedHash: String?
+
+  init(stubbedHash: String?) {
+    self.stubbedHash = stubbedHash
+  }
+
+  var callCount: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return callCountStorage
+  }
+
+  func pixelContentHash(of imageData: Data) -> String? {
+    lock.lock()
+    callCountStorage += 1
+    lock.unlock()
+    return stubbedHash
+  }
+}
+
+@Suite("PasteboardReader pixel hash + memory ceiling")
+struct PasteboardReaderPixelHashTests {
+
+  @Test("Image contentHash uses the injected pixel hasher, not the raw-byte hash")
+  func imageContentHashUsesInjectedPixelHasher() {
+    let imageData = ImageFixtures.makeTinyImageData(width: 10, height: 10)
+    let pasteboard = FakePasteboard(availableTypes: [.png], datas: [.png: imageData])
+    let hasher = FakeImagePixelHashing(stubbedHash: "sentinel-pixel-hash")
+    let reader = PasteboardReader(pixelHasher: hasher)
+
+    let result = reader.read(from: pasteboard)
+
+    #expect(result?.kind == .image)
+    #expect(result?.contentHash == "sentinel-pixel-hash")
+    #expect(result?.contentHash != BlobStore.contentHash(of: imageData))
+    #expect(hasher.callCount == 1)
+  }
+
+  @Test("Falls back to the raw-byte hash when the pixel hasher returns nil (undecodable)")
+  func imageContentHashFallsBackWhenHasherReturnsNil() {
+    let imageData = ImageFixtures.makeTinyImageData(width: 10, height: 10)
+    let pasteboard = FakePasteboard(availableTypes: [.png], datas: [.png: imageData])
+    let hasher = FakeImagePixelHashing(stubbedHash: nil)
+    let reader = PasteboardReader(pixelHasher: hasher)
+
+    let result = reader.read(from: pasteboard)
+
+    #expect(result?.contentHash == BlobStore.contentHash(of: imageData))
+    #expect(hasher.callCount == 1)
+  }
+
+  @Test(
+    "T-PF5e: an image over the total-pixel-count ceiling falls back to the raw-byte hash WITHOUT ever calling the pixel hasher — the memory-safety proof"
+  )
+  func imageContentHashFallsBackAboveMegapixelCeilingWithoutCallingHasher() {
+    // 20,000 x 2,001 = 40,020,000 px — over `maxPixelHashPixelCount`
+    // (40,000,000) while each axis individually stays at/under
+    // `maxCapturedImagePixelDimension` (20,000), so this exercises the
+    // NEW total-pixel-count ceiling specifically, not the existing
+    // per-axis one. A PNG of this mostly-uninitialized pixel data
+    // compresses to well under `maxCapturedImageByteSize` (measured
+    // ~700 KB in this task's handoff), so it also passes that ceiling —
+    // exactly the "small file, huge decoded grid" shape T-PF5e exists to
+    // guard against.
+    let width = 20_000
+    let height = 2_001
+    #expect(width * height > PasteboardReader.maxPixelHashPixelCount)
+    #expect(CGFloat(width) <= PasteboardReader.maxCapturedImagePixelDimension)
+    #expect(CGFloat(height) <= PasteboardReader.maxCapturedImagePixelDimension)
+
+    let imageData = ImageFixtures.makeTinyImageData(width: width, height: height)
+    #expect(imageData.count <= PasteboardReader.maxCapturedImageByteSize)
+
+    let pasteboard = FakePasteboard(availableTypes: [.png], datas: [.png: imageData])
+    let hasher = FakeImagePixelHashing(stubbedHash: "sentinel-pixel-hash")
+    let reader = PasteboardReader(pixelHasher: hasher)
+
+    let result = reader.read(from: pasteboard)
+
+    #expect(result?.kind == .image)
+    #expect(result?.contentHash == BlobStore.contentHash(of: imageData))
+    #expect(result?.contentHash != "sentinel-pixel-hash")
+    #expect(hasher.callCount == 0)
+  }
+
+  @Test("An image just under the total-pixel-count ceiling still uses the pixel hash")
+  func imageContentHashUsesPixelHashJustUnderMegapixelCeiling() {
+    // 20,000 x 1,999 = 39,980,000 px — just under `maxPixelHashPixelCount`
+    // (40,000,000).
+    let width = 20_000
+    let height = 1_999
+    #expect(width * height < PasteboardReader.maxPixelHashPixelCount)
+
+    let imageData = ImageFixtures.makeTinyImageData(width: width, height: height)
+    #expect(imageData.count <= PasteboardReader.maxCapturedImageByteSize)
+
+    let pasteboard = FakePasteboard(availableTypes: [.png], datas: [.png: imageData])
+    let hasher = FakeImagePixelHashing(stubbedHash: "sentinel-pixel-hash")
+    let reader = PasteboardReader(pixelHasher: hasher)
+
+    let result = reader.read(from: pasteboard)
+
+    #expect(result?.contentHash == "sentinel-pixel-hash")
+    #expect(hasher.callCount == 1)
+  }
+
+  @Test("The pixel hasher is never reached for an image rejected by the byte-size ceiling")
+  func pixelHasherNotCalledForByteSizeRejectedImage() {
+    let oversized = Data(count: PasteboardReader.maxCapturedImageByteSize + 1)
+    let pasteboard = FakePasteboard(availableTypes: [.png], datas: [.png: oversized])
+    let hasher = FakeImagePixelHashing(stubbedHash: "sentinel-pixel-hash")
+    let reader = PasteboardReader(pixelHasher: hasher)
+
+    let result = reader.read(from: pasteboard)
+
+    #expect(result == nil)
+    #expect(hasher.callCount == 0)
+  }
+
+  @Test("The pixel hasher is never reached for an image rejected by the pixel-dimension ceiling")
+  func pixelHasherNotCalledForPixelDimensionRejectedImage() {
+    let oversizedWidth = Int(PasteboardReader.maxCapturedImagePixelDimension) + 1
+    // A single-row image keeps this fixture cheap to construct/encode
+    // (mirrors `rejectsImageOverPixelDimensionCeiling`'s fixture shape).
+    let imageData = ImageFixtures.makeTinyImageData(width: oversizedWidth, height: 1)
+    let pasteboard = FakePasteboard(availableTypes: [.png], datas: [.png: imageData])
+    let hasher = FakeImagePixelHashing(stubbedHash: "sentinel-pixel-hash")
+    let reader = PasteboardReader(pixelHasher: hasher)
+
+    let result = reader.read(from: pasteboard)
+
+    #expect(result == nil)
+    #expect(hasher.callCount == 0)
+  }
+
+  @Test(".text/.richText/.link/.file contentHash is unaffected by the injected pixel hasher")
+  func nonImageKindsIgnorePixelHasher() {
+    let hasher = FakeImagePixelHashing(stubbedHash: "sentinel-pixel-hash")
+    let reader = PasteboardReader(pixelHasher: hasher)
+
+    let textPasteboard = FakePasteboard(
+      availableTypes: [.string], strings: [.string: "plain text"])
+    let textResult = reader.read(from: textPasteboard)
+    #expect(textResult?.kind == .text)
+    #expect(textResult?.contentHash == BlobStore.contentHash(of: Data("plain text".utf8)))
+
+    let linkPasteboard = FakePasteboard(
+      availableTypes: [.string], strings: [.string: "https://example.com"])
+    let linkResult = reader.read(from: linkPasteboard)
+    #expect(linkResult?.kind == .link)
+    #expect(linkResult?.contentHash == BlobStore.contentHash(of: Data("https://example.com".utf8)))
+
+    let rtfData = Data("{\\rtf1 hello}".utf8)
+    let richTextPasteboard = FakePasteboard(
+      availableTypes: [.rtf, .string], strings: [.string: "hello"], datas: [.rtf: rtfData])
+    let richTextResult = reader.read(from: richTextPasteboard)
+    #expect(richTextResult?.kind == .richText)
+    #expect(richTextResult?.contentHash == BlobStore.contentHash(of: rtfData))
+
+    let urlString = "file:///tmp/does-not-need-to-exist.txt"
+    let filePasteboard = FakePasteboard(
+      availableTypes: [.fileURL], strings: [.fileURL: urlString])
+    let fileResult = reader.read(from: filePasteboard)
+    #expect(fileResult?.kind == .file)
+    #expect(fileResult?.contentHash == BlobStore.contentHash(of: Data(urlString.utf8)))
+
+    #expect(hasher.callCount == 0)
+  }
 }
