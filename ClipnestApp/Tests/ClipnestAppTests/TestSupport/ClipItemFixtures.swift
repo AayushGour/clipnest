@@ -16,7 +16,8 @@ func makeClipItem(
   pinned: Bool = false,
   pinnedAt: Date? = nil,
   blobPath: String? = nil,
-  fileReference: String? = nil
+  fileReference: String? = nil,
+  ocrText: String? = nil
 ) -> ClipItem {
   ClipItem(
     kind: kind,
@@ -25,6 +26,7 @@ func makeClipItem(
     pinned: pinned,
     pinnedAt: pinnedAt,
     blobPath: blobPath,
-    fileReference: fileReference
+    fileReference: fileReference,
+    ocrText: ocrText
   )
 }

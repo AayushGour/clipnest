@@ -260,4 +260,57 @@ struct ClipStoreTests {
       InMemoryClipStore()
     }
   }
+
+  // MARK: - setRecognizedText (T-OCR2)
+
+  @Test("setRecognizedText sets ocrText on the target item")
+  func setRecognizedTextSetsOcrTextField() async throws {
+    try await ClipStoreContractTests.setRecognizedTextSetsOcrTextField {
+      InMemoryClipStore()
+    }
+  }
+
+  @Test("setRecognizedText on an unknown id throws .notFound")
+  func setRecognizedTextOnUnknownIDThrows() async throws {
+    try await ClipStoreContractTests.setRecognizedTextOnUnknownIDThrows {
+      InMemoryClipStore()
+    }
+  }
+
+  @Test("query finds an image item by its recognized text alone, even with no match in previewText")
+  func queryFindsItemByRecognizedTextAlone() async throws {
+    try await ClipStoreContractTests.queryFindsItemByRecognizedTextAlone {
+      InMemoryClipStore()
+    }
+  }
+
+  // MARK: - fetchImagesNeedingRecognition (T-UX1)
+
+  @Test("fetchImagesNeedingRecognition returns only unrecognized image items")
+  func fetchImagesNeedingRecognitionOnlyReturnsUnrecognizedImages() async throws {
+    try await ClipStoreContractTests.fetchImagesNeedingRecognitionOnlyReturnsUnrecognizedImages {
+      InMemoryClipStore()
+    }
+  }
+
+  @Test("fetchImagesNeedingRecognition excludes image items with no blob")
+  func fetchImagesNeedingRecognitionExcludesImagesWithNoBlob() async throws {
+    try await ClipStoreContractTests.fetchImagesNeedingRecognitionExcludesImagesWithNoBlob {
+      InMemoryClipStore()
+    }
+  }
+
+  @Test("fetchImagesNeedingRecognition orders results newest-first")
+  func fetchImagesNeedingRecognitionOrdersNewestFirst() async throws {
+    try await ClipStoreContractTests.fetchImagesNeedingRecognitionOrdersNewestFirst {
+      InMemoryClipStore()
+    }
+  }
+
+  @Test("fetchImagesNeedingRecognition is empty once every image has recognized text")
+  func fetchImagesNeedingRecognitionEmptyWhenNothingPending() async throws {
+    try await ClipStoreContractTests.fetchImagesNeedingRecognitionEmptyWhenNothingPending {
+      InMemoryClipStore()
+    }
+  }
 }

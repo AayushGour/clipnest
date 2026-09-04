@@ -2,6 +2,8 @@ import AppKit
 import ApplicationServices
 import CoreGraphics
 import Foundation
+import ImageIO
+import UniformTypeIdentifiers
 
 /// Errors thrown by `Paster`/`EventSynthesizing` for genuine failures.
 ///
@@ -212,35 +214,92 @@ public struct Paster: Sendable {
   ///
   /// If Accessibility is not granted, or no target is available, this stops
   /// after the pasteboard write: no error, no crash, no delay — the
-  /// documented fallback. `async` solely to allow `synthesisDelay`; the
-  /// pasteboard write itself still happens synchronously, before any
-  /// suspension point, so a caller reading `pasteboard.changeCount`
-  /// immediately after this call returns (to feed
-  /// `ClipboardMonitor.ignore(changeCount:)`) still observes the correct
-  /// value.
+  /// documented fallback.
+  ///
+  /// `async` for three reasons: `synthesisDelay`, `onPasteboardWrite`'s
+  /// hop back onto its caller's actor (below), and — for `.image` — the
+  /// off-main decode/re-encode (`normalizedToTIFF`, run in a
+  /// `Task.detached` so a large image never blocks the main actor; see the
+  /// `.image` case below).
+  ///
+  /// **The invariant callers depend on is "the pasteboard write completes
+  /// before `paste()` returns" — NOT "before the first suspension point."**
+  /// The `.image` path deliberately suspends *before* writing (awaiting the
+  /// detached decode). That is safe: nothing observes `pasteboard
+  /// .changeCount` until after the write (see `onPasteboardWrite` below —
+  /// it fires immediately after, and it's the ONLY place any caller reads
+  /// `changeCount` for self-write suppression purposes now — `paste()`'s
+  /// return no longer doubles as that signal, see T-HANG2 below). Adding
+  /// suspensions *before* the write does not change that.
+  ///
+  /// **T-HANG2 (self-paste-suppression race — was: caller re-read
+  /// `pasteboard.changeCount` itself, only after `paste()` had FULLY
+  /// returned):** `synthesisDelay` (default 40ms) + a real event-post
+  /// happened between the write and that read, so `ClipboardMonitor
+  /// .ignore(changeCount:)` was armed 40ms+ after the write — a window the
+  /// 0.4s capture poll could and did land inside (T-STRESS1's harness
+  /// quantified this: 18/18 raced at 5-42ms; for `.image` content it was
+  /// worse — the raced self-capture computed a genuinely different
+  /// `contentHash` than the original, since `normalizedToTIFF`'s re-encode
+  /// isn't byte-identical, producing a real duplicate row + a wasted blob).
+  /// `onPasteboardWrite`, if provided, is invoked with `pasteboard
+  /// .changeCount` IMMEDIATELY after the write completes — before
+  /// `synthesisDelay`'s sleep even starts — so the caller can arm
+  /// suppression the instant the write is observable instead of racing to
+  /// report it afterwards. It is `@MainActor` because its one real caller
+  /// (`PickerViewModel.performPaste`) needs to call a `@MainActor`-isolated
+  /// method; `Paster` itself stays actor-agnostic (`nonisolated`), so the
+  /// isolation is spelled out on the closure's TYPE rather than on
+  /// `Paster`. Defaults to `nil` (no-op) so every test/other call site is
+  /// unaffected. Nothing else in `paste()` writes to the pasteboard again
+  /// before this fires or after, so there is no seam for another writer to
+  /// land between "wrote" and "caller told" regardless of how long the
+  /// `@MainActor` hop itself takes.
   ///
   /// - Throws: `PasteError.targetNoLongerFrontmost` if some other app took
   ///   focus during `synthesisDelay` (H-1) — the synthesized keystroke is
   ///   deliberately NOT posted in that case, since posting it could type the
   ///   clipboard content (e.g. a password) into the wrong app. The
   ///   pasteboard write above still stands either way, so the content
-  ///   remains available for the user to paste manually.
+  ///   remains available for the user to paste manually; `onPasteboardWrite`
+  ///   has already fired by this point regardless of what happens next.
   public func paste(
     _ content: PasteContent,
-    targetingFrontmostApp frontmostApp: FrontmostAppRef?
+    targetingFrontmostApp frontmostApp: FrontmostAppRef?,
+    onPasteboardWrite: (@MainActor @Sendable (Int) -> Void)? = nil
   ) async throws {
     switch content {
     case .text(let string):
       pasteboard.writeString(string, forType: .string)
     case .image(let data):
       // The bytes captured for a clip could be either PNG or TIFF (see
-      // `PasteboardReader.imagePasteboardTypes`) — decoding via
-      // `NSImage(data:)` then taking `.tiffRepresentation` normalizes to one
-      // format under the `.tiff` pasteboard type, which is what virtually
-      // every macOS app expects for a pasted image regardless of the
-      // original format. No force-unwrap: undecodable bytes throw instead
-      // of crashing, per coding-standards.md.
-      guard let tiffData = NSImage(data: data)?.tiffRepresentation else {
+      // `PasteboardReader.imagePasteboardTypes`) — normalizing to one format
+      // under the `.tiff` pasteboard type is what virtually every macOS app
+      // expects for a pasted image regardless of the original format.
+      //
+      // T-PERF1: this decode+re-encode measured ~80ms combined on a large
+      // (25MB) real screenshot — moved into `Task.detached(priority:
+      // .utility)` so it never runs on the caller's actor (typically
+      // `@MainActor`, since `PickerViewModel`'s `select`/`pasteSnippet`
+      // start their `Task`s from a `@MainActor` method, which inherits that
+      // isolation). `Task.detached` guarantees the offload regardless of
+      // what actor invoked `paste(_:targetingFrontmostApp:)` — unlike
+      // relying on the caller to hop off first, this doesn't depend on every
+      // future call site getting that right.
+      //
+      // Using `ImageIO` (`CGImageSource`/`CGImageDestination`) instead of
+      // `NSImage(data:)?.tiffRepresentation` (the previous implementation):
+      // `NSImage` is not documented thread-safe for every operation, and
+      // this now runs off `@MainActor` by design — `ImageIO`'s C API is a
+      // pure, thread-safe decode/encode with no such caveat. No force-
+      // unwrap: undecodable bytes (or an encode failure) throw
+      // `.invalidImageData` instead of crashing, per coding-standards.md —
+      // same contract `PasterTests.invalidImageDataThrowsBeforeAnyWrite`
+      // already verifies.
+      let normalizeTask = Task.detached(priority: .utility) { () -> Data? in
+        Self.normalizedToTIFF(data)
+      }
+      guard let tiffData = await normalizeTask.value else {
         throw PasteError.invalidImageData
       }
       pasteboard.writeData(tiffData, forType: .tiff)
@@ -249,6 +308,10 @@ public struct Paster: Sendable {
     case .richText(let rtf, let plain):
       pasteboard.writeRichText(rtf: rtf, plain: plain)
     }
+
+    // T-HANG2: fire immediately after the write, before anything else
+    // (including `synthesisDelay`'s sleep) — see this method's doc comment.
+    await onPasteboardWrite?(pasteboard.changeCount)
 
     guard isAccessibilityGranted(), let frontmostApp else { return }
 
@@ -263,5 +326,31 @@ public struct Paster: Sendable {
     }
 
     try eventSynthesizer.synthesizeCommandV(targeting: frontmostApp)
+  }
+
+  /// T-PERF1: decodes `data` (captured as PNG or TIFF — see
+  /// `PasteboardReader.imagePasteboardTypes`) and re-encodes it as TIFF,
+  /// entirely via `ImageIO`'s C API (never `NSImage`/`NSBitmapImageRep`) so
+  /// it's safe to call from the `Task.detached` background task
+  /// `paste(_:targetingFrontmostApp:)`'s `.image` case runs this on. Returns
+  /// `nil` on any decode/encode failure (e.g. undecodable bytes) — the
+  /// caller turns that into `PasteError.invalidImageData`, same contract the
+  /// previous `NSImage(data:)?.tiffRepresentation` implementation had.
+  private static func normalizedToTIFF(_ data: Data) -> Data? {
+    guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+      let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+    else {
+      return nil
+    }
+    let output = NSMutableData()
+    guard
+      let destination = CGImageDestinationCreateWithData(
+        output, UTType.tiff.identifier as CFString, 1, nil)
+    else {
+      return nil
+    }
+    CGImageDestinationAddImage(destination, image, nil)
+    guard CGImageDestinationFinalize(destination) else { return nil }
+    return output as Data
   }
 }

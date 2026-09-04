@@ -606,4 +606,117 @@ enum ClipStoreContractTests {
 
     #expect(results.map(\.id) == [item.id])
   }
+
+  // MARK: - setRecognizedText (T-OCR2)
+
+  static func setRecognizedTextSetsOcrTextField(
+    makeStore: () async throws -> any ClipStore
+  ) async throws {
+    let store = try await makeStore()
+    let item = try await store.insertOrBumpDuplicate(
+      makeItem(contentHash: "screenshot", previewText: "Image, 100×100", kind: .image))
+    #expect(item.ocrText == nil)
+
+    try await store.setRecognizedText(item.id, text: "Hello from a screenshot")
+
+    let all = try await store.fetchAll()
+    #expect(all.first?.ocrText == "Hello from a screenshot")
+  }
+
+  static func setRecognizedTextOnUnknownIDThrows(
+    makeStore: () async throws -> any ClipStore
+  ) async throws {
+    let store = try await makeStore()
+
+    await #expect(throws: ClipStoreError.notFound) {
+      try await store.setRecognizedText(UUID(), text: "anything")
+    }
+  }
+
+  /// A screenshot with no textual match in its own `previewText` (a plain
+  /// "Image, WxH" summary, per `PasteboardReader.imagePreviewText`) becomes
+  /// findable purely by its recognized text — the core promise of T-OCR2's
+  /// search integration.
+  static func queryFindsItemByRecognizedTextAlone(
+    makeStore: () async throws -> any ClipStore
+  ) async throws {
+    let store = try await makeStore()
+    let screenshot = try await store.insertOrBumpDuplicate(
+      makeItem(contentHash: "screenshot", previewText: "Image, 200×200", kind: .image))
+    _ = try await store.insertOrBumpDuplicate(
+      makeItem(contentHash: "unrelated", previewText: "Image, 50×50", kind: .image))
+
+    try await store.setRecognizedText(screenshot.id, text: "Invoice #4471 — Total Due")
+
+    let results = try await store.query(
+      text: "invoice", kind: nil, scope: .history, offset: 0, limit: 10)
+
+    #expect(results.map(\.id) == [screenshot.id])
+  }
+
+  // MARK: - fetchImagesNeedingRecognition (T-UX1)
+
+  static func fetchImagesNeedingRecognitionOnlyReturnsUnrecognizedImages(
+    makeStore: () async throws -> any ClipStore
+  ) async throws {
+    let store = try await makeStore()
+    let needsRecognition = try await store.insertOrBumpDuplicate(
+      makeItem(contentHash: "needs-recognition", kind: .image, blobPath: "blobs/a"))
+    let alreadyRecognized = try await store.insertOrBumpDuplicate(
+      makeItem(contentHash: "already-recognized", kind: .image, blobPath: "blobs/b"))
+    try await store.setRecognizedText(alreadyRecognized.id, text: "already recognized")
+    // Not an image at all — must never appear regardless of ocrText state.
+    _ = try await store.insertOrBumpDuplicate(makeItem(contentHash: "text-item", kind: .text))
+
+    let results = try await store.fetchImagesNeedingRecognition()
+
+    #expect(results.map(\.id) == [needsRecognition.id])
+  }
+
+  /// An `.image` item with no `blobPath` has nothing to recognize — never
+  /// produced by the real capture path (see `ClipboardMonitor.checkNow()`),
+  /// but the work set must still exclude it defensively rather than hand a
+  /// coordinator an item it can't do anything with.
+  static func fetchImagesNeedingRecognitionExcludesImagesWithNoBlob(
+    makeStore: () async throws -> any ClipStore
+  ) async throws {
+    let store = try await makeStore()
+    _ = try await store.insertOrBumpDuplicate(
+      makeItem(contentHash: "no-blob", kind: .image, blobPath: nil))
+
+    let results = try await store.fetchImagesNeedingRecognition()
+
+    #expect(results.isEmpty)
+  }
+
+  static func fetchImagesNeedingRecognitionOrdersNewestFirst(
+    makeStore: () async throws -> any ClipStore
+  ) async throws {
+    let store = try await makeStore()
+    let older = try await store.insertOrBumpDuplicate(
+      makeItem(
+        contentHash: "older", createdAt: Date(timeIntervalSince1970: 1_000), kind: .image,
+        blobPath: "blobs/a"))
+    let newer = try await store.insertOrBumpDuplicate(
+      makeItem(
+        contentHash: "newer", createdAt: Date(timeIntervalSince1970: 2_000), kind: .image,
+        blobPath: "blobs/b"))
+
+    let results = try await store.fetchImagesNeedingRecognition()
+
+    #expect(results.map(\.id) == [newer.id, older.id])
+  }
+
+  static func fetchImagesNeedingRecognitionEmptyWhenNothingPending(
+    makeStore: () async throws -> any ClipStore
+  ) async throws {
+    let store = try await makeStore()
+    let recognized = try await store.insertOrBumpDuplicate(
+      makeItem(contentHash: "recognized", kind: .image, blobPath: "blobs/a"))
+    try await store.setRecognizedText(recognized.id, text: "already done")
+
+    let results = try await store.fetchImagesNeedingRecognition()
+
+    #expect(results.isEmpty)
+  }
 }

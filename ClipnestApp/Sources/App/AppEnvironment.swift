@@ -58,6 +58,16 @@ final class AppEnvironment {
   let blobStore: BlobStore
   let clipStore: SwiftDataClipStore
   let snippetStore: SwiftDataSnippetStore
+  /// T-UX1: `@MainActor` state + orchestration for the Settings "Recognize
+  /// Text in Existing Images" backfill — wraps an `OCRBackfillCoordinator`
+  /// (see this initializer's `visionTextRecognizer` local) built to share
+  /// `blobStore`/`clipStore` and the same `VisionTextRecognizer` instance
+  /// `clipboardMonitor` uses, so a manual backfill and at-capture
+  /// recognition inherit the exact same `recognitionQueue` serialization
+  /// (see `VisionTextRecognizer`'s doc comment / T-HANG1). Owned here, not
+  /// by `HistorySettingsView`, matching every other cross-cutting service
+  /// in this file (e.g. `updateChecker`).
+  let ocrBackfillViewModel: OCRBackfillViewModel
   let privacyFilter: PrivacyFilter
   let settingsStore: SettingsStore
   let pasteboardReader: PasteboardReader
@@ -109,6 +119,19 @@ final class AppEnvironment {
       modelContainer: try SwiftDataSnippetStore.makeProductionContainer())
     self.snippetStore = snippetStore
 
+    // T-OCR2/T-UX1: one shared `VisionTextRecognizer` instance for both the
+    // at-capture-time path (`clipboardMonitor` below) and the Settings
+    // backfill (`ocrBackfillViewModel`) — a plain, stateless struct (no
+    // per-instance state to share), but hoisted into one `let` rather than
+    // two separate literals so the sharing is explicit at the call site,
+    // not just an accident of `recognitionQueue` happening to be `static`.
+    // See `VisionTextRecognizer`'s doc comment for why serialization
+    // matters here (T-HANG1).
+    let visionTextRecognizer = VisionTextRecognizer()
+    self.ocrBackfillViewModel = OCRBackfillViewModel(
+      coordinator: OCRBackfillCoordinator(
+        store: clipStore, blobStore: blobStore, recognizer: visionTextRecognizer))
+
     // T9 (snippet keyword expansion): the concrete AX-backed
     // `SelectedTextAccessing` (`AXSelectedTextAccessor`) and the universal
     // clipboard fallback (`ClipboardSelectionReplacer`) are app-side, so they
@@ -132,6 +155,23 @@ final class AppEnvironment {
       },
       captureEnabledProvider: {
         MainActor.assumeIsolated { settingsStore.isCaptureEnabled }
+      },
+      // T-OCR2: on-device OCR at capture time runs ONLY here, inside the
+      // real capture path — never at idle-scan or on a background sweep,
+      // by construction (there is no other call site that invokes
+      // `scheduleTextRecognition`). `ocrBackfillViewModel` above is the
+      // ONE other place recognition ever runs (a user-triggered backfill,
+      // T-UX1) — see this initializer's `visionTextRecognizer` local for
+      // why both share the exact same instance.
+      textRecognizer: visionTextRecognizer,
+      textRecognitionEnabledProvider: {
+        MainActor.assumeIsolated { settingsStore.isTextRecognitionEnabled }
+      },
+      // T-OCR8: same live-read shape as the enabled provider above — no
+      // `ClipboardMonitor`/`VisionTextRecognizer` recreation on a
+      // Fast<->Accurate change in Settings.
+      textRecognitionQualityProvider: {
+        MainActor.assumeIsolated { settingsStore.textRecognitionQuality }
       }
     )
 
@@ -217,6 +257,11 @@ final class AppEnvironment {
       itemPreviewController?.hide()
     }
     panel.onCommandDelete = { [weak viewModel] in viewModel?.deleteHighlighted() }
+    // T-SET5: ⌘, — see `PickerPanel.onCommandComma`'s doc comment for why
+    // this has to be wired at the AppKit layer (via `PickerPanel`) rather
+    // than through `PickerView`'s SwiftUI `.onKeyPress`, same shape as
+    // `onCommandDelete` immediately above.
+    panel.onCommandComma = { [weak viewModel] in viewModel?.openSettingsFromPicker() }
 
     // Task 12 (item preview): drives the non-key preview panel from
     // `previewTargetID` changes — see `PickerView`'s top doc comment for

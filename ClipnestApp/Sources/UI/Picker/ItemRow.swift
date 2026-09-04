@@ -89,19 +89,31 @@ struct ItemRow: View {
   let onTogglePin: () -> Void
   let onSaveAsSnippet: () -> Void
   let onDelete: () -> Void
+  /// T-OCR2: context-menu-only action, only offered `if hasRecognizedText`
+  /// — copies the item's OCR text without selecting/pasting the row. See
+  /// `PickerViewModel.copyRecognizedText(from:)`.
+  let onCopyRecognizedText: () -> Void
   /// T12: reports pointer hover state to `PickerViewModel.hoverItem(_:)` —
   /// `true` when the pointer enters the row, `false` when it leaves. Drives
   /// the preview surface (hover wins over keyboard selection, see that
   /// method's doc comment).
   let onHover: (Bool) -> Void
 
-  /// "Save as Snippet" only makes sense for kinds whose `previewText` is
-  /// the item's *full* content (`.text`/`.link`) — same restriction
-  /// `PickerViewModel.select(_:)`/`presentSaveAsSnippetForm(from:)` already
-  /// enforce; hiding the menu item here avoids offering an action that
-  /// would silently no-op for `.richText`/`.image`/`.file`.
-  private var supportsSaveAsSnippet: Bool {
-    item.kind == .text || item.kind == .link
+  /// T-SET4: promoted to `ClipItem.supportsSaveAsSnippet` (Core) — the exact
+  /// same predicate `PickerViewModel.presentSaveAsSnippetForm(from:)`/
+  /// `saveHighlightedAsSnippet()` and `ShortcutHints`'s footer ⌘S hint now
+  /// also read, instead of three independently-written copies. Hiding the
+  /// menu item/button here avoids offering an action that would silently
+  /// no-op for `.richText`/`.image`/`.file`.
+
+  /// T-OCR2: whether this `.image` row has on-device-recognized text —
+  /// drives both the small `text.viewfinder` badge on the thumbnail and
+  /// whether "Copy Recognized Text" appears in the context menu. Forwards
+  /// to `ClipItem.hasRecognizedText` (T-SET2) — the picker footer's ⌥⏎ hint
+  /// needs the exact same test, so the `kind == .image && !(ocrText ?? "")
+  /// .isEmpty` predicate is defined exactly once there, not duplicated here.
+  private var hasRecognizedText: Bool {
+    item.hasRecognizedText
   }
 
   var body: some View {
@@ -134,8 +146,11 @@ struct ItemRow: View {
         systemImage: item.pinned ? "pin.slash" : "pin",
         action: onTogglePin
       )
-      if supportsSaveAsSnippet {
+      if item.supportsSaveAsSnippet {
         Button("Save as Snippet", systemImage: "text.badge.plus", action: onSaveAsSnippet)
+      }
+      if hasRecognizedText {
+        Button("Copy Recognized Text", systemImage: "text.viewfinder", action: onCopyRecognizedText)
       }
       Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
     }
@@ -144,8 +159,8 @@ struct ItemRow: View {
   /// Up to three always-visible trailing actions. The pin button's icon
   /// alone communicates pinned state (`pin.fill` vs `pin`) — there's no
   /// separate badge anymore. The convert-to-snippet button only renders
-  /// `if supportsSaveAsSnippet`, so a `.richText`/`.image`/`.file` row shows
-  /// exactly two buttons (pin, delete) rather than a third that would
+  /// `if item.supportsSaveAsSnippet`, so a `.richText`/`.image`/`.file` row
+  /// shows exactly two buttons (pin, delete) rather than a third that would
   /// silently no-op.
   private var rowActions: some View {
     HStack(spacing: 8) {
@@ -154,7 +169,7 @@ struct ItemRow: View {
         title: item.pinned ? "Unpin" : "Pin",
         action: onTogglePin
       )
-      if supportsSaveAsSnippet {
+      if item.supportsSaveAsSnippet {
         ExpandingIconButton(
           systemName: "text.badge.plus", title: "Save as Snippet", action: onSaveAsSnippet)
       }
@@ -166,12 +181,33 @@ struct ItemRow: View {
   /// loaded, see `ItemIconThumbnail`), unchanged plain SF Symbol icons for
   /// `.text`/`.richText`/`.link`. `@ViewBuilder` since the cases return
   /// different concrete view types.
+  ///
+  /// T-OCR2: an `.image` row with recognized text gets a small
+  /// `text.viewfinder` badge overlaid on its thumbnail's bottom-trailing
+  /// corner — purely an indicator (not a fourth always-visible button; the
+  /// row's three trailing buttons stay exactly pin/save/delete, see
+  /// `rowActions`'s doc comment). Tapping it does nothing special — the
+  /// badge only signals "this image has recognized text"; copying it lives
+  /// in the context menu (`onCopyRecognizedText`) and ⌥⏎ (see
+  /// `PickerViewModel.pasteContent(for:plainText:)`).
   @ViewBuilder
   private var leadingContent: some View {
     switch item.kind {
     case .image:
       ItemIconThumbnail(
-        item: item, blobStore: blobStore, fallbackSystemImage: item.kind.sfSymbolName)
+        item: item, blobStore: blobStore, fallbackSystemImage: item.kind.sfSymbolName
+      )
+      .overlay(alignment: .bottomTrailing) {
+        if hasRecognizedText {
+          Image(systemName: "text.viewfinder")
+            .font(.system(size: 7, weight: .bold))
+            .foregroundStyle(.white)
+            .padding(2)
+            .background(Circle().fill(Color.accentColor))
+            .offset(x: 3, y: 3)
+            .help("Contains recognized text")
+        }
+      }
     case .file:
       ItemIconThumbnail(
         item: item, blobStore: blobStore, fallbackSystemImage: item.kind.sfSymbolName)

@@ -201,9 +201,12 @@ Nothing here is synced or backed up anywhere outside your normal Mac backups (e.
 | Switch to History tab | `⌘1` |
 | Switch to Pinned tab | `⌘2` |
 | Switch to Snippets tab | `⌘3` |
+| Open Settings | `⌘,` |
 | Close the picker | `Esc` |
 
 These shortcuts aren't yet customizable from within the app — a Settings window for rebinding them is planned but not shipped.
+
+`⌘,` (Command+Comma) also opens Settings while the Settings window itself is focused — the standard macOS convention — but it is deliberately **not** a global shortcut: unlike `⌥⌘V`/`⌥⌘E` above, it only works from inside the picker or from Settings itself, so it never takes `⌘,` away from whatever other app you're using (that app's own Preferences/Settings shortcut keeps working normally).
 
 ## 9. Troubleshooting
 

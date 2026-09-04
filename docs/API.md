@@ -24,6 +24,7 @@ own `Error` enum — see [Error handling](#error-handling).
 - [Model](#model) — `ClipItem`, `Snippet`, `ItemKind`
 - [Store](#store) — `ClipStore`, `SnippetStore`, `BlobStore`
 - [Clipboard](#clipboard) — `PasteboardReader`, `PrivacyFilter`, `ClipboardMonitor`
+- [OCR](#ocr) — `TextRecognizing`, `VisionTextRecognizer`, `OCRBackfillCoordinator`
 - [Search](#search) — `SearchQuery`, `SearchHighlighter`
 - [Paste](#paste) — `Paster`, `PasteContent`, `FrontmostAppTracker`
 - [Error handling](#error-handling)
@@ -114,6 +115,8 @@ public protocol ClipStore: Sendable {
     text: String, kind: ItemKind?, scope: ClipScope, offset: Int, limit: Int
   ) async throws -> [ClipItem]
   func setPinned(_ id: UUID, pinned: Bool) async throws          // throws .notFound
+  func setRecognizedText(_ id: UUID, text: String) async throws  // throws .notFound
+  func fetchImagesNeedingRecognition() async throws -> [ClipItem]
   func delete(_ id: UUID) async throws                            // throws .notFound
   func clearHistory() async throws
   func enforceRetention(cap: RetentionCap?) async throws
@@ -151,6 +154,13 @@ the app, since deleting an item also deletes its blob (see
   (`RetentionCap.maxCount(_:)` or `.maxAge(_:)`), oldest first; `cap == nil`
   deletes nothing. Pinned items are **never** affected by any cap, no
   matter how it's configured.
+- **`setRecognizedText(_:text:)`** — records on-device-recognized text for
+  an `.image` item and folds it into whatever the store searches on, so
+  `query(text:...)` finds the item by that text too (see [OCR](#ocr)).
+- **`fetchImagesNeedingRecognition()`** — every `.image` item with a blob
+  but no recognized text yet (`ocrText` `nil`/empty), newest-first. The
+  work set `OCRBackfillCoordinator` (see [OCR](#ocr)) iterates; unbounded
+  like `fetchAll()` — no UI pages through this directly.
 
 ```swift
 public enum RetentionCap: Equatable, Sendable {
@@ -310,6 +320,103 @@ it immediately after any write your own code makes, with the pasteboard's
 resulting `changeCount`. A store failure during capture is surfaced to
 `captureFailureHandler` (default: `os.Logger`, metadata only — case name,
 never clipboard content) rather than silently discarded.
+
+---
+
+## OCR
+
+On-device text recognition for captured `.image` items, via Apple's
+`Vision` framework — entirely local; no network call is ever involved (see
+`.claude/coding-standards.md`'s "Local-only, always" rule).
+
+```swift
+public protocol TextRecognizing: Sendable {
+  func recognizeText(in imageData: Data, quality: TextRecognitionQuality) async -> String?
+}
+
+public enum TextRecognitionQuality: String, CaseIterable, Sendable {
+  case fast       // ~23ms/image (measured); confuses similar characters, drops punctuation/arrows
+  case accurate   // ~154ms/image (measured, default); correct on punctuation/digits/arrows
+}
+
+public struct VisionTextRecognizer: TextRecognizing {
+  public init()
+  public func recognizeText(in imageData: Data, quality: TextRecognitionQuality) async -> String?
+}
+```
+`VisionTextRecognizer` is the production `TextRecognizing` — the only place
+`Vision.VNRecognizeTextRequest` is referenced anywhere in the codebase.
+Every call funnels through one internal `static`, **serial**
+`DispatchQueue`, regardless of how many `VisionTextRecognizer` instances
+exist or how many callers invoke it concurrently — deliberate, not
+incidental: an earlier uncapped design pinned every Swift-concurrency
+cooperative-pool thread and hung the app on paste for 164s+ (see that
+type's doc comment for the full story). Returns `nil` on failure, on an
+image over its size/pixel ceilings, or when no text is found — never
+throws, so a recognition failure can never surface as a capture failure.
+
+Two call sites use `TextRecognizing`:
+- **At capture time** — `ClipboardMonitor`'s `textRecognizer`/
+  `textRecognitionEnabledProvider`/`textRecognitionQualityProvider`
+  constructor parameters (see [Clipboard](#clipboard)). Gated behind the
+  user's "Recognize text in copied images" setting; runs once per freshly
+  captured `.image`, off the main actor, and writes the result via
+  `ClipStore.setRecognizedText(_:text:)`.
+- **`OCRBackfillCoordinator`** — a one-off, user-triggered pass over images
+  captured *before* that setting was ever turned on (the History settings
+  tab's "Recognize Text in Existing Images" button):
+
+```swift
+public struct OCRBackfillProgress: Sendable, Equatable {
+  public let completed: Int    // items attempted so far (0 reported once, before the first)
+  public let total: Int        // work-set size, fixed for the whole run
+  public let recognized: Int   // how many of `completed` actually got text written
+}
+
+public struct OCRBackfillSummary: Sendable, Equatable {
+  public let wasCancelled: Bool
+  public let progress: OCRBackfillProgress
+}
+
+public typealias OCRBackfillProgressHandler = @Sendable (OCRBackfillProgress) async -> Void
+
+public struct OCRBackfillCoordinator: Sendable {
+  public init(store: any ClipStore, blobStore: BlobStore, recognizer: any TextRecognizing)
+  public func pendingCount() async throws -> Int
+  public func run(
+    quality: TextRecognitionQuality, onProgress: OCRBackfillProgressHandler
+  ) async -> OCRBackfillSummary
+}
+```
+Iterates `ClipStore.fetchImagesNeedingRecognition()`'s snapshot ONE item at
+a time, reusing the exact same `TextRecognizing` recognizer (and therefore
+its serialization above) — a backfill over hundreds of images degrades to
+"slower," never to a repeat of the paste hang. Deliberately decoupled from
+the capture-time setting: `run(...)` never reads or writes
+`isTextRecognitionEnabled`, only the `quality` you pass in — a user can run
+a backfill without opting in to OCR on every future copy. Never blocks the
+caller's actor (each per-item blob read runs inside its own
+`Task.detached(priority: .utility)`). Cancellable cooperatively — checked
+between items, never mid-item, so an in-flight item always finishes and is
+written before a cancellation takes effect; cancel by cancelling the
+enclosing `Task`. Resilient to a missing/corrupt blob, no text found, or
+the item being deleted mid-run (`ClipStoreError.notFound` from
+`setRecognizedText`) — one item's failure never aborts the run. Idempotent:
+the work set only ever contains images with no recognized text, so a
+second `run(...)` (or a re-run after cancelling) never re-recognizes
+anything already done.
+
+```swift
+// Backing HistorySettingsView's "Recognize Text in Existing Images" button:
+let coordinator = OCRBackfillCoordinator(
+  store: clipStore, blobStore: blobStore, recognizer: VisionTextRecognizer())
+let pending = try await coordinator.pendingCount()   // -> "12 images have no recognized text"
+
+let summary = await coordinator.run(quality: .accurate) { progress in
+  await MainActor.run { /* update "N of M" UI from progress.completed/.total */ }
+}
+// summary.wasCancelled, summary.progress.recognized
+```
 
 ---
 

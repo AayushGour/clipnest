@@ -19,12 +19,13 @@ import Foundation
 func makeTestPickerViewModel(
   clipStore: any ClipStore = InMemoryClipStore(blobStore: makeTempBlobStore().blobStore),
   snippetStore: any SnippetStore = InMemorySnippetStore(),
+  pasteboard: any PasteboardWriting = FakePasteboardWriting(),
   blobStore: BlobStore = makeTempBlobStore().blobStore
 ) -> PickerViewModel {
   PickerViewModel(
     clipStore: clipStore,
     snippetStore: snippetStore,
-    pasteboard: FakePasteboardWriting(),
+    pasteboard: pasteboard,
     blobStore: blobStore,
     paster: Paster(
       pasteboard: FakePasteboardWriting(),

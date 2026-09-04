@@ -11,9 +11,12 @@
 //
 // Plan task T23: adds `activeTab` (History/Pinned/Snippets — see
 // `TabSwitcher.swift`) and the Snippets tab's own state + CRUD. `select(_:)`
-// and `pasteSnippet(_:)` both funnel through one shared `pasteAndDismiss(_:)`
-// so the paste + self-write-suppression + dismiss logic exists in exactly
-// one place.
+// and `pasteSnippet(_:)` both funnel through one shared `performPaste(_:
+// frontmostApp:)` so the paste + self-write-suppression logic exists in
+// exactly one place (T-PERF1: each caller captures `frontmostApp` and
+// dismisses itself, before calling in — `select(_:)` needs to sequence that
+// after an async content load, so it could no longer be done inside the
+// shared helper).
 //
 // T50/T51 — DB-virtualization (routed follow-up to D23/T47's flagged-but-
 // deliberately-not-fixed gap: "`ClipStore.fetchAll` has no result cap,
@@ -160,7 +163,7 @@
 // `previewHoverChanged(_:)`, and their private resolve/scheduling
 // machinery). `PickerViewModel+Paste.swift` owns pasting
 // (`select(_:plainText:)`, `pasteContent(for:plainText:)`,
-// `pasteSnippet(_:)`, `pasteAndDismiss(_:)`). Everything else — the Rows/
+// `pasteSnippet(_:)`, `performPaste(_:frontmostApp:)`). Everything else — the Rows/
 // Snippets query pipelines described above, selection-policy application,
 // keyboard-navigation/commit actions, and Snippets CRUD — stayed here: they
 // share `rowsQuery`/`snippetsQuery`/`clipStore`/`snippetStore` and each
@@ -358,6 +361,18 @@ final class PickerViewModel: ObservableObject {
   /// composition root.
   var requestAppUpdate: () -> Void = {}
 
+  /// Set by the composition root (see `AppEnvironment`) — T-SET5. `PickerView`
+  /// is the only place in this call chain that can read
+  /// `@Environment(\.openSettings)` (an environment value, unreachable from
+  /// this plain `ObservableObject`), so it wires this closure to `{
+  /// openSettings(); SettingsFocusCoordinator.focusAfterOpening() }` — the
+  /// exact same two-step sequence `MenuBarContent`'s "Settings…" item uses,
+  /// not a second, independently-drifting copy (coding-standards.md's DRY
+  /// rule). Called by `openSettingsFromPicker()`, below. Defaults to a no-op
+  /// so this type stays usable in previews/tests without a live SwiftUI
+  /// environment.
+  var openSettings: () -> Void = {}
+
   /// Set by the composition root (see `AppEnvironment`) from
   /// `UpdateChecker.onStateChanged` — whether the background 24h check
   /// (approved feature) currently believes a newer release exists. Drives
@@ -380,8 +395,9 @@ final class PickerViewModel: ObservableObject {
   private let clipStore: any ClipStore
   private let snippetStore: any SnippetStore
   /// Not `private` (M-4 extraction — see `PickerViewModel+Paste.swift`'s top
-  /// doc comment): `pasteAndDismiss(_:)` there reads `changeCount` off this.
-  /// Still only ever used from within `PickerViewModel`/its extensions.
+  /// doc comment): `performPaste(_:frontmostApp:)` there reads `changeCount`
+  /// off this. Still only ever used from within `PickerViewModel`/its
+  /// extensions.
   let pasteboard: any PasteboardWriting
   /// Used by `ItemRow` to load thumbnail bytes for `.image` rows (via
   /// `BlobStore.read(blobPath:)`) — the actual thumbnail-loading logic lives
@@ -392,8 +408,8 @@ final class PickerViewModel: ObservableObject {
   /// T16: performs the real paste (pasteboard write + synthesized ⌘V when
   /// Accessibility is granted, clipboard-only otherwise). Not `private` (M-4
   /// extraction — see `PickerViewModel+Paste.swift`'s top doc comment):
-  /// `pasteAndDismiss(_:)` there needs it. Still only ever used from within
-  /// `PickerViewModel`/its extensions.
+  /// `performPaste(_:frontmostApp:)` there needs it. Still only ever used
+  /// from within `PickerViewModel`/its extensions.
   let paster: Paster
   /// T16: supplies the app that was frontmost right before the picker
   /// opened, recorded by `AppEnvironment.showPicker()`. Not `private` — same
@@ -871,8 +887,9 @@ final class PickerViewModel: ObservableObject {
   //
   // Extracted (M-4) to `PickerViewModel+Paste.swift` — `select(_:plainText:)`,
   // `pasteContent(for:plainText:)`, `pasteSnippet(_:)`, and the private
-  // `pasteAndDismiss(_:)` all live there now, unchanged. See that file's top
-  // doc comment.
+  // `performPaste(_:frontmostApp:)` all live there now (T-PERF1: `select`
+  // and `pasteContent` also moved off-main blob I/O behind `async`). See
+  // that file's top doc comment.
 
   /// The `ClipItem` currently highlighted (`selectedItemID`), if it's both
   /// set and still present in `rows`.
@@ -886,6 +903,24 @@ final class PickerViewModel: ObservableObject {
   private var highlightedSnippet: Snippet? {
     guard let selectedSnippetID else { return nil }
     return snippetRows.first { $0.id == selectedSnippetID }
+  }
+
+  /// T-SET2, widened in T-SET4: what the footer's contextual `⌥⏎`/`⌘S`
+  /// hints need to know about the highlighted row — see
+  /// `HighlightedItemCapabilities`. `nil` on the Snippets tab (a `Snippet`
+  /// isn't a `ClipItem`, and neither hint's action varies by which snippet
+  /// is highlighted there — see `ShortcutHints.swift`'s top doc comment),
+  /// otherwise built from `highlightedItem` (`nil` too when nothing's
+  /// highlighted). Exposed instead of `highlightedItem` itself to keep this
+  /// view model's public surface minimal: `PickerView` needs the
+  /// capabilities to pick a hint string, not the whole item.
+  var highlightedItemCapabilities: HighlightedItemCapabilities {
+    switch activeTab {
+    case .history, .pinned:
+      return HighlightedItemCapabilities(item: highlightedItem)
+    case .snippets:
+      return HighlightedItemCapabilities(item: nil)
+    }
   }
 
   /// Flushes whichever pipeline (`rows`/`snippetRows`) is currently active
@@ -943,6 +978,25 @@ final class PickerViewModel: ObservableObject {
     }
   }
 
+  /// ⌘, (see `PickerView`'s key handler, T-SET5): opens Settings.
+  ///
+  /// Dismisses the picker first, same as Esc — order matters, `dismiss()`
+  /// runs before `openSettings()` so the picker is already gone by the time
+  /// Settings takes over app activation, rather than racing it. This is a
+  /// UX choice, not a technical necessity: the picker is deliberately a
+  /// non-activating panel (`PickerPanel`), so simply opening Settings behind
+  /// it wouldn't corrupt anything mechanically. But Settings takes over the
+  /// app's *entire* activation for as long as it stays open
+  /// (`SettingsActivator` flips `.accessory` → `.regular` and
+  /// force-activates), so leaving a second Clipnest surface open behind it —
+  /// one the user didn't ask to keep — would just be confusing, and the
+  /// picker itself has no reason to still be open once the user has asked
+  /// for a different window.
+  func openSettingsFromPicker() {
+    dismiss()
+    openSettings()
+  }
+
   /// Returns the index `delta` away from whichever element in `collection`
   /// currently has `currentID` (or `-1`, i.e. "before the first element,"
   /// if nothing's currently selected — so `delta == 1` lands on index `0`),
@@ -993,15 +1047,27 @@ final class PickerViewModel: ObservableObject {
 
   /// T23 fix round, item 2: "Save as Snippet" — opens the snippet editor
   /// prefilled with `item`'s content as the Body, creating a new `Snippet`
-  /// on save. `.text`/`.link` only, matching every other content-bearing
-  /// action in this file.
+  /// on save. Gated on `ClipItem.supportsSaveAsSnippet` (`.text`/`.link`
+  /// only — T-SET4: promoted out of this file into a shared `ClipItem`
+  /// extension, see that property's doc comment), matching every other
+  /// content-bearing action in this file.
   func presentSaveAsSnippetForm(from item: ClipItem) {
-    guard item.kind == .text || item.kind == .link else { return }
+    guard item.supportsSaveAsSnippet else { return }
     presentSnippetEditor(.createFromClip(item.previewText))
   }
 
   /// ⌘S (see `PickerView`'s key handler): "Save as Snippet" for whichever
   /// row is currently highlighted.
+  ///
+  /// T-SET4 (bug fix): used to guard only on `activeTab != .snippets`, with
+  /// no check on the highlighted row's *kind* — so ⌘S on a highlighted
+  /// `.image` (or `.richText`/`.file`) row presented the save-as-snippet
+  /// form even though `ItemRow`'s own UI never offers that action for those
+  /// kinds (its trailing button/context-menu item are both gated on
+  /// `ClipItem.supportsSaveAsSnippet`). Now `presentSaveAsSnippetForm(from:)`
+  /// re-checks the same predicate itself, so this is a true no-op — same
+  /// class of fix as `ItemRow`'s own gating, just reached via the keyboard
+  /// instead of a click.
   func saveHighlightedAsSnippet() {
     Task { [weak self] in
       guard let self else { return }

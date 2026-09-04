@@ -34,6 +34,12 @@ struct ItemPreview: View {
 
   private static let textMaxWidth: CGFloat = 380
   private static let textMaxHeight: CGFloat = 360
+  /// T-OCR2: cap on the recognized-text section shown below an `.image`
+  /// preview — deliberately smaller than `textMaxHeight` (used for a plain
+  /// `.text`/`.link`/`.richText` preview, which has no image sharing the
+  /// popover with it) so image + recognized text together stay a
+  /// reasonable overall popover height.
+  private static let ocrTextMaxHeight: CGFloat = 160
   private static let cornerRadius: CGFloat = 10
 
   var body: some View {
@@ -62,12 +68,27 @@ struct ItemPreview: View {
 
   @ViewBuilder
   private var imagePreview: some View {
-    if let blobPath = item.blobPath,
-      let cached = ItemThumbnailCache.shared.image(for: blobPath)
-    {
-      ScaledImage(nsImage: cached, maxSide: imageMaxWidth)
-    } else {
-      AsyncBlobImage(item: item, blobStore: blobStore, maxSide: imageMaxWidth)
+    // T-OCR2: when this image has recognized text, it renders BELOW the
+    // image itself — scrollable, reusing the same chunked-loading
+    // `TextPreview` a plain text/link/richText preview already uses (see
+    // that view's doc comment) rather than a second long-text renderer.
+    VStack(alignment: .leading, spacing: 10) {
+      if let blobPath = item.blobPath,
+        let cached = ItemThumbnailCache.shared.image(for: blobPath)
+      {
+        ScaledImage(nsImage: cached, maxSide: imageMaxWidth)
+      } else {
+        AsyncBlobImage(item: item, blobStore: blobStore, maxSide: imageMaxWidth)
+      }
+      if item.hasRecognizedText, let ocrText = item.ocrText {
+        Divider()
+        Text("Recognized Text")
+          .font(.caption)
+          .foregroundStyle(.secondary)
+        TextPreview(
+          text: ocrText, maxWidth: max(imageMaxWidth, Self.textMaxWidth),
+          maxHeight: Self.ocrTextMaxHeight)
+      }
     }
   }
 }

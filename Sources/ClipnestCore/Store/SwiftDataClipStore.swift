@@ -203,7 +203,8 @@ public actor SwiftDataClipStore: ClipStore {
     guard !staleRecords.isEmpty else { return }
 
     for record in staleRecords {
-      record.normalizedText = record.previewText.lowercased()
+      record.normalizedText = ClipItemRecord.computeNormalizedText(
+        previewText: record.previewText, ocrText: record.ocrText)
     }
     do {
       try modelContext.save()
@@ -313,6 +314,39 @@ public actor SwiftDataClipStore: ClipStore {
     // than copy time. See `ClipItem.pinnedAt`'s doc comment.
     record.pinnedAt = pinned ? Date() : nil
     try save()
+  }
+
+  /// T-OCR2: records `text` as `id`'s recognized (OCR) text, and recomputes
+  /// `normalizedText` so `query(text:...)`'s existing substring predicate
+  /// finds it too, with no predicate change — see `ClipItemRecord
+  /// .computeNormalizedText(previewText:ocrText:)`'s doc comment for why
+  /// that derivation lives in exactly one place rather than being
+  /// re-inlined here.
+  /// - Throws: `ClipStoreError.notFound` if no item with that `id` exists.
+  public func setRecognizedText(_ id: UUID, text: String) async throws {
+    guard let record = try fetchRecord(id: id) else { throw ClipStoreError.notFound }
+    record.ocrText = text
+    record.normalizedText = ClipItemRecord.computeNormalizedText(
+      previewText: record.previewText, ocrText: text)
+    try save()
+  }
+
+  /// T-UX1: see `ClipStore.fetchImagesNeedingRecognition()`'s doc comment.
+  public func fetchImagesNeedingRecognition() async throws -> [ClipItem] {
+    let imageKindRawValue = ItemKind.image.rawValue
+    // `(record.ocrText ?? "") == ""` is `ocrText == nil || ocrText == ""`
+    // without the `||` — the un-simplified form made the type-checker time
+    // out (`#Predicate`'s macro-expanded expression tree grows fast with
+    // nested boolean operators over optionals); this form type-checks
+    // instantly and is exactly equivalent.
+    let predicate = #Predicate<ClipItemRecord> { record in
+      record.kindRawValue == imageKindRawValue && record.blobPath != nil
+        && (record.ocrText ?? "") == ""
+    }
+    return try fetch(
+      predicate: predicate, sortedBy: SortDescriptor(\ClipItemRecord.createdAt, order: .reverse)
+    )
+    .map { $0.asClipItem() }
   }
 
   public func delete(_ id: UUID) async throws {
@@ -464,6 +498,16 @@ private final class ClipItemRecord {
   var byteSize: Int
   var blobPath: String?
   var fileReference: String?
+  /// T-OCR1: on-device OCR text recognized from a `.image` item's pixels —
+  /// mirrors `ClipItem.ocrText`'s doc comment. An *additive optional* field
+  /// (added after this entity's first release), exactly like `pinnedAt`
+  /// above: SwiftData's lightweight migration defaults it to `nil` on
+  /// existing rows automatically, no `VersionedSchema`/migration plan or
+  /// backfill needed for THIS field itself — unlike `normalizedText`
+  /// (non-optional, defaulted, and requires a backfill because it's used in
+  /// a `#Predicate` scan), `nil` is already the semantically correct value
+  /// for "recognition hasn't run on this row" and needs no repair.
+  var ocrText: String?
 
   init(
     id: UUID,
@@ -478,7 +522,8 @@ private final class ClipItemRecord {
     sourceBundleID: String?,
     byteSize: Int,
     blobPath: String?,
-    fileReference: String?
+    fileReference: String?,
+    ocrText: String? = nil
   ) {
     self.id = id
     self.createdAt = createdAt
@@ -493,6 +538,7 @@ private final class ClipItemRecord {
     self.byteSize = byteSize
     self.blobPath = blobPath
     self.fileReference = fileReference
+    self.ocrText = ocrText
   }
 
   convenience init(_ item: ClipItem) {
@@ -501,7 +547,8 @@ private final class ClipItemRecord {
       createdAt: item.createdAt,
       kindRawValue: item.kind.rawValue,
       previewText: item.previewText,
-      normalizedText: item.previewText.lowercased(),
+      normalizedText: Self.computeNormalizedText(
+        previewText: item.previewText, ocrText: item.ocrText),
       contentHash: item.contentHash,
       pinned: item.pinned,
       pinnedAt: item.pinnedAt,
@@ -509,8 +556,22 @@ private final class ClipItemRecord {
       sourceBundleID: item.sourceBundleID,
       byteSize: item.byteSize,
       blobPath: item.blobPath,
-      fileReference: item.fileReference
+      fileReference: item.fileReference,
+      ocrText: item.ocrText
     )
+  }
+
+  /// The single derivation rule for `normalizedText` — `previewText` plus,
+  /// once recognized, `ocrText` (so a screenshot becomes findable by its
+  /// recognized contents too), lowercased. Every call site that computes
+  /// `normalizedText` (`init(_ item:)`, the migration-crash-fix backfill,
+  /// and `SwiftDataClipStore.setRecognizedText(_:text:)`) goes through this
+  /// one function instead of re-inlining `.lowercased()` — coding-
+  /// standards.md's DRY rule: this derivation existed in exactly one place
+  /// before OCR, and stays that way now that a second field feeds it.
+  static func computeNormalizedText(previewText: String, ocrText: String?) -> String {
+    guard let ocrText, !ocrText.isEmpty else { return previewText.lowercased() }
+    return "\(previewText)\n\(ocrText)".lowercased()
   }
 
   /// Maps back to the domain struct. Falls back to `.text` on an
@@ -532,7 +593,8 @@ private final class ClipItemRecord {
       sourceBundleID: sourceBundleID,
       byteSize: byteSize,
       blobPath: blobPath,
-      fileReference: fileReference
+      fileReference: fileReference,
+      ocrText: ocrText
     )
   }
 }

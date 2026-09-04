@@ -38,6 +38,15 @@ public struct ClipItem: Identifiable, Codable, Equatable, Sendable {
   /// non-sandboxed app (no security-scoped bookmark needed for v1). `nil`
   /// for every other `ItemKind`.
   public var fileReference: String?
+  /// On-device OCR text recognized from a `.image` item's pixels (T-OCR1/
+  /// T-OCR2), or `nil` if recognition hasn't run — either because the
+  /// "Recognize text in copied images" setting was off at capture time, no
+  /// text was found, or recognition simply hasn't completed yet (it runs
+  /// off the main capture path — see `ClipboardMonitor`'s doc comment).
+  /// `nil` for every `ItemKind` other than `.image`. Setting this also
+  /// makes the item findable by that text — see `ClipStore
+  /// .setRecognizedText(_:text:)`.
+  public var ocrText: String?
 
   public init(
     id: UUID = UUID(),
@@ -51,7 +60,8 @@ public struct ClipItem: Identifiable, Codable, Equatable, Sendable {
     sourceBundleID: String? = nil,
     byteSize: Int = 0,
     blobPath: String? = nil,
-    fileReference: String? = nil
+    fileReference: String? = nil,
+    ocrText: String? = nil
   ) {
     self.id = id
     self.createdAt = createdAt
@@ -65,5 +75,6 @@ public struct ClipItem: Identifiable, Codable, Equatable, Sendable {
     self.byteSize = byteSize
     self.blobPath = blobPath
     self.fileReference = fileReference
+    self.ocrText = ocrText
   }
 }

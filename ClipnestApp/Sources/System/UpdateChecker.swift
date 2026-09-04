@@ -68,7 +68,7 @@ final class UpdateChecker {
   private let defaults: UserDefaults
 
   /// `Timer` isn't `Sendable`, and `deinit` is nonisolated by default in
-  /// Swift 6 (same situation `PickerPanel.commandDeleteMonitor` documents)
+  /// Swift 6 (same situation `PickerPanel.localKeyMonitor` documents)
   /// — `nonisolated(unsafe)` is safe here because every mutation happens
   /// synchronously on `@MainActor` (this class's own isolation) while the
   /// instance is alive, and the only nonisolated access is the read in
