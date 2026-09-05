@@ -44,22 +44,27 @@ struct MimeRepresentationSelectorTests {
     #expect(winner == "application/rtf")
   }
 
-  @Test("Text priority: explicit UTF-8 charset first, then UTF8_STRING, then bare text/plain, then STRING")
+  @Test(
+    "Text priority: explicit UTF-8 charset first, then UTF8_STRING, then bare text/plain, then STRING"
+  )
   func textPriorityOrder() {
     #expect(
       MimeRepresentationSelector.winningMimeType(
         for: .text, in: ["STRING", "text/plain", "UTF8_STRING", "text/plain;charset=utf-8"])
         == "text/plain;charset=utf-8")
     #expect(
-      MimeRepresentationSelector.winningMimeType(for: .text, in: ["STRING", "text/plain", "UTF8_STRING"])
+      MimeRepresentationSelector.winningMimeType(
+        for: .text, in: ["STRING", "text/plain", "UTF8_STRING"])
         == "UTF8_STRING")
     #expect(
-      MimeRepresentationSelector.winningMimeType(for: .text, in: ["STRING", "text/plain"]) == "text/plain"
+      MimeRepresentationSelector.winningMimeType(for: .text, in: ["STRING", "text/plain"])
+        == "text/plain"
     )
     #expect(MimeRepresentationSelector.winningMimeType(for: .text, in: ["STRING"]) == "STRING")
   }
 
-  @Test("A rich-text-winning selection does not hide an independently-available plain-text fallback")
+  @Test(
+    "A rich-text-winning selection does not hide an independently-available plain-text fallback")
   func categoriesAreIndependent() {
     let mimeTypes = ["text/html", "text/plain;charset=utf-8"]
     #expect(MimeRepresentationSelector.isAvailable(.richText, in: mimeTypes))
