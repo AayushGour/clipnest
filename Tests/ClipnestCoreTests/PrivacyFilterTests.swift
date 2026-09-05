@@ -1,9 +1,13 @@
-import AppKit
 import Foundation
 import Testing
 
 @testable import ClipnestCore
 
+// P2-A (Linux port): this suite only ever speaks `ClipMediaType` (never
+// `NSPasteboard` itself), so it needs no `import AppKit` and runs on every
+// platform. The concealed/transient marker guard test below in particular
+// MUST keep running on both — those raw UTI values are security-critical
+// (see that test's own doc comment).
 @Suite("PrivacyFilter")
 struct PrivacyFilterTests {
   private let concealedType = PrivacyFilter.concealedPasteboardType

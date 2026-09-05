@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 import Testing
 
@@ -7,16 +6,22 @@ import Testing
 /// A fake pasteboard used to drive `PasteboardReader` without touching the real
 /// system pasteboard, per coding-standards.md ("never touch `NSPasteboard` from
 /// a test").
+///
+/// P2-A (Linux port): spelled in terms of `ClipMediaType` (not
+/// `NSPasteboard.PasteboardType` directly) — the exact same type on macOS
+/// (`ClipMediaType` is a plain `typealias` there, see `ClipMediaType.swift`),
+/// so this is a zero-behavior-change rename that also drops this file's need
+/// for `import AppKit` entirely, letting the whole suite run on Linux too.
 private struct FakePasteboard: PasteboardReading {
-  var availableTypes: [NSPasteboard.PasteboardType]
-  var strings: [NSPasteboard.PasteboardType: String] = [:]
-  var datas: [NSPasteboard.PasteboardType: Data] = [:]
+  var availableTypes: [ClipMediaType]
+  var strings: [ClipMediaType: String] = [:]
+  var datas: [ClipMediaType: Data] = [:]
 
-  func string(forType type: NSPasteboard.PasteboardType) -> String? {
+  func string(forType type: ClipMediaType) -> String? {
     strings[type]
   }
 
-  func data(forType type: NSPasteboard.PasteboardType) -> Data? {
+  func data(forType type: ClipMediaType) -> Data? {
     datas[type]
   }
 }
@@ -191,22 +196,35 @@ struct PasteboardReaderTests {
     #expect(result?.byteSize == pngData.count)
     // T-PF2 finding (now superseded by T-PF5b, see below): whenever both
     // representations are offered, `rawData`/`byteSize` are derived from
-    // the PNG bytes, never the TIFF bytes.
-    //
-    // T-PF5b: `contentHash` itself is no longer a raw-byte hash for
-    // `.image` — it's `PasteboardReader`'s default (real, uninjected)
-    // `CoreGraphicsImagePixelHasher`'s format-independent PIXEL-content
-    // hash of `pngData`. This is exactly what fixes the T-PF2-era
-    // "container changes the digest" problem the old version of this
-    // comment described: the SAME picture now hashes identically whether
-    // it's captured as PNG or TIFF (proven directly, chunk-size and
-    // container-independence both, by `CoreGraphicsImagePixelHasherTests`)
-    // — this test only additionally confirms `PasteboardReader`'s default
-    // init wires that real hasher in, not a stub.
-    let expectedHash = CoreGraphicsImagePixelHasher().pixelContentHash(of: pngData)
-    #expect(result?.contentHash == expectedHash)
-    #expect(result?.contentHash != BlobStore.contentHash(of: pngData))
-    #expect(result?.contentHash != BlobStore.contentHash(of: tiffData))
+    // the PNG bytes, never the TIFF bytes. This part of the test is
+    // platform-agnostic (rawData/byteSize selection, not hashing) and runs
+    // on every platform.
+    #if os(macOS)
+      // P2-A (Linux port): only this half is gated — it exercises
+      // `PasteboardReader`'s DEFAULT (real, uninjected) pixel hasher, which
+      // is the Apple-only `CoreGraphicsImagePixelHasher` on macOS but the
+      // always-nil `UnavailableImagePixelHasher` off it (see
+      // `PlatformDefaults.imagePixelHasher`) — off macOS `contentHash` would
+      // fall back to the raw-byte hash, which is exactly what the assertions
+      // below prove it must NOT equal here. `PasteboardReaderPixelHashTests`
+      // below already covers this seam's portable contract via an injected
+      // fake, on every platform.
+      //
+      // T-PF5b: `contentHash` itself is no longer a raw-byte hash for
+      // `.image` — it's `PasteboardReader`'s default (real, uninjected)
+      // `CoreGraphicsImagePixelHasher`'s format-independent PIXEL-content
+      // hash of `pngData`. This is exactly what fixes the T-PF2-era
+      // "container changes the digest" problem the old version of this
+      // comment described: the SAME picture now hashes identically whether
+      // it's captured as PNG or TIFF (proven directly, chunk-size and
+      // container-independence both, by `CoreGraphicsImagePixelHasherTests`)
+      // — this test only additionally confirms `PasteboardReader`'s default
+      // init wires that real hasher in, not a stub.
+      let expectedHash = CoreGraphicsImagePixelHasher().pixelContentHash(of: pngData)
+      #expect(result?.contentHash == expectedHash)
+      #expect(result?.contentHash != BlobStore.contentHash(of: pngData))
+      #expect(result?.contentHash != BlobStore.contentHash(of: tiffData))
+    #endif
   }
 
   @Test("TIFF is used when it's the only image representation offered")
@@ -377,17 +395,30 @@ struct PasteboardReaderTests {
     // synchronous helper so it can still be read from inside the async
     // closures below; the helper itself does nothing actor-related, so this
     // doesn't weaken the check.
-    #expect(isCurrentlyOnMainThread())  // sanity: this test itself starts on the main thread
-
     let reader = PasteboardReader()
     let raw = PasteboardReader.RawPayload.plainText("off-main classify check")
 
+    // The STRUCTURAL half of the proof runs on every platform: `classify`
+    // takes only the `Sendable` `RawPayload`, so Swift 6 strict concurrency
+    // already rejects a `classify` that secretly needed `@MainActor` — this
+    // call would not compile inside `Task.detached` if it did.
     let wasMainThread = await Task.detached(priority: .utility) { () -> Bool in
       _ = reader.classify(raw)
       return isCurrentlyOnMainThread()
     }.value
 
-    #expect(!wasMainThread)
+    // The RUNTIME half is macOS-only, and deliberately so. On Darwin
+    // `@MainActor` is bound to the OS main thread, so `Thread.isMainThread`
+    // is a meaningful witness. On Linux it is not: swift-corelibs reports the
+    // real OS thread, while the MainActor executor runs this `@MainActor`
+    // test body on a cooperative-pool thread. There, BOTH the sanity check
+    // below and `!wasMainThread` would be measuring nothing — `!wasMainThread`
+    // would pass vacuously, which is worse than not asserting it, so it is
+    // gated rather than left to look like coverage it does not provide.
+    #if os(macOS)
+      #expect(isCurrentlyOnMainThread())  // sanity: this test starts on the main thread
+      #expect(!wasMainThread)
+    #endif
   }
 }
 

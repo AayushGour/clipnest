@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 import Testing
 
@@ -7,25 +6,30 @@ import Testing
 /// Fake `PasteboardWriting` that records what was written instead of touching
 /// the real system pasteboard — per coding-standards.md ("never touch
 /// `NSPasteboard` from a test").
+///
+/// P2-A (Linux port): spelled in terms of `ClipMediaType` (not
+/// `NSPasteboard.PasteboardType` directly, which `PasteboardWriting` itself
+/// never required) — the exact same type on macOS, so this drops the need
+/// for `import AppKit` in this file without changing behavior there.
 private final class FakePasteboardWriting: PasteboardWriting, @unchecked Sendable {
   private(set) var writtenString: String?
-  private(set) var writtenType: NSPasteboard.PasteboardType?
+  private(set) var writtenType: ClipMediaType?
   private(set) var writtenData: Data?
-  private(set) var writtenDataType: NSPasteboard.PasteboardType?
+  private(set) var writtenDataType: ClipMediaType?
   private(set) var writeCount = 0
   /// Mirrors real `NSPasteboard.changeCount` semantics closely enough for
   /// tests: increments on every write, starting from an arbitrary non-zero
   /// value so `0` never accidentally looks like a legitimate change count.
   private(set) var changeCount = 41
 
-  func writeString(_ string: String, forType type: NSPasteboard.PasteboardType) {
+  func writeString(_ string: String, forType type: ClipMediaType) {
     writtenString = string
     writtenType = type
     writeCount += 1
     changeCount += 1
   }
 
-  func writeData(_ data: Data, forType type: NSPasteboard.PasteboardType) {
+  func writeData(_ data: Data, forType type: ClipMediaType) {
     writtenData = data
     writtenDataType = type
     writeCount += 1
@@ -222,28 +226,40 @@ struct PasterTests {
     #expect(pasteboard.writtenString == "will fail")
   }
 
-  @Test(
-    "With Accessibility granted, writes valid image bytes as TIFF then calls the synthesizer exactly once with the right target"
-  )
-  func accessibilityGrantedWritesImageThenSynthesizes() async throws {
-    let pasteboard = FakePasteboardWriting()
-    let synthesizer = MockEventSynthesizing()
-    let paster = Paster(
-      pasteboard: pasteboard,
-      eventSynthesizer: synthesizer,
-      isAccessibilityGranted: { true },
-      synthesisDelay: .zero,
-      frontmostAppProvider: stillFrontmostProvider
+  #if os(macOS)
+    // P2-A (Linux port): this test never injects an `imageNormalizer:`, so
+    // `Paster` falls back to its default — `PlatformDefaults.imageNormalizer`
+    // — which is the real, Apple-only `MacImageNormalizer` (TIFF re-encode)
+    // on macOS but a portable `NoOpImageNormalizer` (always `nil`) off it
+    // (see `Paster.swift`'s `#if !os(macOS)` section). On Linux this would
+    // throw `PasteError.invalidImageData` before ever reaching the
+    // `.tiff`/`writtenData` assertions below, not merely assert something
+    // different — genuinely exercising the Apple default, not this seam's
+    // portable contract (which `pasterUsesInjectedImageNormalizer` below
+    // already covers on every platform). macOS-only, not file-wide.
+    @Test(
+      "With Accessibility granted, writes valid image bytes as TIFF then calls the synthesizer exactly once with the right target"
     )
-    let validImageData = ImageFixtures.makeTinyImageData(width: 4, height: 4)
+    func accessibilityGrantedWritesImageThenSynthesizes() async throws {
+      let pasteboard = FakePasteboardWriting()
+      let synthesizer = MockEventSynthesizing()
+      let paster = Paster(
+        pasteboard: pasteboard,
+        eventSynthesizer: synthesizer,
+        isAccessibilityGranted: { true },
+        synthesisDelay: .zero,
+        frontmostAppProvider: stillFrontmostProvider
+      )
+      let validImageData = ImageFixtures.makeTinyImageData(width: 4, height: 4)
 
-    try await paster.paste(.image(validImageData), targetingFrontmostApp: target)
+      try await paster.paste(.image(validImageData), targetingFrontmostApp: target)
 
-    #expect(pasteboard.writtenDataType == .tiff)
-    #expect(pasteboard.writtenData != nil)
-    #expect(synthesizer.invocationCount == 1)
-    #expect(synthesizer.lastTarget == target)
-  }
+      #expect(pasteboard.writtenDataType == .tiff)
+      #expect(pasteboard.writtenData != nil)
+      #expect(synthesizer.invocationCount == 1)
+      #expect(synthesizer.lastTarget == target)
+    }
+  #endif
 
   // MARK: - T-PERF4: `.image` decode/re-encode running off the calling actor
   // is NOT unit-testable here — see below for why, and what to do instead.
@@ -549,33 +565,39 @@ struct PasterTests {
     #expect(recorder.events == ["wrote:42", "synthesized"])
   }
 
-  @Test(
-    "onPasteboardWrite fires for .image content too, after the internal Task.detached decode/re-encode suspension, with the write's real changeCount"
-  )
-  func onPasteboardWriteFiresForImageContent() async throws {
-    let pasteboard = FakePasteboardWriting()
-    let synthesizer = MockEventSynthesizing()
-    let paster = Paster(
-      pasteboard: pasteboard,
-      eventSynthesizer: synthesizer,
-      isAccessibilityGranted: { false },
-      synthesisDelay: .zero
+  #if os(macOS)
+    // P2-A (Linux port): same reason as `accessibilityGrantedWritesImageThenSynthesizes`
+    // above — no `imageNormalizer:` injected, so this exercises the real
+    // Apple-only `MacImageNormalizer` default (`.tiff` re-encode), which
+    // doesn't exist off macOS.
+    @Test(
+      "onPasteboardWrite fires for .image content too, after the internal Task.detached decode/re-encode suspension, with the write's real changeCount"
     )
-    let validImageData = ImageFixtures.makeTinyImageData(width: 4, height: 4)
+    func onPasteboardWriteFiresForImageContent() async throws {
+      let pasteboard = FakePasteboardWriting()
+      let synthesizer = MockEventSynthesizing()
+      let paster = Paster(
+        pasteboard: pasteboard,
+        eventSynthesizer: synthesizer,
+        isAccessibilityGranted: { false },
+        synthesisDelay: .zero
+      )
+      let validImageData = ImageFixtures.makeTinyImageData(width: 4, height: 4)
 
-    final class ObservedChangeCount: @unchecked Sendable {
-      var value: Int?
+      final class ObservedChangeCount: @unchecked Sendable {
+        var value: Int?
+      }
+      let observed = ObservedChangeCount()
+      try await paster.paste(
+        .image(validImageData), targetingFrontmostApp: nil,
+        onPasteboardWrite: { changeCount in
+          observed.value = changeCount
+        })
+
+      #expect(observed.value == pasteboard.changeCount)
+      #expect(pasteboard.writtenDataType == .tiff)
     }
-    let observed = ObservedChangeCount()
-    try await paster.paste(
-      .image(validImageData), targetingFrontmostApp: nil,
-      onPasteboardWrite: { changeCount in
-        observed.value = changeCount
-      })
-
-    #expect(observed.value == pasteboard.changeCount)
-    #expect(pasteboard.writtenDataType == .tiff)
-  }
+  #endif
 
   @Test(
     "onPasteboardWrite never fires when invalid image data throws before any write happens"

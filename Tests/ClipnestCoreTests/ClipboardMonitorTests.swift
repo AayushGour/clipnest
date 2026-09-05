@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 import Testing
 
@@ -7,17 +6,23 @@ import Testing
 /// A fake pasteboard that also fakes `changeCount`, so `ClipboardMonitor` can be
 /// driven deterministically via `checkNow()` — no real `NSPasteboard`, no real
 /// `Timer`, per coding-standards.md's testing rules.
+///
+/// P2-A (Linux port): spelled in terms of `ClipMediaType` (not
+/// `NSPasteboard.PasteboardType` directly, which `MonitoredPasteboard`/
+/// `PasteboardReading` never required) — the exact same type on macOS, so
+/// this drops the need for `import AppKit` in this file without changing
+/// behavior there, and lets this whole fake-driven suite run on Linux too.
 private final class FakeMonitoredPasteboard: MonitoredPasteboard, @unchecked Sendable {
-  var availableTypes: [NSPasteboard.PasteboardType]
-  var strings: [NSPasteboard.PasteboardType: String]
-  var datas: [NSPasteboard.PasteboardType: Data]
+  var availableTypes: [ClipMediaType]
+  var strings: [ClipMediaType: String]
+  var datas: [ClipMediaType: Data]
   var changeCount: Int
 
   init(
     changeCount: Int = 0,
-    availableTypes: [NSPasteboard.PasteboardType] = [],
-    strings: [NSPasteboard.PasteboardType: String] = [:],
-    datas: [NSPasteboard.PasteboardType: Data] = [:]
+    availableTypes: [ClipMediaType] = [],
+    strings: [ClipMediaType: String] = [:],
+    datas: [ClipMediaType: Data] = [:]
   ) {
     self.changeCount = changeCount
     self.availableTypes = availableTypes
@@ -25,11 +30,11 @@ private final class FakeMonitoredPasteboard: MonitoredPasteboard, @unchecked Sen
     self.datas = datas
   }
 
-  func string(forType type: NSPasteboard.PasteboardType) -> String? {
+  func string(forType type: ClipMediaType) -> String? {
     strings[type]
   }
 
-  func data(forType type: NSPasteboard.PasteboardType) -> Data? {
+  func data(forType type: ClipMediaType) -> Data? {
     datas[type]
   }
 
@@ -53,7 +58,7 @@ private final class FakeMonitoredPasteboard: MonitoredPasteboard, @unchecked Sen
   /// `PasteboardReader.imagePasteboardTypes`'s T-PF2 priority order); pass
   /// `.tiff` to simulate a source app that only offers the TIFF
   /// representation.
-  func simulateImageCopy(data: Data, type: NSPasteboard.PasteboardType = .png) {
+  func simulateImageCopy(data: Data, type: ClipMediaType = .png) {
     strings = [:]
     datas = [type: data]
     availableTypes = [type]
