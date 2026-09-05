@@ -1,6 +1,4 @@
-import AppKit
 import Foundation
-import os
 
 /// Abstraction over "what app is currently frontmost," used to attribute a
 /// captured clip to its source app and to feed `PrivacyFilter.shouldCapture`'s
@@ -14,18 +12,14 @@ public protocol FrontmostApplicationProviding: Sendable {
   var frontmostAppName: String? { get }
 }
 
-/// Production `FrontmostApplicationProviding` backed by `NSWorkspace`.
-public struct WorkspaceFrontmostApplicationProvider: FrontmostApplicationProviding {
-  public init() {}
-
-  public var frontmostBundleID: String? {
-    NSWorkspace.shared.frontmostApplication?.bundleIdentifier
-  }
-
-  public var frontmostAppName: String? {
-    NSWorkspace.shared.frontmostApplication?.localizedName
-  }
-}
+/// P2-A (Linux port): the production `NSWorkspace`-backed conformance
+/// (formerly `WorkspaceFrontmostApplicationProvider`, defined here) moved to
+/// `Platform/macOS/MacFrontmostApplicationProvider.swift` as
+/// `MacFrontmostApplicationProvider`, wrapped in `#if os(macOS)` — this file
+/// no longer imports `AppKit`. No call site referenced the old type by name
+/// (verified — only this file's own default argument did), so the rename is
+/// a pure extraction, not a behavior or public-API-surface change for any
+/// existing caller.
 
 /// Combines pasteboard-content reading (`PasteboardReading`) with change-count
 /// polling, so a single injected value — `NSPasteboard.general` in production, a
@@ -34,7 +28,30 @@ public protocol MonitoredPasteboard: PasteboardReading {
   var changeCount: Int { get }
 }
 
-extension NSPasteboard: MonitoredPasteboard {}
+/// P2-A (Linux port): `extension NSPasteboard: MonitoredPasteboard {}`
+/// moved verbatim to `Platform/macOS/NSPasteboard+Clipnest.swift`, wrapped
+/// in `#if os(macOS)`.
+
+/// Abstraction over `ClipboardMonitor.start()`'s previous direct
+/// `Timer.scheduledTimer` call — extracted for the Linux port (P2-A),
+/// since a repeating `Timer` needs a live `RunLoop` that a GTK main loop
+/// will not provide. `start()` itself is unchanged behaviorally on macOS:
+/// its default `pollScheduler` (`PlatformDefaults.pollScheduler`, resolving
+/// to `MacTimerPollScheduler`) wraps the exact same `Timer.scheduledTimer`
+/// call this protocol replaced — see that type's doc comment.
+///
+/// A conforming type is not required to guard against a redundant
+/// `schedule` call while already scheduled — `ClipboardMonitor.start()`
+/// owns that idempotency itself (`isPolling`), the same way it always has.
+public protocol PollScheduling: Sendable {
+  /// Begins calling `tick` repeatedly, roughly every `interval` seconds,
+  /// until `cancel()` is called.
+  func schedule(interval: TimeInterval, tick: @escaping @Sendable () -> Void)
+
+  /// Stops any currently scheduled tick. Safe to call even when nothing is
+  /// scheduled.
+  func cancel()
+}
 
 /// Reports a `ClipStore` failure encountered while trying to store a capture.
 ///
@@ -56,11 +73,23 @@ public final class ClipboardMonitor {
   /// pasteboard changes, so ~0.4s balances responsiveness against CPU wake-ups.
   public static let defaultPollInterval: TimeInterval = 0.4
 
-  private nonisolated static let logger = Logger(
+  /// P2-A (Linux port): was a raw `os.Logger`; now the platform-neutral
+  /// `ClipnestLogger` shim (`Logging.swift`, added ahead of this task by
+  /// P1-T5). `os.Logger`'s `privacy:` interpolation (`\(reason, privacy:
+  /// .public)`) is an Apple-only API with no portable equivalent, so it's
+  /// not carried over to the call site below — `ClipnestLogger.error(_:)`
+  /// instead takes a plain `String` and applies `privacy: .public`
+  /// internally, uniformly, for every message it logs (see its doc
+  /// comment). That's the same privacy level this call site already used
+  /// (`.public`, never `.private`), so behavior is unchanged; only the
+  /// mechanism for it moved. Metadata-only discipline is unaffected either
+  /// way: `reason` below is always a fixed case name or a bare type name,
+  /// never clipboard content.
+  private nonisolated static let logger = ClipnestLogger(
     subsystem: ClipnestLog.subsystem, category: "ClipboardMonitor")
 
   /// Default `CaptureFailureHandler`: logs metadata only (the error case name)
-  /// via `os.Logger` — never the clipboard content that triggered the attempt.
+  /// — never the clipboard content that triggered the attempt.
   ///
   /// `nonisolated` + `public` because it's used as a default value on the
   /// `public` initializer below, which requires matching accessibility and no
@@ -78,8 +107,7 @@ public final class ClipboardMonitor {
     default:
       reason = String(describing: type(of: error))
     }
-    logger.error(
-      "ClipboardMonitor: failed to persist a captured item (\(reason, privacy: .public))")
+    logger.error("ClipboardMonitor: failed to persist a captured item (\(reason))")
   }
 
   private let store: any ClipStore
@@ -124,8 +152,22 @@ public final class ClipboardMonitor {
   /// enabled so isolated tests and existing call sites need no change.
   private let captureEnabledProvider: @Sendable () -> Bool
   private let captureFailureHandler: CaptureFailureHandler
+  /// P2-A (Linux port): see `PollScheduling`'s doc comment. Defaults to
+  /// `PlatformDefaults.pollScheduler` — `MacTimerPollScheduler`
+  /// (`Timer`-backed) on macOS.
+  private let pollScheduler: any PollScheduling
 
-  private var timer: Timer?
+  /// Whether `start()` has scheduled a repeating tick that hasn't since
+  /// been `stop()`ped. Formerly this was inferred from `timer == nil`;
+  /// `ClipboardMonitor` (not `PollScheduling`) owns this idempotency check,
+  /// same as before — see `PollScheduling`'s doc comment.
+  private var isPolling = false
+
+  /// Whether `startEventDriven()` was used instead of `start()` — see its
+  /// doc comment. Purely an introspectable marker; `checkNow()`'s own
+  /// behavior never depends on it.
+  public private(set) var isEventDriven = false
+
   private var lastChangeCount: Int
 
   /// A pasteboard `changeCount` that Clipnest itself produced (via
@@ -234,10 +276,11 @@ public final class ClipboardMonitor {
     privacyFilter: PrivacyFilter = PrivacyFilter(),
     reader: PasteboardReader = PasteboardReader(),
     blobStore: BlobStore = BlobStore(baseDirectory: BlobStore.defaultBaseDirectory()),
-    pasteboard: any MonitoredPasteboard = NSPasteboard.general,
+    pasteboard: any MonitoredPasteboard = PlatformDefaults.monitoredPasteboard,
     frontmostApplicationProvider: any FrontmostApplicationProviding =
-      WorkspaceFrontmostApplicationProvider(),
+      PlatformDefaults.frontmostApplicationProvider,
     pollInterval: TimeInterval = ClipboardMonitor.defaultPollInterval,
+    pollScheduler: any PollScheduling = PlatformDefaults.pollScheduler,
     excludedBundleIDsProvider: @escaping @Sendable () -> Set<String> = { [] },
     captureEnabledProvider: @escaping @Sendable () -> Bool = { true },
     textRecognizer: (any TextRecognizing)? = nil,
@@ -254,6 +297,7 @@ public final class ClipboardMonitor {
     self.pasteboard = pasteboard
     self.frontmostApplicationProvider = frontmostApplicationProvider
     self.pollInterval = pollInterval
+    self.pollScheduler = pollScheduler
     self.excludedBundleIDsProvider = excludedBundleIDsProvider
     self.captureEnabledProvider = captureEnabledProvider
     self.textRecognizer = textRecognizer
@@ -263,23 +307,55 @@ public final class ClipboardMonitor {
     lastChangeCount = pasteboard.changeCount
   }
 
-  /// Starts polling on a repeating `Timer`. No-op if already started.
+  /// Starts polling via `pollScheduler` (a repeating `Timer` on macOS, via
+  /// `MacTimerPollScheduler` — see `PollScheduling`'s doc comment). No-op if
+  /// already started. Behavior is byte-identical to before P2-A's
+  /// extraction: same `weak self` capture, same hop to `Task { @MainActor
+  /// in ... }` before calling `checkNow()` — only the raw
+  /// `Timer.scheduledTimer` call itself moved into `pollScheduler`.
   public func start() {
-    guard timer == nil else { return }
-    let newTimer = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) {
-      [weak self] _ in
+    guard !isPolling else { return }
+    isPolling = true
+    pollScheduler.schedule(interval: pollInterval) { [weak self] in
       guard let self else { return }
       Task { @MainActor in
         _ = await self.checkNow()
       }
     }
-    timer = newTimer
   }
 
-  /// Stops polling. Safe to call even if not started.
+  /// Stops polling (if `start()` was used) and/or clears the
+  /// `startEventDriven()` marker. Safe to call even if neither was started.
   public func stop() {
-    timer?.invalidate()
-    timer = nil
+    isEventDriven = false
+    guard isPolling else { return }
+    isPolling = false
+    pollScheduler.cancel()
+  }
+
+  /// Starts the monitor in event-driven mode: `pollScheduler` is never
+  /// touched (no `Timer`/`PollScheduling` scheduling of any kind) — the
+  /// platform backend (e.g. a Linux X11/Wayland selection-owner listener,
+  /// or a future GNOME Shell extension) is responsible for calling
+  /// `checkNow()` directly whenever it observes a real clipboard-ownership
+  /// change. `checkNow()` itself needs no changes to support this — it has
+  /// never depended on `start()`/`pollScheduler` at all, only on being
+  /// called.
+  ///
+  /// Stops any active `start()`-driven polling first, so a caller can
+  /// switch from one mode to the other without both a `Timer` tick and an
+  /// external event both driving `checkNow()` at once (harmless either way
+  /// — `checkNow()`'s `changeCount` check makes a redundant call a no-op —
+  /// but avoiding it keeps behavior easier to reason about).
+  ///
+  /// Purely additive: `start()`'s own polling behavior above is completely
+  /// unaffected by this method's existence, per this task's directive.
+  public func startEventDriven() {
+    if isPolling {
+      isPolling = false
+      pollScheduler.cancel()
+    }
+    isEventDriven = true
   }
 
   /// Pauses capture. `checkNow()` still advances `lastChangeCount` so that

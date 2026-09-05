@@ -82,6 +82,32 @@ private final class CallOrderRecorder: @unchecked Sendable {
   func record(_ event: String) { events.append(event) }
 }
 
+/// Fake `ImageNormalizing` — records the bytes it was asked to normalize and
+/// returns a fixed, test-controlled result instead of doing any real
+/// decode/encode. Doubles as the executable contract spec `ImageNormalizing`
+/// implementations (macOS's `MacImageNormalizer`, and a future Linux
+/// backend) must satisfy: `Paster` passes `.image` bytes straight through
+/// and writes back exactly whatever `(data, mediaType)` comes out, or treats
+/// `nil` as `PasteError.invalidImageData` thrown before any pasteboard
+/// write — see `pasterUsesInjectedImageNormalizer` and
+/// `pasterThrowsInvalidImageDataWhenInjectedNormalizerReturnsNil` below.
+/// `@unchecked Sendable` matches this file's other fakes: `paste()` awaits
+/// its `Task.detached` internally before returning, so by the time a test
+/// reads `receivedData` there is no concurrent access left.
+private final class FakeImageNormalizing: ImageNormalizing, @unchecked Sendable {
+  private(set) var receivedData: Data?
+  private let result: (data: Data, mediaType: ClipMediaType)?
+
+  init(result: (data: Data, mediaType: ClipMediaType)?) {
+    self.result = result
+  }
+
+  func normalizedForPaste(_ data: Data) -> (data: Data, mediaType: ClipMediaType)? {
+    receivedData = data
+    return result
+  }
+}
+
 /// Fake `FrontmostAppReferenceProviding` — returns a fixed, test-controlled
 /// "currently frontmost app" instead of touching real `NSWorkspace` state,
 /// per coding-standards.md ("mock side effects... never touch real system
@@ -294,6 +320,63 @@ struct PasterTests {
     }
 
     #expect(pasteboard.writtenData == nil)
+    #expect(pasteboard.writeCount == 0)
+    #expect(synthesizer.invocationCount == 0)
+  }
+
+  // MARK: - ImageNormalizing contract (Linux port prep)
+  //
+  // `accessibilityGrantedWritesImageThenSynthesizes` above already covers
+  // the DEFAULT wiring (real `MacImageNormalizer` on macOS, via
+  // `PlatformDefaults.imageNormalizer`). These two tests instead inject a
+  // `FakeImageNormalizing` to pin the SEAM's contract itself, independent of
+  // any one implementation — the executable spec a future Linux
+  // `ImageNormalizing` backend must also satisfy.
+
+  @Test(
+    "Paster passes .image bytes straight to the injected ImageNormalizing and writes back exactly what it returns, under the mediaType it returns"
+  )
+  func pasterUsesInjectedImageNormalizer() async throws {
+    let pasteboard = FakePasteboardWriting()
+    let synthesizer = MockEventSynthesizing()
+    let sourceBytes = Data([0x00, 0x01])
+    let normalizedBytes = Data([0xAB, 0xCD, 0xEF])
+    let normalizer = FakeImageNormalizing(result: (normalizedBytes, .png))
+    let paster = Paster(
+      pasteboard: pasteboard,
+      eventSynthesizer: synthesizer,
+      isAccessibilityGranted: { false },
+      synthesisDelay: .zero,
+      imageNormalizer: normalizer
+    )
+
+    try await paster.paste(.image(sourceBytes), targetingFrontmostApp: nil)
+
+    #expect(normalizer.receivedData == sourceBytes)
+    #expect(pasteboard.writtenData == normalizedBytes)
+    #expect(pasteboard.writtenDataType == .png)
+  }
+
+  @Test(
+    "Paster throws invalidImageData before any pasteboard write when the injected ImageNormalizing returns nil"
+  )
+  func pasterThrowsInvalidImageDataWhenInjectedNormalizerReturnsNil() async {
+    let pasteboard = FakePasteboardWriting()
+    let synthesizer = MockEventSynthesizing()
+    let normalizer = FakeImageNormalizing(result: nil)
+    let paster = Paster(
+      pasteboard: pasteboard,
+      eventSynthesizer: synthesizer,
+      isAccessibilityGranted: { false },
+      synthesisDelay: .zero,
+      imageNormalizer: normalizer
+    )
+
+    await #expect(throws: PasteError.invalidImageData) {
+      try await paster.paste(.image(Data([0xFF])), targetingFrontmostApp: nil)
+    }
+
+    #expect(normalizer.receivedData == Data([0xFF]))
     #expect(pasteboard.writeCount == 0)
     #expect(synthesizer.invocationCount == 0)
   }

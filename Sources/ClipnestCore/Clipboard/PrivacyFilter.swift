@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 
 /// Decides whether a pasteboard change should be captured.
@@ -24,13 +23,11 @@ public struct PrivacyFilter: Sendable {
   /// The `org.nspasteboard` marker apps set to say "don't record this" (password
   /// managers, etc). Public + shared so tests reference the same constant instead
   /// of duplicating the raw string — see coding-standards.md's no-magic-strings rule.
-  public static let concealedPasteboardType = NSPasteboard.PasteboardType(
-    "org.nspasteboard.ConcealedType")
+  public static let concealedPasteboardType = ClipMediaType.concealed
 
   /// The `org.nspasteboard` marker apps set to say "this is short-lived, don't
   /// record it" (e.g. an OTP that's about to be overwritten).
-  public static let transientPasteboardType = NSPasteboard.PasteboardType(
-    "org.nspasteboard.TransientType")
+  public static let transientPasteboardType = ClipMediaType.transient
 
   public init() {}
 
@@ -44,7 +41,7 @@ public struct PrivacyFilter: Sendable {
   ///     (e.g. from Settings). This can only ever *add* exclusions, never remove the
   ///     built-in ones or the concealed/transient check.
   public func shouldCapture(
-    availableTypes: [NSPasteboard.PasteboardType],
+    availableTypes: [ClipMediaType],
     sourceBundleID: String?,
     isPaused: Bool,
     customExcludedBundleIDs: Set<String> = []

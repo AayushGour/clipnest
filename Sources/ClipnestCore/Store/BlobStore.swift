@@ -1,5 +1,17 @@
-import CryptoKit
 import Foundation
+
+// swift-crypto's `Crypto` module is API-identical for `SHA256` — this file's
+// only use — so no call site below needs to change for the Linux port.
+// `Package.swift` doesn't depend on `swift-crypto` yet (a separate task owns
+// the manifest); this import is ready for it the moment that dependency
+// lands. `swift-format`'s `OrderedImports` rule requires unconditional
+// imports (`Foundation` above) ahead of any `#if`-guarded import block —
+// verified against this exact file with `swift format lint --strict`.
+#if canImport(CryptoKit)
+  import CryptoKit
+#else
+  import Crypto
+#endif
 
 /// Errors surfaced by `BlobStore`.
 public enum BlobStoreError: Error, Equatable, Sendable {
@@ -28,6 +40,19 @@ public struct BlobStore: Sendable {
   public static let blobsDirectoryName = "blobs"
 
   private static let appDirectoryName = "Clipnest"
+
+  /// POSIX mode (owner read/write/execute only) applied to the blob
+  /// directory — and any intermediate directories `write(_:)` has to create
+  /// along the way — on non-Apple platforms. Clipboard contents are
+  /// inherently sensitive (coding-standards.md's Privacy/security musts);
+  /// on a shared multi-user Linux box the plain `createDirectory` default
+  /// (driven by the process umask — verified empirically as 0755 on macOS
+  /// today under the standard 022 umask, an existing gap this task
+  /// deliberately does NOT change on macOS; worth its own follow-up
+  /// decision) would let every other local user list blob filenames
+  /// (content hashes) and read blob bytes. macOS's `write(_:)` branch below
+  /// never references this constant.
+  private static let nonAppleBlobDirectoryPosixPermissions = 0o700
 
   /// T-PF8 (P0 safety fix): name of the environment variable that, when set
   /// to a non-empty value, overrides the directory `defaultBaseDirectory()`
@@ -88,6 +113,22 @@ public struct BlobStore: Sendable {
   /// this, independent of any assumption about Xcode/SwiftPM defaults).
   public static let testDataRootEnvironmentVariableName = "CLIPNEST_TEST_DATA_ROOT"
 
+  /// XDG Base Directory Specification env var name: on non-Apple platforms,
+  /// names the per-user "data files" root — the Linux analogue of macOS's
+  /// `~/Library/Application Support` — that `defaultBaseDirectory`'s
+  /// non-macOS branch resolves against. Read only by
+  /// `xdgDataHomeDirectory(fileManager:environment:)` below, per
+  /// coding-standards.md's "config in one place" rule. Not `public`: unlike
+  /// `testDataRootEnvironmentVariableName`, nothing outside this file needs
+  /// to reference it — it's exposed at `internal` visibility purely so
+  /// `BlobStoreTests` (via `@testable import`) can build environment
+  /// dictionaries against the same constant instead of a duplicated literal.
+  static let xdgDataHomeEnvironmentVariableName = "XDG_DATA_HOME"
+
+  /// The XDG spec's fallback data directory, relative to `$HOME`, used
+  /// whenever `XDG_DATA_HOME` is unset or empty.
+  static let xdgDataHomeFallbackRelativePath = ".local/share"
+
   private let baseDirectory: URL
   // `FileManager` isn't `Sendable` in this SDK's overlay even though Apple
   // documents the shared/default instance (and any instance used only for
@@ -100,6 +141,47 @@ public struct BlobStore: Sendable {
   public init(baseDirectory: URL, fileManager: FileManager = .default) {
     self.baseDirectory = baseDirectory
     self.fileManager = fileManager
+  }
+
+  /// Resolves the XDG Base Directory Specification's per-user data-files
+  /// root (`$XDG_DATA_HOME`, falling back to `~/.local/share`) —
+  /// `defaultBaseDirectory`'s non-macOS branch appends `appDirectoryName` to
+  /// whatever this returns, the same way the macOS branch appends it to
+  /// `.applicationSupportDirectory`.
+  ///
+  /// Deliberately a plain, platform-agnostic function — not `#if
+  /// os(macOS)`/`#else`-gated — even though only `defaultBaseDirectory`'s
+  /// non-macOS branch calls it in production, so it stays directly
+  /// unit-testable from `swift test` running on macOS (there is no Linux
+  /// toolchain in this repo's test loop yet) via the injectable
+  /// `fileManager`/`environment` parameters, the same pattern this file
+  /// already uses for `testDataRootEnvironmentVariableName` — no real
+  /// filesystem or real process-environment mutation required to exercise
+  /// the "set" / "unset" / "empty" `XDG_DATA_HOME` states.
+  ///
+  /// Decision: corelibs-foundation's own `FileManager.urls(for:
+  /// .applicationSupportDirectory, in:)` was verified empirically (Docker
+  /// `swift:6.0-jammy`, both with and without `XDG_DATA_HOME` set) to
+  /// already implement exactly this resolution on Linux today. This
+  /// function does not delegate to it anyway: (1) that behavior is
+  /// corelibs-foundation's internal implementation choice, not a documented
+  /// cross-platform contract the way `.applicationSupportDirectory` is on
+  /// Darwin, and could change across toolchain versions without notice;
+  /// (2) `FileManager.urls(for:in:)` takes no injectable environment, so it
+  /// cannot be exercised for all three `XDG_DATA_HOME` states without
+  /// mutating the real process environment, which this project's testing
+  /// rules (coding-standards.md) discourage in favor of deterministic,
+  /// side-effect-free tests. Spelling the two-line spec out ourselves keeps
+  /// the behavior in our own hands and independently testable.
+  static func xdgDataHomeDirectory(
+    fileManager: FileManager,
+    environment: [String: String]
+  ) -> URL {
+    if let override = environment[xdgDataHomeEnvironmentVariableName], !override.isEmpty {
+      return URL(fileURLWithPath: override, isDirectory: true)
+    }
+    return fileManager.homeDirectoryForCurrentUser.appendingPathComponent(
+      xdgDataHomeFallbackRelativePath, isDirectory: true)
   }
 
   /// The real production base directory (`~/Library/Application
@@ -129,6 +211,13 @@ public struct BlobStore: Sendable {
   /// fallback path as an absent/empty variable in a Debug build — this
   /// function's production behavior with no override present is unchanged
   /// in either configuration.
+  ///
+  /// Linux port: the macOS branch below is byte-identical to what it was
+  /// before this task — unchanged behavior, unchanged tests. The `#else`
+  /// branch is new: it follows the XDG Base Directory Specification via
+  /// `xdgDataHomeDirectory(fileManager:environment:)` above instead of
+  /// assuming a macOS-shaped `Library/Application Support` FHS layout that
+  /// doesn't exist on Linux.
   public static func defaultBaseDirectory(
     fileManager: FileManager = .default,
     environment: [String: String] = ProcessInfo.processInfo.environment
@@ -138,11 +227,16 @@ public struct BlobStore: Sendable {
         return URL(fileURLWithPath: override, isDirectory: true)
       }
     #endif
-    let appSupport =
-      fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-      ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent(
-        "Library/Application Support")
-    return appSupport.appendingPathComponent(appDirectoryName, isDirectory: true)
+    #if os(macOS)
+      let appSupport =
+        fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+        ?? fileManager.homeDirectoryForCurrentUser.appendingPathComponent(
+          "Library/Application Support")
+      return appSupport.appendingPathComponent(appDirectoryName, isDirectory: true)
+    #else
+      return xdgDataHomeDirectory(fileManager: fileManager, environment: environment)
+        .appendingPathComponent(appDirectoryName, isDirectory: true)
+    #endif
   }
 
   /// The canonical content-hash algorithm used both for `BlobStore`'s
@@ -165,6 +259,12 @@ public struct BlobStore: Sendable {
 
   /// Writes `data` to a content-addressed path and returns the resulting
   /// relative `blobPath` (rooted at `"blobs/"`) to store on a `ClipItem`.
+  ///
+  /// Linux port: on non-Apple platforms the directory-creation call below
+  /// passes `nonAppleBlobDirectoryPosixPermissions` (0700) so the blob
+  /// directory — and any intermediate directories created along with it —
+  /// are never world- or group-readable. The macOS branch is unchanged:
+  /// same call, same (umask-driven) default mode as before this task.
   public func write(_ data: Data) throws -> String {
     let blobPath = "\(Self.blobsDirectoryName)/\(Self.contentHash(of: data))"
     let destination = fileURL(forBlobPath: blobPath)
@@ -174,7 +274,13 @@ public struct BlobStore: Sendable {
     }
 
     do {
-      try fileManager.createDirectory(at: blobsDirectory, withIntermediateDirectories: true)
+      #if os(macOS)
+        try fileManager.createDirectory(at: blobsDirectory, withIntermediateDirectories: true)
+      #else
+        try fileManager.createDirectory(
+          at: blobsDirectory, withIntermediateDirectories: true,
+          attributes: [.posixPermissions: Self.nonAppleBlobDirectoryPosixPermissions])
+      #endif
       try data.write(to: destination, options: .atomic)
     } catch {
       throw BlobStoreError.ioFailure(underlying: String(describing: error))

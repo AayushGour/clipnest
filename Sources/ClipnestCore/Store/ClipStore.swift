@@ -111,7 +111,12 @@ public protocol ClipStore: Sendable {
 /// blob-deletion failures instead of aborting mid-cleanup on the first one,
 /// then throws one summarizing `ClipStoreError.ioFailure` if any failed —
 /// never swallowed silently.
-func deleteBlobs(for items: [ClipItem], using blobStore: BlobStore) throws {
+///
+/// `public` (additive-only promotion from module-internal): the Linux
+/// port's future SQLite-backed `ClipStore` will be its own `ClipStore`
+/// conformance too, and should reuse this exact cleanup policy rather than
+/// reimplementing it — this function's body/behavior is unchanged.
+public func deleteBlobs(for items: [ClipItem], using blobStore: BlobStore) throws {
   var failedBlobPaths: [String] = []
   for item in items {
     guard let blobPath = item.blobPath else { continue }

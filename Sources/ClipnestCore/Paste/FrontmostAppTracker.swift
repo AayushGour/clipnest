@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 
 /// A reference to a specific running app, captured at a point in time, that
@@ -33,15 +32,12 @@ public protocol FrontmostAppReferenceProviding: Sendable {
   func currentFrontmostAppRef() -> FrontmostAppRef?
 }
 
-/// Production `FrontmostAppReferenceProviding` backed by `NSWorkspace`.
-public struct WorkspaceFrontmostAppReferenceProvider: FrontmostAppReferenceProviding {
-  public init() {}
-
-  public func currentFrontmostAppRef() -> FrontmostAppRef? {
-    guard let app = NSWorkspace.shared.frontmostApplication else { return nil }
-    return FrontmostAppRef(bundleID: app.bundleIdentifier, processIdentifier: app.processIdentifier)
-  }
-}
+// The production `NSWorkspace`-backed `FrontmostAppReferenceProviding` is
+// `WorkspaceFrontmostAppReferenceProvider`
+// (`Platform/macOS/WorkspaceFrontmostAppReferenceProvider.swift`) — moved out
+// of this file (Linux port prep) since it's an AppKit implementation detail;
+// this file stays platform-neutral (only `pid_t`, available via `Foundation`
+// on every platform this compiles for — verified against `swift:6.0-jammy`).
 
 /// Records "who was frontmost right before the picker was about to open," so
 /// the paste step (`Paster`, plan task T15) knows which app to target once the
@@ -57,7 +53,7 @@ public final class FrontmostAppTracker {
   private var recorded: FrontmostAppRef?
 
   public init(
-    provider: any FrontmostAppReferenceProviding = WorkspaceFrontmostAppReferenceProvider()
+    provider: any FrontmostAppReferenceProviding = PlatformDefaults.frontmostAppProvider
   ) {
     self.provider = provider
   }
@@ -77,3 +73,24 @@ public final class FrontmostAppTracker {
     return recorded
   }
 }
+
+#if !os(macOS)
+  extension PlatformDefaults {
+    /// No frontmost-app tracking exists yet outside macOS — this always
+    /// returns `nil`, so `Paster`/`FrontmostAppTracker` take the "no target
+    /// available" path they already handle gracefully (clipboard-only
+    /// paste, no synthesized keystroke — see `Paster.paste`'s doc comment).
+    /// Never used in production; the Linux composition root always injects
+    /// a real backend (see `PlatformDefaults.swift`'s doc comment).
+    public static var frontmostAppProvider: any FrontmostAppReferenceProviding {
+      NoOpFrontmostAppReferenceProvider()
+    }
+  }
+
+  /// Portable no-op `FrontmostAppReferenceProviding` — see the
+  /// `#if !os(macOS)` `PlatformDefaults.frontmostAppProvider` doc comment
+  /// above.
+  private struct NoOpFrontmostAppReferenceProvider: FrontmostAppReferenceProviding {
+    func currentFrontmostAppRef() -> FrontmostAppRef? { nil }
+  }
+#endif

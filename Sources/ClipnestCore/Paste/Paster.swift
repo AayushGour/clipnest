@@ -1,9 +1,4 @@
-import AppKit
-import ApplicationServices
-import CoreGraphics
 import Foundation
-import ImageIO
-import UniformTypeIdentifiers
 
 /// Errors thrown by `Paster`/`EventSynthesizing` for genuine failures.
 ///
@@ -49,11 +44,11 @@ public enum PasteContent: Equatable, Sendable {
 public protocol PasteboardWriting: Sendable {
   /// Clears the pasteboard and writes `string` for `type` in one call —
   /// `Paster` never needs to clear without immediately writing.
-  func writeString(_ string: String, forType type: NSPasteboard.PasteboardType)
+  func writeString(_ string: String, forType type: ClipMediaType)
 
   /// Clears the pasteboard and writes `data` for `type` in one call — mirrors
   /// `writeString(_:forType:)` for binary payloads (e.g. image bytes).
-  func writeData(_ data: Data, forType type: NSPasteboard.PasteboardType)
+  func writeData(_ data: Data, forType type: ClipMediaType)
 
   /// The pasteboard's current change count, read immediately after a write
   /// so the caller can hand it to `ClipboardMonitor.ignore(changeCount:)` —
@@ -83,75 +78,23 @@ public protocol PasteboardWriting: Sendable {
   func writeFileURL(_ url: URL)
 }
 
-// `PasteboardWriting` refines `Sendable`, but `NSPasteboard` is an AppKit type
-// declared in another module, so Swift 6 requires the Sendable conformance be
-// spelled out as `@retroactive @unchecked` in a standalone extension. NSPasteboard
-// is a thread-safe system singleton, so `@unchecked` is sound here.
-// The retroactive conformance is required by the language here, so silence the
-// lint rule that would otherwise flag it.
-// swift-format-ignore: AvoidRetroactiveConformances
-extension NSPasteboard: @retroactive @unchecked Sendable {}
-
-extension NSPasteboard: PasteboardWriting {
-  public func writeString(_ string: String, forType type: NSPasteboard.PasteboardType) {
-    clearContents()
-    setString(string, forType: type)
-  }
-
-  public func writeData(_ data: Data, forType type: NSPasteboard.PasteboardType) {
-    clearContents()
-    setData(data, forType: type)
-  }
-
-  public func writeRichText(rtf: Data, plain: String) {
-    clearContents()
-    setData(rtf, forType: .rtf)
-    setString(plain, forType: .string)
-  }
-
-  public func writeFileURL(_ url: URL) {
-    clearContents()
-    // `as NSURL`: `writeObjects` takes `NSPasteboardWriting`, which `NSURL`
-    // conforms to and the Swift-native `URL` value type does not.
-    writeObjects([url as NSURL])
-  }
-}
-
-/// Real, `CGEvent`-based `EventSynthesizing` implementation: synthesizes a ⌘V
-/// key-down/key-up pair and posts it through the global HID event tap.
+/// Normalizes clip image bytes into whatever representation is best for
+/// pasting on this platform, off the `Paster.paste(_:targetingFrontmostApp:)`
+/// caller's actor (see that method's `.image` case, which runs this inside a
+/// `Task.detached`).
 ///
-/// Never exercised by `ClipnestCoreTests` — `PasterTests` uses a mock
-/// `EventSynthesizing` instead, per the spec's explicit "no real key events
-/// synthesized in CI" requirement.
-public struct CGEventSynthesizer: EventSynthesizing {
-  /// Virtual keycode for "V" (`kVK_ANSI_V`), from Carbon's `HIToolbox` keycode table.
-  private static let vKeyCode: CGKeyCode = 0x09
-
-  public init() {}
-
-  /// Posts a synthetic ⌘V through the global HID event tap
-  /// (`CGEvent.post(tap: .cghidEventTap)`) rather than targeting `app`'s pid
-  /// directly (`CGEvent.postToPid(_:)`, this type's original implementation) —
-  /// pid-targeted posting proved unreliable in practice for delivering a
-  /// synthetic keystroke to a previously-frontmost app (macOS's
-  /// window-server-level event routing doesn't always honor it the way a
-  /// real keystroke injected through the global HID tap is honored).
-  /// `app` is accepted for `EventSynthesizing`'s protocol contract (and
-  /// still meaningfully asserted on by `PasterTests`' mock, which verifies
-  /// `Paster` computes and passes the right target) but is otherwise unused
-  /// by this global-post implementation — correctness now depends on the
-  /// target app actually holding key focus by the time this posts. `Paster.paste`
-  /// is responsible for both waiting `synthesisDelay` beforehand and
-  /// re-verifying `app` is still frontmost immediately before calling this
-  /// (see `PasteError.targetNoLongerFrontmost`) — this type only builds and
-  /// posts the chord, via the shared `SyntheticKeystroke` (see M-1: the same
-  /// helper `ClipboardSelectionReplacer` uses for its ⌘C/⌘V, so there is one
-  /// place that builds and posts synthetic modified keystrokes).
-  public func synthesizeCommandV(targeting app: FrontmostAppRef) throws {
-    guard SyntheticKeystroke.postCommandModified(Self.vKeyCode) else {
-      throw PasteError.eventPostFailed
-    }
-  }
+/// Extracted from `Paster` (was a private static `normalizedToTIFF` method)
+/// so the platform-specific decode/encode implementation is injected rather
+/// than hardcoded — the real macOS implementation is `MacImageNormalizer`
+/// (`Platform/macOS/MacImageNormalizer.swift`); this is the same seam a
+/// future Linux image backend will fill.
+public protocol ImageNormalizing: Sendable {
+  /// Decodes `data` and re-encodes it into the pasteboard representation
+  /// this platform's paste targets expect. Returns `nil` on any decode/
+  /// encode failure (e.g. undecodable bytes) — `Paster` turns that into
+  /// `PasteError.invalidImageData`, thrown BEFORE anything is written to the
+  /// pasteboard.
+  func normalizedForPaste(_ data: Data) -> (data: Data, mediaType: ClipMediaType)?
 }
 
 /// Writes `PasteContent` to the system pasteboard and, only when Accessibility
@@ -180,20 +123,31 @@ public struct Paster: Sendable {
   private let isAccessibilityGranted: @Sendable () -> Bool
   private let synthesisDelay: Duration
   private let frontmostAppProvider: any FrontmostAppReferenceProviding
+  private let imageNormalizer: any ImageNormalizing
 
+  /// Every default below resolves through `PlatformDefaults` rather than
+  /// naming a concrete AppKit/Linux type directly — see
+  /// `Platform/PlatformDefaults.swift`'s doc comment for why (in short: a
+  /// `#if` inside a parameter list is unreadable and a `swift-format
+  /// --strict` hazard, and this keeps `Paster.swift` itself free of any
+  /// platform-specific import). The macOS values are wired up in
+  /// `Platform/macOS/*.swift`, beside their real implementations.
   public init(
-    pasteboard: any PasteboardWriting = NSPasteboard.general,
-    eventSynthesizer: any EventSynthesizing = CGEventSynthesizer(),
-    isAccessibilityGranted: @escaping @Sendable () -> Bool = { AXIsProcessTrusted() },
+    pasteboard: any PasteboardWriting = PlatformDefaults.pasteboard,
+    eventSynthesizer: any EventSynthesizing = PlatformDefaults.eventSynthesizer,
+    isAccessibilityGranted: @escaping @Sendable () -> Bool = PlatformDefaults
+      .isAccessibilityGranted,
     synthesisDelay: Duration = Paster.defaultSynthesisDelay,
-    frontmostAppProvider: any FrontmostAppReferenceProviding =
-      WorkspaceFrontmostAppReferenceProvider()
+    frontmostAppProvider: any FrontmostAppReferenceProviding = PlatformDefaults
+      .frontmostAppProvider,
+    imageNormalizer: any ImageNormalizing = PlatformDefaults.imageNormalizer
   ) {
     self.pasteboard = pasteboard
     self.eventSynthesizer = eventSynthesizer
     self.isAccessibilityGranted = isAccessibilityGranted
     self.synthesisDelay = synthesisDelay
     self.frontmostAppProvider = frontmostAppProvider
+    self.imageNormalizer = imageNormalizer
   }
 
   /// Whether `current` — the app that actually holds focus right now, read
@@ -218,8 +172,8 @@ public struct Paster: Sendable {
   ///
   /// `async` for three reasons: `synthesisDelay`, `onPasteboardWrite`'s
   /// hop back onto its caller's actor (below), and — for `.image` — the
-  /// off-main decode/re-encode (`normalizedToTIFF`, run in a
-  /// `Task.detached` so a large image never blocks the main actor; see the
+  /// off-main decode/re-encode (`imageNormalizer.normalizedForPaste`, run in
+  /// a `Task.detached` so a large image never blocks the main actor; see the
   /// `.image` case below).
   ///
   /// **The invariant callers depend on is "the pasteboard write completes
@@ -240,7 +194,7 @@ public struct Paster: Sendable {
   /// 0.4s capture poll could and did land inside (T-STRESS1's harness
   /// quantified this: 18/18 raced at 5-42ms; for `.image` content it was
   /// worse — the raced self-capture computed a genuinely different
-  /// `contentHash` than the original, since `normalizedToTIFF`'s re-encode
+  /// `contentHash` than the original, since `imageNormalizer`'s re-encode
   /// isn't byte-identical, producing a real duplicate row + a wasted blob).
   /// `onPasteboardWrite`, if provided, is invoked with `pasteboard
   /// .changeCount` IMMEDIATELY after the write completes — before
@@ -273,9 +227,10 @@ public struct Paster: Sendable {
       pasteboard.writeString(string, forType: .string)
     case .image(let data):
       // The bytes captured for a clip could be either PNG or TIFF (see
-      // `PasteboardReader.imagePasteboardTypes`) — normalizing to one format
-      // under the `.tiff` pasteboard type is what virtually every macOS app
-      // expects for a pasted image regardless of the original format.
+      // `PasteboardReader.imagePasteboardTypes`) — `imageNormalizer`
+      // normalizes to whichever single format this platform's paste targets
+      // expect regardless of the original format (macOS: TIFF, via
+      // `MacImageNormalizer` — see `ImageNormalizing`).
       //
       // T-PERF1: this decode+re-encode measured ~80ms combined on a large
       // (25MB) real screenshot — moved into `Task.detached(priority:
@@ -285,24 +240,24 @@ public struct Paster: Sendable {
       // isolation). `Task.detached` guarantees the offload regardless of
       // what actor invoked `paste(_:targetingFrontmostApp:)` — unlike
       // relying on the caller to hop off first, this doesn't depend on every
-      // future call site getting that right.
+      // future call site getting that right. `imageNormalizer` is captured
+      // into a local `let` before the detached task rather than reading
+      // `self.imageNormalizer` inside its closure — purely stylistic, both
+      // are sound since `Paster` and `ImageNormalizing` are both `Sendable`.
       //
-      // Using `ImageIO` (`CGImageSource`/`CGImageDestination`) instead of
-      // `NSImage(data:)?.tiffRepresentation` (the previous implementation):
-      // `NSImage` is not documented thread-safe for every operation, and
-      // this now runs off `@MainActor` by design — `ImageIO`'s C API is a
-      // pure, thread-safe decode/encode with no such caveat. No force-
-      // unwrap: undecodable bytes (or an encode failure) throw
+      // No force-unwrap: undecodable bytes (or an encode failure) throw
       // `.invalidImageData` instead of crashing, per coding-standards.md —
       // same contract `PasterTests.invalidImageDataThrowsBeforeAnyWrite`
       // already verifies.
-      let normalizeTask = Task.detached(priority: .utility) { () -> Data? in
-        Self.normalizedToTIFF(data)
+      let normalizer = imageNormalizer
+      let normalizeTask = Task.detached(priority: .utility) {
+        () -> (data: Data, mediaType: ClipMediaType)? in
+        normalizer.normalizedForPaste(data)
       }
-      guard let tiffData = await normalizeTask.value else {
+      guard let normalized = await normalizeTask.value else {
         throw PasteError.invalidImageData
       }
-      pasteboard.writeData(tiffData, forType: .tiff)
+      pasteboard.writeData(normalized.data, forType: normalized.mediaType)
     case .file(let url):
       pasteboard.writeFileURL(url)
     case .richText(let rtf, let plain):
@@ -327,30 +282,60 @@ public struct Paster: Sendable {
 
     try eventSynthesizer.synthesizeCommandV(targeting: frontmostApp)
   }
-
-  /// T-PERF1: decodes `data` (captured as PNG or TIFF — see
-  /// `PasteboardReader.imagePasteboardTypes`) and re-encodes it as TIFF,
-  /// entirely via `ImageIO`'s C API (never `NSImage`/`NSBitmapImageRep`) so
-  /// it's safe to call from the `Task.detached` background task
-  /// `paste(_:targetingFrontmostApp:)`'s `.image` case runs this on. Returns
-  /// `nil` on any decode/encode failure (e.g. undecodable bytes) — the
-  /// caller turns that into `PasteError.invalidImageData`, same contract the
-  /// previous `NSImage(data:)?.tiffRepresentation` implementation had.
-  private static func normalizedToTIFF(_ data: Data) -> Data? {
-    guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-      let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
-    else {
-      return nil
-    }
-    let output = NSMutableData()
-    guard
-      let destination = CGImageDestinationCreateWithData(
-        output, UTType.tiff.identifier as CFString, 1, nil)
-    else {
-      return nil
-    }
-    CGImageDestinationAddImage(destination, image, nil)
-    guard CGImageDestinationFinalize(destination) else { return nil }
-    return output as Data
-  }
 }
+
+// MARK: - Non-Apple platforms: portable no-op defaults (Linux port prep)
+//
+// `PlatformDefaults.pasteboard`/`.isAccessibilityGranted`/`.imageNormalizer`
+// must exist on every platform this file compiles for, because `Paster.init`'s
+// default arguments reference them unconditionally (see that init's doc
+// comment on why — a `#if` inside a parameter list is a `swift-format
+// --strict` hazard). The macOS side is wired up beside its real
+// implementations in `Platform/macOS/MacPasteboardWriting.swift` and
+// `Platform/macOS/MacImageNormalizer.swift`; this is the portable fallback
+// for every other platform, matching `PlatformDefaults.swift`'s own doc
+// comment ("Non-Apple values are portable no-ops... the Linux composition
+// root always injects a real backend").
+//
+// `isAccessibilityGranted` defaulting to `{ false }` here is deliberate, not
+// just a placeholder: with it, `Paster.paste` always takes its documented
+// "no Accessibility → clipboard-only, no synthesized keystroke" fallback
+// path (see this file's `Paster.paste` doc comment) by default off Apple
+// platforms, so `NoOpEventSynthesizing`/`NoOpFrontmostAppReferenceProvider`
+// (`EventSynthesizing.swift`/`FrontmostAppTracker.swift`) are never actually
+// reached unless a future Linux composition root deliberately overrides
+// `isAccessibilityGranted` after also injecting a real backend for both.
+#if !os(macOS)
+  extension PlatformDefaults {
+    /// No real pasteboard exists yet outside macOS — writes are silently
+    /// dropped. Never used in production; the Linux composition root always
+    /// injects a real backend before content ever needs to reach a paste
+    /// target.
+    public static var pasteboard: any PasteboardWriting { NoOpPasteboardWriting() }
+
+    /// See this section's doc comment above for why `false` here is a
+    /// deliberate default, not merely "not implemented yet."
+    public static var isAccessibilityGranted: @Sendable () -> Bool { { false } }
+
+    /// No image decode/encode backend exists yet outside macOS — every
+    /// `.image` paste fails closed with `PasteError.invalidImageData` by
+    /// default. Never used in production; see this section's doc comment.
+    public static var imageNormalizer: any ImageNormalizing { NoOpImageNormalizer() }
+  }
+
+  /// Portable no-op `PasteboardWriting` — see the `#if !os(macOS)` section
+  /// doc comment above.
+  private struct NoOpPasteboardWriting: PasteboardWriting {
+    var changeCount: Int { 0 }
+    func writeString(_ string: String, forType type: ClipMediaType) {}
+    func writeData(_ data: Data, forType type: ClipMediaType) {}
+    func writeRichText(rtf: Data, plain: String) {}
+    func writeFileURL(_ url: URL) {}
+  }
+
+  /// Portable no-op `ImageNormalizing` — see the `#if !os(macOS)` section
+  /// doc comment above.
+  private struct NoOpImageNormalizer: ImageNormalizing {
+    func normalizedForPaste(_ data: Data) -> (data: Data, mediaType: ClipMediaType)? { nil }
+  }
+#endif

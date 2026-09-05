@@ -582,3 +582,104 @@ struct PasteboardReaderPixelHashTests {
     #expect(hasher.callCount == 0)
   }
 }
+
+// MARK: - P2-A (Linux port): injected ImageMetadataProbing/RichTextFlattening
+
+/// A fake `ImageMetadataProbing` — proves `PasteboardReader` wires the
+/// injected probe into image classification, and that a probe returning
+/// `nil` falls back to the existing "undecodable" preview-text/hash
+/// behavior unchanged.
+private struct FakeImageMetadataProbing: ImageMetadataProbing {
+  let stubbedDimensions: (width: Int, height: Int)?
+
+  func pixelDimensions(of imageData: Data) -> (width: Int, height: Int)? {
+    stubbedDimensions
+  }
+}
+
+/// A fake `RichTextFlattening` — proves `PasteboardReader` wires the
+/// injected flattener into rich-text classification, only when no
+/// `fallbackPlainText` (`.string` representation) is available on the
+/// pasteboard, matching `plainTextPreview`'s existing priority order.
+private struct FakeRichTextFlattening: RichTextFlattening {
+  let stubbedPlainText: String?
+
+  func plainText(fromRTF data: Data) -> String? {
+    stubbedPlainText
+  }
+}
+
+@Suite("PasteboardReader injected ImageMetadataProbing/RichTextFlattening (P2-A)")
+struct PasteboardReaderPlatformSeamTests {
+
+  @Test("An injected ImageMetadataProbing drives the image previewText dimensions")
+  func injectedImageMetadataProbeDrivesPreviewText() {
+    let probe = FakeImageMetadataProbing(stubbedDimensions: (width: 999, height: 111))
+    let reader = PasteboardReader(imageMetadataProbe: probe)
+    // Bytes need not be a real image at all — the probe is a full stand-in
+    // for dimension detection, exactly like `FakeImagePixelHashing` is a
+    // full stand-in for hashing.
+    let imageData = Data([0x00, 0x01, 0x02, 0x03])
+    let pasteboard = FakePasteboard(availableTypes: [.png], datas: [.png: imageData])
+
+    let result = reader.read(from: pasteboard)
+
+    #expect(result?.kind == .image)
+    #expect(result?.previewText == "Image, 999\u{00D7}111")
+  }
+
+  @Test("A nil-returning ImageMetadataProbing falls back to the byte-count previewText")
+  func nilImageMetadataProbeFallsBackToByteCountPreview() {
+    let probe = FakeImageMetadataProbing(stubbedDimensions: nil)
+    let reader = PasteboardReader(imageMetadataProbe: probe)
+    let imageData = Data(count: 42)
+    let pasteboard = FakePasteboard(availableTypes: [.png], datas: [.png: imageData])
+
+    let result = reader.read(from: pasteboard)
+
+    #expect(result?.kind == .image)
+    #expect(result?.previewText.contains("999") == false)
+    #expect(result?.previewText.contains("Image") == true)
+  }
+
+  @Test(
+    "An injected RichTextFlattening drives the rich-text previewText when no fallback string exists"
+  )
+  func injectedRichTextFlattenerDrivesPreviewTextWithNoFallback() {
+    let flattener = FakeRichTextFlattening(stubbedPlainText: "  flattened content  ")
+    let reader = PasteboardReader(richTextFlattener: flattener)
+    let rtfData = Data("{\\rtf1 anything}".utf8)
+    let pasteboard = FakePasteboard(availableTypes: [.rtf], datas: [.rtf: rtfData])
+
+    let result = reader.read(from: pasteboard)
+
+    #expect(result?.kind == .richText)
+    #expect(result?.previewText == "flattened content")
+  }
+
+  @Test("The pasteboard's own .string fallback wins over RichTextFlattening, unchanged priority")
+  func fallbackPlainTextStillWinsOverRichTextFlattener() {
+    let flattener = FakeRichTextFlattening(stubbedPlainText: "should not be used")
+    let reader = PasteboardReader(richTextFlattener: flattener)
+    let rtfData = Data("{\\rtf1 anything}".utf8)
+    let pasteboard = FakePasteboard(
+      availableTypes: [.rtf, .string], strings: [.string: "the real fallback"],
+      datas: [.rtf: rtfData])
+
+    let result = reader.read(from: pasteboard)
+
+    #expect(result?.previewText == "the real fallback")
+  }
+
+  @Test("A nil-returning RichTextFlattening falls back to the \"Rich Text\" placeholder")
+  func nilRichTextFlattenerFallsBackToPlaceholder() {
+    let flattener = FakeRichTextFlattening(stubbedPlainText: nil)
+    let reader = PasteboardReader(richTextFlattener: flattener)
+    let rtfData = Data("{\\rtf1 anything}".utf8)
+    let pasteboard = FakePasteboard(availableTypes: [.rtf], datas: [.rtf: rtfData])
+
+    let result = reader.read(from: pasteboard)
+
+    #expect(result?.previewText == "Rich Text")
+  }
+}

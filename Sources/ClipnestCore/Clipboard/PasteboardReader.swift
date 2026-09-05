@@ -1,25 +1,61 @@
-import AppKit
 import Foundation
-import ImageIO
 
 /// Abstraction over `NSPasteboard` so `PasteboardReader` (and anything that polls
 /// it, e.g. `ClipboardMonitor`) can be exercised in tests without touching the
 /// real system pasteboard.
 public protocol PasteboardReading {
   /// The pasteboard types currently available, in the pasteboard's own priority order.
-  var availableTypes: [NSPasteboard.PasteboardType] { get }
+  var availableTypes: [ClipMediaType] { get }
 
   /// Reads string data for a given type, if present.
-  func string(forType type: NSPasteboard.PasteboardType) -> String?
+  func string(forType type: ClipMediaType) -> String?
 
   /// Reads raw data for a given type, if present.
-  func data(forType type: NSPasteboard.PasteboardType) -> Data?
+  func data(forType type: ClipMediaType) -> Data?
 }
 
-extension NSPasteboard: PasteboardReading {
-  public var availableTypes: [NSPasteboard.PasteboardType] {
-    types ?? []
-  }
+/// P2-A (Linux port): `extension NSPasteboard: PasteboardReading` moved
+/// verbatim to `Platform/macOS/NSPasteboard+Clipnest.swift`, wrapped in
+/// `#if os(macOS)` — this file no longer imports `AppKit` at all, since
+/// `ClipMediaType` (not `NSPasteboard.PasteboardType` directly) is the only
+/// pasteboard-type currency `PasteboardReading` itself needs.
+
+/// Abstraction over `PasteboardReader.imagePixelDimensions`'s previous
+/// direct `ImageIO` (`CGImageSourceCreateWithData`/
+/// `CGImageSourceCopyPropertiesAtIndex`) calls — extracted for the Linux
+/// port (P2-A), since `ImageIO` doesn't exist off Apple platforms.
+///
+/// Returns `nil` when `imageData` can't be recognized/decoded enough to
+/// determine dimensions — the same "failure is just `nil`, never a crash"
+/// contract `ImagePixelHashing`/`TextRecognizing` already use, so callers'
+/// existing "undecodable image" fallback paths (byte-count preview text,
+/// raw-byte content hash) are unaffected by which conformance is injected.
+public protocol ImageMetadataProbing: Sendable {
+  /// The pixel dimensions of `imageData`, or `nil` if they can't be determined.
+  func pixelDimensions(of imageData: Data) -> (width: Int, height: Int)?
+}
+
+/// Abstraction over `PasteboardReader.readRichText`'s previous direct
+/// `NSAttributedString(data:options:documentAttributes:)` call — extracted
+/// for the Linux port (P2-A), since `NSAttributedString`'s RTF importer is
+/// AppKit-only.
+///
+/// Returns `nil` when `data` can't be flattened to plain text — callers
+/// fall back to `fallbackPlainText` (the pasteboard's own `.string`
+/// representation, when the source app offered one) or the literal
+/// `"Rich Text"` placeholder, exactly as before this extraction.
+///
+/// The Linux port's own rich-text pasteboard representation is
+/// `text/html`, not RTF (see `ClipMediaType`'s doc comment for the
+/// broader "one currency per platform" shape this mirrors) — a non-Apple
+/// conformance flattening HTML instead of RTF is a follow-up task, not
+/// this one; `NullRichTextFlattener` (the portable default, see
+/// `NullRichTextFlattener.swift`) simply returns `nil` until that lands,
+/// which is a safe, already-handled fallback, not a new failure mode.
+public protocol RichTextFlattening: Sendable {
+  /// Plain text flattened from `data` (interpreted as RTF), or `nil` if it
+  /// can't be flattened.
+  func plainText(fromRTF data: Data) -> String?
 }
 
 /// Classifies pasteboard content into an `ItemKind` and extracts the preview
@@ -81,7 +117,7 @@ public struct PasteboardReader: Sendable {
   /// whichever format was actually stored back to `.tiff` at paste time (see
   /// its doc comment), so downstream paste behavior is unaffected by which
   /// format was captured.
-  private static let imagePasteboardTypes: [NSPasteboard.PasteboardType] = [.png, .tiff]
+  private static let imagePasteboardTypes: [ClipMediaType] = [.png, .tiff]
 
   /// Captured images whose byte size exceeds this are rejected — `classify`
   /// returns `nil` for them — before their bytes are ever hashed
@@ -205,10 +241,40 @@ public struct PasteboardReader: Sendable {
   /// `SwiftDataClipStore` (a defaulted init parameter to the production
   /// conformance), so tests can substitute a fake without ever exercising
   /// a real `CoreGraphicsImagePixelHasher` decode.
+  ///
+  /// P2-E (Linux port): defaults to `PlatformDefaults.imagePixelHasher`,
+  /// not a bare `= CoreGraphicsImagePixelHasher()` literal — that concrete
+  /// type is `#if os(macOS)`-only (`Platform/macOS/
+  /// CoreGraphicsImagePixelHasher.swift`), and naming it directly in a
+  /// default argument broke the Linux build even though this file itself
+  /// has no Apple imports (Swift resolves every default-argument type at
+  /// compile time, regardless of whether the default is ever used).
+  /// Resolves to `CoreGraphicsImagePixelHasher` on macOS (byte-identical
+  /// behavior, frozen per D47) and `UnavailableImagePixelHasher` (always
+  /// `nil` — see its doc comment for why `nil`, not a weaker hash, is the
+  /// only correct placeholder) elsewhere.
   private let pixelHasher: any ImagePixelHashing
 
-  public init(pixelHasher: any ImagePixelHashing = CoreGraphicsImagePixelHasher()) {
+  /// P2-A (Linux port): see `ImageMetadataProbing`'s doc comment. Defaults
+  /// to `PlatformDefaults.imageMetadataProbe` — `MacImageMetadataProbe`
+  /// (ImageIO-backed, byte-identical body to the code this replaced) on
+  /// macOS, so every existing call site/test keeps today's exact behavior
+  /// with zero changes required.
+  private let imageMetadataProbe: any ImageMetadataProbing
+
+  /// P2-A (Linux port): see `RichTextFlattening`'s doc comment. Defaults
+  /// to `PlatformDefaults.richTextFlattener` — `MacRichTextFlattener`
+  /// (`NSAttributedString`-backed, byte-identical body) on macOS.
+  private let richTextFlattener: any RichTextFlattening
+
+  public init(
+    pixelHasher: any ImagePixelHashing = PlatformDefaults.imagePixelHasher,
+    imageMetadataProbe: any ImageMetadataProbing = PlatformDefaults.imageMetadataProbe,
+    richTextFlattener: any RichTextFlattening = PlatformDefaults.richTextFlattener
+  ) {
     self.pixelHasher = pixelHasher
+    self.imageMetadataProbe = imageMetadataProbe
+    self.richTextFlattener = richTextFlattener
   }
 
   /// Reads and classifies the current contents of `pasteboard` in one call —
@@ -300,7 +366,7 @@ public struct PasteboardReader: Sendable {
 
   private func firstAvailableImageData(
     from pasteboard: PasteboardReading,
-    types: [NSPasteboard.PasteboardType]
+    types: [ClipMediaType]
   ) -> Data? {
     for type in Self.imagePasteboardTypes where types.contains(type) {
       if let data = pasteboard.data(forType: type) { return data }
@@ -371,25 +437,21 @@ public struct PasteboardReader: Sendable {
     return "Image (\(formattedByteCount(data.count)))"
   }
 
-  /// T-PERF1: reads pixel dimensions via `ImageIO`'s
-  /// `CGImageSourceCopyPropertiesAtIndex` instead of the previous
-  /// `NSBitmapImageRep(data:)` — this now runs inside `classify(_:)`, off
-  /// `@MainActor` (see hazard note in the task spec: `NSImage`/its AppKit
-  /// siblings aren't documented thread-safe for every operation; `ImageIO`'s
-  /// plain C API is). Reading just the properties dictionary (a small header
-  /// parse) instead of decoding full pixel data is also strictly cheaper —
-  /// exactly the kind of per-copy CPU work this task exists to get off the
-  /// main actor for large images.
+  /// T-PERF1: reads pixel dimensions via the injected `imageMetadataProbe`
+  /// instead of decoding full pixel data — this now runs inside
+  /// `classify(_:)`, off `@MainActor` (see hazard note in the task spec:
+  /// `NSImage`/its AppKit siblings aren't documented thread-safe for every
+  /// operation). Reading just a header/properties parse instead of decoding
+  /// full pixel data is also strictly cheaper — exactly the kind of
+  /// per-copy CPU work this task exists to get off the main actor for large
+  /// images.
+  ///
+  /// P2-A (Linux port): originally called `ImageIO`'s
+  /// `CGImageSourceCopyPropertiesAtIndex` directly; extracted behind
+  /// `ImageMetadataProbing` so this method itself is now platform-neutral
+  /// — see that protocol's doc comment.
   private func imagePixelDimensions(for data: Data) -> (width: Int, height: Int)? {
-    guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-      let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-      let width = properties[kCGImagePropertyPixelWidth] as? Int,
-      let height = properties[kCGImagePropertyPixelHeight] as? Int,
-      width > 0, height > 0
-    else {
-      return nil
-    }
-    return (width, height)
+    imageMetadataProbe.pixelDimensions(of: data)
   }
 
   private func formattedByteCount(_ count: Int) -> String {
@@ -428,18 +490,21 @@ public struct PasteboardReader: Sendable {
     )
   }
 
+  /// P2-A (Linux port): originally called `NSAttributedString(data:options:
+  /// documentAttributes:)` directly; extracted behind `RichTextFlattening`
+  /// so this method is now platform-neutral — see that protocol's doc
+  /// comment. Behavior unchanged: `fallbackPlainText` (when the source app
+  /// offered a `.string` representation alongside the RTF) still wins over
+  /// flattening the RTF itself, and `"Rich Text"` is still the last-resort
+  /// placeholder when neither is available.
   private func plainTextPreview(forRTF rtfData: Data, fallbackPlainText: String?)
     -> String
   {
     if let plainString = fallbackPlainText {
       return plainString.trimmingCharacters(in: .whitespacesAndNewlines)
     }
-    if let attributed = try? NSAttributedString(
-      data: rtfData,
-      options: [.documentType: NSAttributedString.DocumentType.rtf],
-      documentAttributes: nil
-    ) {
-      return attributed.string.trimmingCharacters(in: .whitespacesAndNewlines)
+    if let flattened = richTextFlattener.plainText(fromRTF: rtfData) {
+      return flattened.trimmingCharacters(in: .whitespacesAndNewlines)
     }
     return "Rich Text"
   }

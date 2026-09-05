@@ -1835,3 +1835,188 @@ struct ClipboardMonitorTests {
     return (ratio, captured, captured?.byteSize ?? -1)
   }
 }
+
+// MARK: - P2-A (Linux port): PollScheduling extraction
+
+/// Spies on `ClipboardMonitor`'s calls into the injected `PollScheduling`,
+/// so `start()`/`stop()`/`startEventDriven()` can be tested without a real
+/// `Timer` (per coding-standards.md's testing rules: "never touch...a real
+/// `Timer`... from a test"). Previously these three methods had NO test
+/// coverage at all (confirmed: no existing test in this file called any of
+/// them) — this extraction is also what makes them newly testable.
+private final class FakePollScheduling: PollScheduling, @unchecked Sendable {
+  private let lock = NSLock()
+  private var scheduleCallCountStorage = 0
+  private var cancelCallCountStorage = 0
+  private var lastIntervalStorage: TimeInterval?
+
+  var scheduleCallCount: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return scheduleCallCountStorage
+  }
+
+  var cancelCallCount: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return cancelCallCountStorage
+  }
+
+  var lastInterval: TimeInterval? {
+    lock.lock()
+    defer { lock.unlock() }
+    return lastIntervalStorage
+  }
+
+  func schedule(interval: TimeInterval, tick: @escaping @Sendable () -> Void) {
+    lock.lock()
+    scheduleCallCountStorage += 1
+    lastIntervalStorage = interval
+    lock.unlock()
+  }
+
+  func cancel() {
+    lock.lock()
+    cancelCallCountStorage += 1
+    lock.unlock()
+  }
+}
+
+@Suite("ClipboardMonitor poll scheduling (P2-A)")
+struct ClipboardMonitorPollSchedulingTests {
+  @MainActor
+  private func makeMonitor(pollScheduler: FakePollScheduling, pollInterval: TimeInterval = 0.4)
+    -> ClipboardMonitor
+  {
+    ClipboardMonitor(
+      store: InMemoryClipStore(),
+      pasteboard: FakeMonitoredPasteboard(),
+      frontmostApplicationProvider: FakeFrontmostApplicationProvider(),
+      pollInterval: pollInterval,
+      pollScheduler: pollScheduler
+    )
+  }
+
+  @MainActor
+  @Test("start() schedules exactly once, at pollInterval, via the injected PollScheduling")
+  func startSchedulesOnceAtPollInterval() {
+    let scheduler = FakePollScheduling()
+    let monitor = makeMonitor(pollScheduler: scheduler, pollInterval: 0.7)
+
+    monitor.start()
+
+    #expect(scheduler.scheduleCallCount == 1)
+    #expect(scheduler.lastInterval == 0.7)
+    #expect(scheduler.cancelCallCount == 0)
+  }
+
+  @MainActor
+  @Test("Calling start() twice schedules only once — ClipboardMonitor owns the idempotency guard")
+  func startIsIdempotent() {
+    let scheduler = FakePollScheduling()
+    let monitor = makeMonitor(pollScheduler: scheduler)
+
+    monitor.start()
+    monitor.start()
+
+    #expect(scheduler.scheduleCallCount == 1)
+  }
+
+  @MainActor
+  @Test("stop() cancels the injected PollScheduling after start()")
+  func stopCancelsAfterStart() {
+    let scheduler = FakePollScheduling()
+    let monitor = makeMonitor(pollScheduler: scheduler)
+
+    monitor.start()
+    monitor.stop()
+
+    #expect(scheduler.cancelCallCount == 1)
+  }
+
+  @MainActor
+  @Test("stop() without a prior start() never calls cancel — nothing was ever scheduled")
+  func stopWithoutStartDoesNotCancel() {
+    let scheduler = FakePollScheduling()
+    let monitor = makeMonitor(pollScheduler: scheduler)
+
+    monitor.stop()
+
+    #expect(scheduler.cancelCallCount == 0)
+  }
+
+  @MainActor
+  @Test("A stop()-then-start() cycle schedules again — stop() resets the idempotency guard")
+  func stopThenStartSchedulesAgain() {
+    let scheduler = FakePollScheduling()
+    let monitor = makeMonitor(pollScheduler: scheduler)
+
+    monitor.start()
+    monitor.stop()
+    monitor.start()
+
+    #expect(scheduler.scheduleCallCount == 2)
+    #expect(scheduler.cancelCallCount == 1)
+  }
+
+  @MainActor
+  @Test("startEventDriven() never touches the injected PollScheduling")
+  func startEventDrivenNeverSchedules() {
+    let scheduler = FakePollScheduling()
+    let monitor = makeMonitor(pollScheduler: scheduler)
+
+    #expect(monitor.isEventDriven == false)
+    monitor.startEventDriven()
+
+    #expect(monitor.isEventDriven == true)
+    #expect(scheduler.scheduleCallCount == 0)
+    #expect(scheduler.cancelCallCount == 0)
+  }
+
+  @MainActor
+  @Test("startEventDriven() after start() stops the active polling first")
+  func startEventDrivenStopsActivePolling() {
+    let scheduler = FakePollScheduling()
+    let monitor = makeMonitor(pollScheduler: scheduler)
+
+    monitor.start()
+    monitor.startEventDriven()
+
+    #expect(scheduler.scheduleCallCount == 1)
+    #expect(scheduler.cancelCallCount == 1)
+    #expect(monitor.isEventDriven == true)
+  }
+
+  @MainActor
+  @Test(
+    "checkNow() works with no start()/startEventDriven() call at all — event-driven callers need neither"
+  )
+  func checkNowWorksWithoutStartingAnything() async {
+    let scheduler = FakePollScheduling()
+    let pasteboard = FakeMonitoredPasteboard()
+    let monitor = ClipboardMonitor(
+      store: InMemoryClipStore(),
+      pasteboard: pasteboard,
+      frontmostApplicationProvider: FakeFrontmostApplicationProvider(),
+      pollScheduler: scheduler
+    )
+    pasteboard.simulateCopy(text: "no start() needed")
+
+    let captured = await monitor.checkNow()
+
+    #expect(captured?.previewText == "no start() needed")
+    #expect(scheduler.scheduleCallCount == 0)
+  }
+
+  @MainActor
+  @Test("stop() clears the startEventDriven() marker too")
+  func stopClearsEventDrivenMarker() {
+    let scheduler = FakePollScheduling()
+    let monitor = makeMonitor(pollScheduler: scheduler)
+
+    monitor.startEventDriven()
+    monitor.stop()
+
+    #expect(monitor.isEventDriven == false)
+  }
+}

@@ -1,6 +1,8 @@
-import AppKit
 import Foundation
-import os
+
+#if os(macOS)
+  import AppKit
+#endif
 
 /// Backs the global snippet-expansion hotkey (⌥⌘E): reads the current
 /// selection, looks it up as a snippet keyword, and replaces the selection
@@ -26,7 +28,8 @@ import os
 /// is main-actor-isolated (callers get a plain, non-`unsafe` stored property).
 @MainActor
 public final class SnippetExpander {
-  private static let logger = Logger(subsystem: ClipnestLog.subsystem, category: "SnippetExpander")
+  private static let logger = ClipnestLogger(
+    subsystem: ClipnestLog.subsystem, category: "SnippetExpander")
 
   private let snippetStore: any SnippetStore
   private let selectedText: any SelectedTextAccessing
@@ -37,7 +40,7 @@ public final class SnippetExpander {
     snippetStore: any SnippetStore,
     selectedText: any SelectedTextAccessing,
     clipboardReplacer: any SelectionReplacing,
-    beep: @escaping () -> Void = { NSSound.beep() }
+    beep: @escaping () -> Void = PlatformDefaults.beep
   ) {
     self.snippetStore = snippetStore
     self.selectedText = selectedText
@@ -87,3 +90,18 @@ public final class SnippetExpander {
     }
   }
 }
+
+#if os(macOS)
+  extension PlatformDefaults {
+    /// The production "nothing matched" feedback on macOS — the standard
+    /// system alert sound.
+    public static var beep: () -> Void { { NSSound.beep() } }
+  }
+#else
+  extension PlatformDefaults {
+    /// No audible-feedback backend exists yet outside macOS — a silent
+    /// no-op. Never used in production; a future Linux backend will supply
+    /// a real one (e.g. a desktop-notification sound).
+    public static var beep: () -> Void { {} }
+  }
+#endif

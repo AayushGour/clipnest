@@ -119,4 +119,15 @@ struct PrivacyFilterTests {
 
     #expect(result == true)
   }
+
+  // P1-T1: temporary guard test for the `ClipMediaType` refactor — the
+  // concealed/transient markers are security-critical (they silently
+  // disable password-manager filtering if the raw UTI string is ever
+  // wrong), so this pins their exact raw values independently of whatever
+  // `ClipMediaType`/`NSPasteboard.PasteboardType` machinery produces them.
+  @Test("Concealed and transient marker raw values are exactly the org.nspasteboard UTIs")
+  func concealedAndTransientMarkersHaveExactRawValues() {
+    #expect(concealedType.rawValue == "org.nspasteboard.ConcealedType")
+    #expect(transientType.rawValue == "org.nspasteboard.TransientType")
+  }
 }
