@@ -26,6 +26,12 @@ enum GSettingsCustomKeybinding {
   ///     format (e.g. `"<Super><Shift>v"`).
   ///   - segment: the named path segment (e.g. `"clipnest-toggle"`).
   static func install(name: String, command: String, binding: String, segment: String) {
+    // Both schemas must exist BEFORE any g_settings_new* call — see
+    // `schemaIsInstalled`: a missing schema aborts the process, it does not
+    // return nil.
+    guard schemaIsInstalled(MediaKeysSchema.mainSchemaID),
+      schemaIsInstalled(MediaKeysSchema.customKeybindingSchemaID)
+    else { return }
     guard let path = try? GSettingsKeybindingPath.path(forSegment: segment) else { return }
 
     guard
@@ -45,6 +51,28 @@ enum GSettingsCustomKeybinding {
       existing.append(path)
       writeStringList(main, key: MediaKeysSchema.customKeybindingsListKey, values: existing)
     }
+  }
+
+
+  /// Whether a GSettings schema is actually installed on this machine.
+  ///
+  /// This check is NOT optional. `g_settings_new` and `g_settings_new_with_path`
+  /// treat a missing schema as a PROGRAMMER ERROR and abort the process with
+  /// `GLib-GIO-ERROR ** Settings schema '...' is not installed` — they do not
+  /// return nil, so `guard let` provides no protection whatsoever. Found by
+  /// running the app: on a bare X session with no GNOME settings-daemon
+  /// installed, Clipnest died on launch before showing any UI.
+  ///
+  /// The GNOME media-keys schema is absent on KDE, XFCE, a plain WM session,
+  /// and inside containers. The GSettings custom-keybinding hotkey tier simply
+  /// does not apply there, and the app must fall through to another tier rather
+  /// than abort.
+  static func schemaIsInstalled(_ schemaID: String) -> Bool {
+    guard let source = g_settings_schema_source_get_default() else { return false }
+    guard let schema = schemaID.withCString({ g_settings_schema_source_lookup(source, $0, 1) })
+    else { return false }
+    g_settings_schema_unref(schema)
+    return true
   }
 
   private static func setString(
