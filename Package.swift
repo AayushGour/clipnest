@@ -62,3 +62,50 @@ let package = Package(
       name: "ClipnestViewModelsTests", dependencies: ["ClipnestViewModels", "ClipnestCore"]),
   ]
 )
+
+// Linux-only graph, guarded at MANIFEST level. Package.swift is host-compiled
+// Swift, so on macOS these targets do not exist at all — Xcode never sees the
+// GTK/X11/ONNX system libraries and can never try to resolve or link them.
+#if os(Linux)
+  package.products += [
+    .executable(name: "clipnest", targets: ["ClipnestLinuxApp"])
+  ]
+  package.targets += [
+    .systemLibrary(
+      name: "CXlib", path: "Sources/CXlib",
+      providers: [.apt(["libx11-dev", "libxfixes-dev", "libxtst-dev"])]),
+    .systemLibrary(
+      name: "CGtk4", path: "Sources/CGtk4", pkgConfig: "gtk4",
+      providers: [.apt(["libgtk-4-dev"])]),
+    // No pkgConfig: ONNX Runtime is NOT in Ubuntu's default repositories, so
+    // it is vendored by the .deb rather than resolved from the distro. This is
+    // the documented exception to the "system libraries only" dependency rule.
+    .systemLibrary(name: "COnnxRuntime", path: "Sources/COnnxRuntime"),
+    .target(
+      name: "ClipnestPlatformLinux",
+      dependencies: ["ClipnestCore", "ClipnestSQLite", "CXlib"]),
+    // OCR is a SEPARATE target because ONNX Runtime is not in Ubuntu's
+    // repositories and must be vendored — mirroring the packaging split, where
+    // clipnest-ocr is its own .deb that `clipnest` only Recommends. Everything
+    // else builds on a stock Ubuntu box with apt dependencies alone.
+    // CLIPNEST_HAS_ONNXRUNTIME is deliberately NOT defined here. `canImport`
+    // cannot express "module declared but headers absent" — SwiftPM/Clang hard-
+    // errors on any textual import of a declared-but-unbuildable C module, even
+    // inside #if canImport. Until the .deb vendors onnxruntime_c_api.h, the
+    // target compiles with OCR reporting itself unavailable rather than failing
+    // the build. The packaging step adds:
+    //   swiftSettings: [.define("CLIPNEST_HAS_ONNXRUNTIME")]
+    .target(
+      name: "ClipnestLinuxOCR", dependencies: ["ClipnestCore", "COnnxRuntime"]),
+    .target(name: "ClipnestGTK", dependencies: ["ClipnestViewModels", "CGtk4"]),
+    .executableTarget(
+      name: "ClipnestLinuxApp",
+      dependencies: [
+        "ClipnestCore", "ClipnestSQLite", "ClipnestViewModels",
+        "ClipnestPlatformLinux", "ClipnestGTK", "ClipnestLinuxOCR",
+      ]),
+    .testTarget(
+      name: "ClipnestPlatformLinuxTests",
+      dependencies: ["ClipnestPlatformLinux", "ClipnestLinuxOCR", "ClipnestCore"]),
+  ]
+#endif
