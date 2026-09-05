@@ -1,3 +1,4 @@
+import ClipnestCore
 import ClipnestPlatformLinux
 import Foundation
 import Synchronization
@@ -21,6 +22,9 @@ import Synchronization
 /// `ShellHelperResponses` (the pure logic this class is built from) are
 /// unit-tested directly instead.
 public final class ShellHelperClient: @unchecked Sendable {
+  private static let logger = ClipnestLogger(
+    subsystem: ClipnestLog.subsystem, category: "ShellHelperClient")
+
   private let callConnection: any DBusCalling
   private let signalConnection: DBusConnection?
   private let timeout: Duration
@@ -99,6 +103,11 @@ public final class ShellHelperClient: @unchecked Sendable {
   }
 
   private func readLoop(_ connection: DBusConnection) {
+    // Same T-LX1-class diagnostic `ClipnestControlService.receiveLoop()`
+    // carries — proof this loop is actually alive; see
+    // `LinuxAppLifecycle`'s "Process-lifetime ownership" doc comment for
+    // why this class needed a deliberate external owner too.
+    Self.logger.info("Shell-extension helper signal read loop started")
     while true {
       guard let message = connection.receiveOneMessage(timeout: .seconds(1)) else { continue }
       if DBusStandardResponses.parseNameOwnerChanged(message)?.name == ShellHelperName.busName {

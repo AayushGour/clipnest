@@ -9,6 +9,49 @@ enum ClipnestControlErrorName {
   static let invalidArgs = "org.freedesktop.DBus.Error.InvalidArgs"
 }
 
+/// Why `ClipnestControlService.receiveLoop()` silently `continue`d instead
+/// of sending a reply — extracted as its own pure, directly-testable type
+/// (T-LX2: the receive loop's three bare `continue`s used to make "a
+/// malformed message," "an undecodable one," and "no message at all"
+/// indistinguishable at runtime) with the same "pure logic, no D-Bus I/O"
+/// split as `ClipnestControlRequest`/`ClipnestControlReplies` above, so the
+/// exact wording has test coverage without a real `DBusConnection`.
+///
+/// Deliberately does NOT cover `connection.receiveOneMessage(timeout:)`
+/// returning `nil` (the loop's first `continue`) — that fires every
+/// second whenever nothing arrives at all, which is this loop's normal
+/// idle state, not a rejection of anything; logging it would just be noise
+/// on every poll, matching how `ATSPIFocusTracker.readLoop()`'s identical
+/// idle `continue` is likewise silent. What IS worth logging is a message
+/// that was actually received and then dropped, which is exactly the two
+/// cases below.
+///
+/// Metadata only, per coding-standards.md's privacy rule: an interface and
+/// member name, never a message body.
+enum ClipnestControlReceiveRejection {
+  /// `ClipnestControlRequest.decode` returned `nil`: something was read
+  /// off the wire, but it wasn't a method call at all (e.g. a stray signal
+  /// or another connection's reply this connection happened to see).
+  case notAMethodCall(DBusMessage)
+  /// `ClipnestControlDispatcher.handle` returned `nil`: a real method call
+  /// this service recognized produced no reply. Unreachable today — every
+  /// `ClipnestControlDispatcher.handle` branch currently replies — kept so
+  /// a future branch that legitimately shouldn't reply doesn't silently
+  /// regress back into "indistinguishable from nothing happened at all."
+  case noReplyProduced(DBusMessage)
+
+  var logDescription: String {
+    switch self {
+    case .notAMethodCall(let message):
+      return
+        "ignored non-method-call message (type=\(message.type), interface=\(message.interface ?? "?"), member=\(message.member ?? "?"))"
+    case .noReplyProduced(let message):
+      return
+        "dispatcher produced no reply (interface=\(message.interface ?? "?"), member=\(message.member ?? "?"))"
+    }
+  }
+}
+
 /// Every incoming request `ClipnestControlService` can receive on
 /// `app.clipnest.Control` or `org.freedesktop.Application`, decoded from
 /// the raw `DBusMessage` the bus hands the service. Pure — no D-Bus I/O —

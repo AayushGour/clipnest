@@ -1,3 +1,4 @@
+import ClipnestCore
 import ClipnestPlatformLinux
 import Foundation
 
@@ -23,6 +24,9 @@ import Foundation
 /// `StatusNotifierReplies`/`DBusMenuLayoutBuilder` (the pure logic this
 /// class is built from) are unit-tested directly instead.
 public final class StatusNotifierTray: @unchecked Sendable {
+  private static let logger = ClipnestLogger(
+    subsystem: ClipnestLog.subsystem, category: "StatusNotifierTray")
+
   private let ownConnection: DBusConnection
   private let watchConnection: DBusConnection?
   private var receiveThread: Thread?
@@ -73,6 +77,11 @@ public final class StatusNotifierTray: @unchecked Sendable {
   }
 
   private func receiveLoop() {
+    // Same T-LX1-class diagnostic `ClipnestControlService.receiveLoop()`
+    // carries — proof this loop is actually alive; see
+    // `LinuxAppLifecycle`'s "Process-lifetime ownership" doc comment for
+    // why this class needed the identical retention fix.
+    Self.logger.info("tray D-Bus receive loop started")
     while true {
       if let watchConnection,
         let ownerChange = watchConnection.receiveOneMessage(timeout: .milliseconds(50)),

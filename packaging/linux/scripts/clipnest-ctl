@@ -6,12 +6,14 @@
 # Sources/ClipnestLinuxApp/{App/LinuxAppCLI.swift,DBus/ClipnestControlNames.swift,
 # DBus/ClipnestControlService.swift}), not a guess:
 #
-# `toggle-picker`/`expand-snippet` just exec `clipnest --toggle-picker` /
-# `clipnest --expand-snippet` — LinuxAppCLI.parse() recognizes exactly these
-# two flags; SingleInstanceDecision/ClipnestControlService forward them to
-# an already-running instance over D-Bus automatically (or start one, if
-# none is running yet) — no bespoke D-Bus call needed here, and no risk of
-# this script drifting from LinuxAppCLIFlag's own constants.
+# `toggle-picker`/`expand-snippet` run `clipnest --toggle-picker` /
+# `clipnest --expand-snippet` (via `launch_or_forward`, see T-LX3 below —
+# bounded when forwarding to an already-running instance, unbounded `exec`
+# when this run might BE the instance) — LinuxAppCLI.parse() recognizes
+# exactly these two flags; SingleInstanceDecision/ClipnestControlService
+# forward them to an already-running instance over D-Bus automatically (or
+# start one, if none is running yet) — no bespoke D-Bus call needed here,
+# and no risk of this script drifting from LinuxAppCLIFlag's own constants.
 #
 # `open-settings`/`ping` have no CLI-flag equivalent (LinuxAppCLIFlag only
 # defines the two above), so those go straight to the app.clipnest.Control
@@ -24,11 +26,37 @@
 # action names are `ClipnestControlMember.expandSnippet.lowercased()` ==
 # "expandsnippet" (no hyphen) — a real, non-obvious footgun this script
 # avoids entirely by using the named app.clipnest.Control methods instead.
+#
+# T-LX3: this script is invoked from a GSettings custom keybinding — a
+# hang here makes the user's hotkey appear dead with no feedback at all,
+# so a call that is ONLY EVER a quick round trip (open-settings/ping, and
+# toggle-picker/expand-snippet when an instance is already running to
+# forward to) must not block forever regardless of whether the far end
+# ever replies. `--kill-after` is defense in depth there: if the target
+# somehow doesn't exit on the initial SIGTERM, SIGKILL follows a few
+# seconds later rather than leaving a stray hung process behind.
+#
+# CAUTION, learned the hard way (a real regression caught in review):
+# toggle-picker/expand-snippet are NOT always a quick round trip.
+# `clipnest --toggle-picker` becomes the app's actual, indefinitely-long-
+# lived RESIDENT process whenever there's no already-running instance to
+# forward to (`SingleInstanceDecision.becomePrimary`, or the `.busUnavailable`
+# fallback — see `LinuxAppLifecycle.run`/`.launch`, neither of which ever
+# returns in that case; the GTK main loop runs until the user quits).
+# Wrapping THAT invocation in a fixed `timeout` would SIGTERM/SIGKILL the
+# app it just launched partway through the user's session — bounding must
+# only ever apply to the "an instance already owns the bus name, so this
+# is just a fire-and-forget forward" case, decided by `existing_instance_running`
+# below BEFORE choosing bounded vs. unbounded. If that check can't even be
+# answered (no gdbus, bus unreachable, whatever) we default to unbounded —
+# the original, safe behavior — rather than risk killing a fresh launch.
 set -euo pipefail
 
 readonly BUS_NAME="app.clipnest.Clipnest"
 readonly OBJECT_PATH="/app/clipnest/Clipnest"
 readonly CONTROL_IFACE="app.clipnest.Control"
+readonly CALL_TIMEOUT_SECONDS=10
+readonly CALL_KILL_AFTER_SECONDS=5
 
 usage() {
   cat <<'EOF'
@@ -57,20 +85,73 @@ require_gdbus() {
   fi
 }
 
+require_timeout() {
+  if ! command -v timeout >/dev/null 2>&1; then
+    echo "clipnest-ctl: timeout not found (expected from coreutils)." >&2
+    exit 1
+  fi
+}
+
+# Runs `command...` bounded by `CALL_TIMEOUT_SECONDS` — exit code 124 (this
+# is `timeout`'s own convention) if it had to kill the command, otherwise
+# the command's own exit code. Never `exec`s (the caller decides that),
+# since `timeout` itself must stay alive as the parent to enforce the
+# deadline.
+run_bounded() {
+  require_timeout
+  timeout --kill-after="${CALL_KILL_AFTER_SECONDS}" "${CALL_TIMEOUT_SECONDS}" "$@"
+}
+
 call_control_method() {
   require_gdbus
-  gdbus call --session \
+  run_bounded gdbus call --session \
     --dest "$BUS_NAME" \
     --object-path "$OBJECT_PATH" \
     --method "${CONTROL_IFACE}.$1"
 }
 
+# True only if we can POSITIVELY confirm an existing Clipnest instance
+# already owns the bus name. False for every other outcome — including
+# "couldn't even ask" (no gdbus, no reachable session bus) — since in
+# every one of those cases the NEXT `clipnest` invocation might be the one
+# that becomes the new resident instance, which must never be bounded (see
+# the CAUTION note up top). A narrow TOCTOU window exists between this
+# check and the invocation below (the owner could appear/disappear in
+# between); that's the same race `SingleInstanceDecision`'s own
+# `DO_NOT_QUEUE` already lives with, and it only ever affects which mode
+# we pick for THIS invocation, never correctness of Clipnest's own single-
+# instance logic.
+existing_instance_running() {
+  command -v gdbus >/dev/null 2>&1 || return 1
+  local reply
+  reply=$(
+    timeout 3 gdbus call --session \
+      --dest org.freedesktop.DBus \
+      --object-path /org/freedesktop/DBus \
+      --method org.freedesktop.DBus.NameHasOwner "$BUS_NAME" 2>/dev/null
+  ) || return 1
+  [[ "$reply" == "(true,)" ]]
+}
+
+# toggle-picker/expand-snippet: bounded (safe, T-LX3) ONLY when an
+# instance already owns the bus name, so this run is just forwarding argv
+# and exiting almost immediately; unbounded `exec` (the original, correct
+# behavior) in every other case, since this run may become the new
+# resident process instead.
+launch_or_forward() {
+  if existing_instance_running; then
+    run_bounded clipnest "$1"
+  else
+    exec clipnest "$1"
+  fi
+}
+
 case "${1:-}" in
   toggle-picker)
-    exec clipnest --toggle-picker
+    launch_or_forward --toggle-picker
     ;;
   expand-snippet)
-    exec clipnest --expand-snippet
+    launch_or_forward --expand-snippet
     ;;
   open-settings)
     call_control_method "OpenSettings" >/dev/null

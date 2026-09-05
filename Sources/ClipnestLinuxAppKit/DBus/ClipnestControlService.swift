@@ -1,3 +1,4 @@
+import ClipnestCore
 import ClipnestPlatformLinux
 import Foundation
 
@@ -92,6 +93,9 @@ final class ClipnestControlDispatcher {
 /// `ClipnestControlRequest.decode`/`ClipnestControlReplies` (the pure
 /// logic this loop is built from) are unit-tested directly instead.
 public final class ClipnestControlService: @unchecked Sendable {
+  private static let logger = ClipnestLogger(
+    subsystem: ClipnestLog.subsystem, category: "ClipnestControlService")
+
   private let connection: DBusConnection
   private let dispatcher: ClipnestControlDispatcher
   private var receiveThread: Thread?
@@ -134,10 +138,23 @@ public final class ClipnestControlService: @unchecked Sendable {
   }
 
   private func receiveLoop() {
+    // T-LX2 diagnostic: proof the loop is actually alive at all — see
+    // `LinuxAppLifecycle.controlService`'s doc comment for the T-LX1 bug
+    // where this line never printed because this method never ran.
+    Self.logger.info("D-Bus control service receive loop started")
     while true {
+      // No message within the poll interval is this loop's normal idle
+      // state, not a rejection — see `ClipnestControlReceiveRejection`'s
+      // doc comment for why this one `continue` is deliberately silent.
       guard let message = connection.receiveOneMessage(timeout: .seconds(1)) else { continue }
-      guard let request = ClipnestControlRequest.decode(message) else { continue }
-      guard let reply = dispatcher.handle(request, message: message) else { continue }
+      guard let request = ClipnestControlRequest.decode(message) else {
+        Self.logger.debug(ClipnestControlReceiveRejection.notAMethodCall(message).logDescription)
+        continue
+      }
+      guard let reply = dispatcher.handle(request, message: message) else {
+        Self.logger.info(ClipnestControlReceiveRejection.noReplyProduced(message).logDescription)
+        continue
+      }
       var outgoing = reply
       outgoing.serial = connection.allocateSerial()
       connection.send(outgoing)

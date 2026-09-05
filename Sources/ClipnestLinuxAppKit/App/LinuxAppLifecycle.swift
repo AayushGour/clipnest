@@ -49,6 +49,50 @@ public enum LinuxAppLifecycle {
   private static let toggleKeybindingSegment = "clipnest-toggle"
   private static let defaultToggleAccelerator = "<Super><Shift>v"
 
+  // MARK: - Process-lifetime ownership (T-LX1 fix, then generalized)
+  //
+  // `ClipnestControlService.start()`/`StatusNotifierTray.start()`/
+  // `ATSPIFocusTracker.start()` all spawn a background receive-loop
+  // `Thread { [weak self] in self?.receiveLoop() }`. That shape only works
+  // if something ELSE holds a strong reference until the freshly spawned
+  // thread's first access to `self` (after which `receiveLoop()`'s own
+  // `while true` body keeps itself alive strongly for as long as it runs,
+  // via the `self?.foo()` optional-chain's implicit strong temporary).
+  //
+  // T-LX1 found `startControlService` handing `ClipnestControlService` off
+  // as a purely local `let` with no such owner: the instant that function
+  // returned, ARC dropped its only strong reference — deterministically,
+  // and almost always BEFORE the new OS thread was actually scheduled
+  // (`Thread.start()`'s underlying `pthread_create` has real scheduling
+  // latency; a function return does not). So `self` resolved to `nil`
+  // inside the thread and `receiveLoop()` never ran a single iteration:
+  // the service claimed `app.clipnest.Clipnest` (that happens earlier and
+  // synchronously, via `SingleInstance.acquire` on the calling thread,
+  // before this is even reached) but could never read, let alone answer,
+  // one method call — exactly the observed symptom (`Ping`/`Introspect`
+  // time out with zero reply, `clipnest-ctl toggle-picker` hangs forever
+  // forwarding into the void).
+  //
+  // Independent review (post-fix) found the IDENTICAL shape, still
+  // unowned, in two more places built the same session: `StatusNotifierTray`
+  // (`startTray`'s `let tray = ...`) and `ShellHelperClient`
+  // (`makeShellHelperClient`'s returned value, previously surviving only
+  // by an ACCIDENTAL mutual-retain cycle through the closures
+  // `wireShellHelper`/`installHotkeys` hand it — no deliberate owner of
+  // its own). All four — plus `LinuxAppEnvironment` itself, whose
+  // lifetime used to be purely incidental on whichever of these four
+  // happened to still be retained — get one explicit, deliberate owner
+  // here: this enum's own static state, which lives for the process's
+  // whole life (same duration `installGSettingsFloor`'s one-shot side
+  // effect already assumes). This is the same "retain via a real owner"
+  // pattern the one case that already worked, `ATSPIFocusTracker`, relies
+  // on (there, the `focusedObject: { focusTracker.currentFocusedObject() }`
+  // closure captured by the long-lived `ATSPITextAccessor` is that owner).
+  private static var environment: LinuxAppEnvironment?
+  private static var controlService: ClipnestControlService?
+  private static var shellHelperClient: ShellHelperClient?
+  private static var tray: StatusNotifierTray?
+
   /// Entry point called from `main.swift`. Never returns until the GTK
   /// main loop exits (`ClipnestGTKApplication.quitMainLoop()`, wired to
   /// the tray's Quit item) — matches every other GTK application's
@@ -99,6 +143,9 @@ public enum LinuxAppLifecycle {
       ClipnestGTKApplication.quitMainLoop()
       return
     }
+    // Deliberate owner for the composition root's whole process lifetime —
+    // see the "Process-lifetime ownership" doc comment above `environment`.
+    Self.environment = environment
 
     environment.startCapture()
     environment.startUpdateChecking()
@@ -120,13 +167,15 @@ public enum LinuxAppLifecycle {
     startControlService(on: controlConnection, environment: environment)
 
     let shellHelperClient = makeShellHelperClient(sessionBusAddress: sessionBusAddress)
+    // See the "Process-lifetime ownership" doc comment above — this used
+    // to survive only via an accidental retain cycle through the closures
+    // wired below.
+    Self.shellHelperClient = shellHelperClient
     wireShellHelper(shellHelperClient, environment: environment)
 
     startTray(sessionBusAddress: sessionBusAddress, environment: environment)
 
-    installHotkeys(
-      sessionBusAddress: sessionBusAddress, shellHelperClient: shellHelperClient,
-      environment: environment)
+    installHotkeys(sessionBusAddress: sessionBusAddress, shellHelperClient: shellHelperClient)
   }
 
   private static func startControlService(
@@ -144,6 +193,10 @@ public enum LinuxAppLifecycle {
     service.onExpandSnippet = { Task { @MainActor in environment.expandSnippet() } }
     service.onOpenSettings = { Task { @MainActor in environment.openSettings() } }
     service.start()
+    // Must happen — see `controlService`'s doc comment: without this, the
+    // service (and its receive thread's only path to a live `self`) is
+    // gone before the thread it just started ever gets scheduled.
+    controlService = service
   }
 
   private static func makeShellHelperClient(sessionBusAddress: String) -> ShellHelperClient? {
@@ -198,6 +251,10 @@ public enum LinuxAppLifecycle {
     tray.onOpenSettings = { Task { @MainActor in environment.openSettings() } }
     tray.onQuit = { Task { @MainActor in ClipnestGTKApplication.quitMainLoop() } }
     tray.start()
+    // See the "Process-lifetime ownership" doc comment above `environment`
+    // — without this, `tray`'s receive thread has the identical unowned-
+    // weak-self shape T-LX1 fixed for `ClipnestControlService`.
+    Self.tray = tray
   }
 
   /// Priority chain (this task's build step 5): Shell-extension keybinding
@@ -205,8 +262,7 @@ public enum LinuxAppLifecycle {
   /// doc comment) -> `GlobalShortcuts` portal (dead on 22.04/24.04, kept
   /// for forward compatibility) -> the GSettings floor.
   private static func installHotkeys(
-    sessionBusAddress: String, shellHelperClient: ShellHelperClient?,
-    environment: LinuxAppEnvironment
+    sessionBusAddress: String, shellHelperClient: ShellHelperClient?
   ) {
     let shellExtensionAvailable =
       shellHelperClient?.currentCapabilities.canDeliverShortcuts ?? false

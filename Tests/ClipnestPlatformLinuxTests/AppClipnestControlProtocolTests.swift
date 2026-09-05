@@ -176,6 +176,34 @@ struct AppClipnestControlRepliesTests {
   }
 }
 
+@Suite("ClipnestControlReceiveRejection — T-LX2 receive-loop rejection logging")
+struct AppClipnestControlReceiveRejectionTests {
+  @Test("notAMethodCall names the message's type, interface, and member")
+  func notAMethodCallDescribesMetadataOnly() {
+    let signal = DBusMessage(
+      type: .signal, serial: 3, interface: "org.freedesktop.DBus", member: "NameOwnerChanged")
+    let description = ClipnestControlReceiveRejection.notAMethodCall(signal).logDescription
+    #expect(description.contains("signal"))
+    #expect(description.contains("org.freedesktop.DBus"))
+    #expect(description.contains("NameOwnerChanged"))
+  }
+
+  @Test("notAMethodCall tolerates a message with no interface/member, never crashing")
+  func notAMethodCallToleratesMissingMetadata() {
+    let bareReply = DBusMessage(type: .methodReturn, serial: 4, replySerial: 1)
+    let description = ClipnestControlReceiveRejection.notAMethodCall(bareReply).logDescription
+    #expect(description.contains("?"))
+  }
+
+  @Test("noReplyProduced names the request's interface and member")
+  func noReplyProducedDescribesMetadataOnly() {
+    let message = call(interface: "app.clipnest.Control", member: "Ping")
+    let description = ClipnestControlReceiveRejection.noReplyProduced(message).logDescription
+    #expect(description.contains("app.clipnest.Control"))
+    #expect(description.contains("Ping"))
+  }
+}
+
 @Suite("ClipnestControlDispatcher — pure dispatch, no DBusConnection needed")
 struct AppClipnestControlServiceDispatchTests {
   @Test("TogglePicker and Activate both invoke onTogglePicker")
