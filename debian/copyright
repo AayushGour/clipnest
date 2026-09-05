@@ -16,16 +16,6 @@ Comment:
  for exact provenance, checksums, and why it is vendored rather than an apt
  build-dependency. Ships in the clipnest-ocr binary package.
 
-Files: packaging/linux/vendor/ppocr-models/*
-Copyright: TBD — not yet vendored, see packaging/linux/vendor/ppocr-models/README.md
-License: TBD
-Comment:
- PP-OCRv5 model files are not present in this source tree as of this
- packaging pass (see that README for why and what's needed). This stanza
- is a placeholder to be filled in with the real upstream copyright/license
- once the model files are sourced and vendored — do not ship
- clipnest-ocr-data with this stanza still unresolved.
-
 License: MIT
  Permission is hereby granted, free of charge, to any person obtaining a copy
  of this software and associated documentation files (the "Software"), to deal

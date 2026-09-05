@@ -1,0 +1,202 @@
+name: Release (Linux)
+
+# Publishes per-series .deb packages for the Ubuntu port, as additional
+# assets on the SAME GitHub Release release.yml (macOS) creates — not a
+# second, separate release. Triggered by `workflow_run` on release.yml's
+# completion (name: "Release") rather than the same `push: main` event
+# release.yml uses, specifically to avoid a real race: if this workflow
+# created the `v$VERSION` tag/release itself (e.g. via its own independent
+# push-triggered version-gate), release.yml's own tag-existence check could
+# see the tag already exists and skip the macOS build entirely.
+# `workflow_run` guarantees release.yml has already finished (and, if a new
+# version was due, already created the release + tag) before this runs.
+#
+# Two independent outputs, matching the two distribution channels this
+# project uses (see debian/README.source):
+#   1. Per-series .deb + .sha256 uploaded to the GitHub Release — the
+#      "raw-.deb install path" whatever script/doc uses UpdateChecker's
+#      release feed depends on; keeps the same checksum-file contract
+#      release.yml's own macOS .dmg.sha256 already established.
+#   2. A signed SOURCE upload to the Launchpad PPA via `dput`, gated on a
+#      GPG key existing in secrets — skipped (not failed) when absent, per
+#      this task's own instruction. IMPORTANT CAVEAT, documented here so it
+#      is never a silent surprise: Launchpad's build farm has no
+#      apt-installable Swift toolchain on jammy/noble as of this workflow
+#      (see debian/README.source, "Known gap #1") — a successful `dput`
+#      here means the upload was accepted, NOT that Launchpad's own build
+#      of it will succeed. That gap is tracked separately; wiring `dput`
+#      correctly now means zero further workflow changes are needed once
+#      it's resolved (an external-dependency PPA added to the target PPA's
+#      settings, or archive-Swift landing on a target series).
+
+on:
+  workflow_run:
+    workflows: ["Release"]
+    types: [completed]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # needed to upload assets to the existing release
+
+jobs:
+  check:
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      release_exists: ${{ steps.v.outputs.release_exists }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Read version + check the release actually exists
+        id: v
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="$(grep -E '^\s*MARKETING_VERSION:' ClipnestApp/project.yml \
+            | head -1 | sed -E 's/.*"([^"]+)".*/\1/')"
+          if [ -z "$VERSION" ]; then
+            echo "::error::Could not read MARKETING_VERSION from ClipnestApp/project.yml"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # Idempotent by construction: if release.yml made no new release
+          # this run (should_release=false there, e.g. a docs-only push),
+          # there's nothing new to attach Linux assets to — skip rather
+          # than inventing a release release.yml itself decided not to cut.
+          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+            echo "release_exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "release_exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    if: ${{ needs.check.outputs.release_exists == 'true' }}
+    runs-on: ubuntu-latest
+    container: swift:6.0-${{ matrix.series }}
+    strategy:
+      fail-fast: false
+      matrix:
+        series: [jammy, noble]
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+      # `secrets` can't be referenced in a step `if:` directly — hoist the
+      # presence check to job env once, matching release.yml's own
+      # HAS_SIGNING/HAS_NOTARY pattern.
+      HAS_PPA_KEY: ${{ secrets.PPA_GPG_PRIVATE_KEY != '' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build + packaging dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq \
+            debhelper \
+            devscripts \
+            pkg-config \
+            libgtk-4-dev \
+            libx11-dev \
+            libxfixes-dev \
+            libxtst-dev \
+            libsqlite3-dev
+
+      - name: Build the .debs (unsigned, binary-only — for the GitHub Release)
+        # `-d`: skip dpkg-checkbuilddeps' `swift` check. The toolchain is
+        # genuinely present (it's what this container image *is*), just
+        # not apt-registered — see debian/README.source, "Known gap #1"
+        # for the real, reproduced `dpkg-checkbuilddeps` transcript this
+        # documents.
+        run: dpkg-buildpackage -us -uc -b -d
+
+      - name: Checksum + stage the .debs for upload
+        id: stage
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for deb in ../*.deb; do
+            name="$(basename "$deb" .deb)-${{ matrix.series }}.deb"
+            cp "$deb" "dist/$name"
+            shasum -a 256 "dist/$name" | awk '{print $1, "'"$name"'"}' \
+              | sed 's/ /  /' > "dist/${name}.sha256"
+          done
+          ls -la dist
+
+      - name: Upload build artifacts (handed to the publish job on the bare runner)
+        uses: actions/upload-artifact@v4
+        with:
+          name: debs-${{ matrix.series }}
+          path: dist/*
+          if-no-files-found: error
+
+      - name: Publish to the PPA (signed source upload)
+        if: ${{ env.HAS_PPA_KEY == 'true' }}
+        env:
+          PPA_GPG_PRIVATE_KEY: ${{ secrets.PPA_GPG_PRIVATE_KEY }}
+          PPA_GPG_KEY_ID: ${{ secrets.PPA_GPG_KEY_ID }}
+          PPA_TARGET: ${{ vars.PPA_TARGET }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PPA_TARGET:-}" ]; then
+            echo "PPA_GPG_PRIVATE_KEY is set but the PPA_TARGET repository" >&2
+            echo "variable (e.g. ppa:aayushgour/clipnest) is not -- skipping" >&2
+            echo "the PPA publish step rather than guessing a target." >&2
+            exit 0
+          fi
+          apt-get install -y -qq gnupg dput
+
+          echo "$PPA_GPG_PRIVATE_KEY" | base64 -d | gpg --batch --import
+
+          # Per-series version suffix: Launchpad requires a DISTINCT version
+          # per series uploaded to the same PPA (you cannot upload the
+          # identical version string to both jammy and noble) — the
+          # standard `~<series><n>` convention, distinct from this
+          # package's own Debian revision (there is none; see
+          # debian/source/format's native-format note).
+          # --allow-lower-version: a `~<series>N` suffix sorts LOWER than
+          # the bare upstream version by Debian version-comparison rules —
+          # deliberately so (the standard PPA/backport convention, so a
+          # later official `0.9.1` upload anywhere always outranks any
+          # PPA-suffixed build of it). Without this flag `dch` refuses,
+          # reading the version decrease as a mistake. NOTE: this takes a
+          # PERL REGEX, not a shell glob — a bare `*` (verified for real:
+          # reproduced the exact failure) is an invalid regex
+          # ("Quantifier follows nothing"); `.*` is the real fix.
+          dch --distribution "${{ matrix.series }}" \
+            --newversion "${VERSION}~${{ matrix.series }}1" \
+            --force-distribution \
+            --allow-lower-version '.*' \
+            "Rebuild for ${{ matrix.series }}."
+
+          # -d: same reason as the binary build step above -- `debuild`
+          # calls `dpkg-checkbuilddeps` even for a source-only (-S) build,
+          # which still can't see the apt-unregistered `swift` toolchain
+          # (verified for real: reproduced this exact "Unmet build
+          # dependencies: swift" failure without -d).
+          debuild -S -sa -d -k"${PPA_GPG_KEY_ID}"
+          dput "${PPA_TARGET}" "../clipnest_${VERSION}~${{ matrix.series }}1_source.changes"
+
+  publish:
+    needs: [check, build]
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - name: Download all per-series artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: debs-*
+          merge-multiple: true
+
+      - name: Upload .debs + .sha256 to the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ls -la dist
+          gh release upload "v${VERSION}" dist/*.deb dist/*.sha256 --clobber

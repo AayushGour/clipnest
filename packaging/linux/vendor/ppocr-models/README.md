@@ -52,4 +52,11 @@ Whoever owns `ClipnestLinuxOCR` (or the architect) should supply:
 2. A pinned version + SHA-256 per file, recorded here (mirroring
    `packaging/linux/vendor/onnxruntime/SOURCE.md`'s pattern) once sourced.
 3. The four files above dropped into this directory, then `git add`ed — `debian/rules`
-   picks them up automatically once present; no packaging changes needed.
+   picks them up automatically once present; no other packaging changes needed EXCEPT:
+4. Add a `Files: packaging/linux/vendor/ppocr-models/*` stanza to `debian/copyright`
+   with the real upstream copyright holder + license (mirroring
+   `packaging/linux/vendor/onnxruntime/SOURCE.md`'s pattern) — deliberately left out
+   of `debian/copyright` for now rather than filled with a placeholder license
+   lintian can't recognize (`License: TBD` is not a real SPDX-ish short name and
+   was flagged by a real `lintian` run during this packaging pass:
+   `missing-license-paragraph-in-dep5-copyright`).
