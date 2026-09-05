@@ -44,7 +44,7 @@ RUN apt-get update -qq && apt-get install -y -qq \
       xvfb x11vnc novnc websockify openbox xterm \
       dbus-x11 at-spi2-core \
       libgtk-4-1 libglib2.0-bin libsqlite3-0 libx11-6 libxfixes3 libxtst6 \
-      xclip x11-utils \
+      xclip x11-utils xdotool wmctrl imagemagick \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/*.deb /tmp/
 # Install our packages; apt resolves the runtime deps dpkg-shlibdeps derived.
