@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+# clipnest-ctl — thin CLI wrapper around Clipnest, installed to
+# /usr/bin/clipnest-ctl.
+#
+# Verified against the real, landed contract (as of this packaging pass —
+# Sources/ClipnestLinuxApp/{App/LinuxAppCLI.swift,DBus/ClipnestControlNames.swift,
+# DBus/ClipnestControlService.swift}), not a guess:
+#
+# `toggle-picker`/`expand-snippet` just exec `clipnest --toggle-picker` /
+# `clipnest --expand-snippet` — LinuxAppCLI.parse() recognizes exactly these
+# two flags; SingleInstanceDecision/ClipnestControlService forward them to
+# an already-running instance over D-Bus automatically (or start one, if
+# none is running yet) — no bespoke D-Bus call needed here, and no risk of
+# this script drifting from LinuxAppCLIFlag's own constants.
+#
+# `open-settings`/`ping` have no CLI-flag equivalent (LinuxAppCLIFlag only
+# defines the two above), so those go straight to the app.clipnest.Control
+# D-Bus interface's own methods (see ClipnestControlName/ClipnestControlMember)
+# — D-Bus activation (packaging/linux/dbus/app.clipnest.Clipnest.service)
+# starts the app automatically if it isn't already running.
+#
+# Deliberately NOT org.freedesktop.Application.ActivateAction: that path
+# exists too (ClipnestControlDispatcher's `.activateAction` case), but its
+# action names are `ClipnestControlMember.expandSnippet.lowercased()` ==
+# "expandsnippet" (no hyphen) — a real, non-obvious footgun this script
+# avoids entirely by using the named app.clipnest.Control methods instead.
+set -euo pipefail
+
+readonly BUS_NAME="app.clipnest.Clipnest"
+readonly OBJECT_PATH="/app/clipnest/Clipnest"
+readonly CONTROL_IFACE="app.clipnest.Control"
+
+usage() {
+  cat <<'EOF'
+Usage: clipnest-ctl <command>
+
+Commands:
+  toggle-picker    Open/close the clipboard-history picker
+  expand-snippet   Expand the selected text as a snippet keyword
+  open-settings    Open Clipnest's Settings window
+  ping             Check that Clipnest is running and responding
+  version          Print the installed clipnest version
+  -h, --help       Show this help
+
+toggle-picker/expand-snippet run `clipnest` directly (it forwards to an
+already-running instance, or starts one). open-settings/ping call
+Clipnest's D-Bus control interface directly, which D-Bus-activates the app
+if it isn't already running (see
+/usr/share/dbus-1/services/app.clipnest.Clipnest.service).
+EOF
+}
+
+require_gdbus() {
+  if ! command -v gdbus >/dev/null 2>&1; then
+    echo "clipnest-ctl: gdbus not found (expected from libglib2.0-bin)." >&2
+    exit 1
+  fi
+}
+
+call_control_method() {
+  require_gdbus
+  gdbus call --session \
+    --dest "$BUS_NAME" \
+    --object-path "$OBJECT_PATH" \
+    --method "${CONTROL_IFACE}.$1"
+}
+
+case "${1:-}" in
+  toggle-picker)
+    exec clipnest --toggle-picker
+    ;;
+  expand-snippet)
+    exec clipnest --expand-snippet
+    ;;
+  open-settings)
+    call_control_method "OpenSettings" >/dev/null
+    ;;
+  ping)
+    call_control_method "Ping"
+    ;;
+  version)
+    exec clipnest --version
+    ;;
+  -h | --help | help | "")
+    usage
+    ;;
+  *)
+    echo "clipnest-ctl: unknown command '$1'" >&2
+    usage >&2
+    exit 1
+    ;;
+esac

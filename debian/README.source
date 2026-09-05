@@ -1,0 +1,134 @@
+Debian/Ubuntu packaging notes for clipnest (P7-F)
+==================================================
+
+Source format & versioning
+---------------------------
+`3.0 (native)` (see `debian/source/format`) — this is one monorepo, not an
+upstream-tarball-plus-Debian-delta split, so there's no `.orig.tar.gz` and no
+`get-orig-source` target. `debian/changelog`'s version tracks
+`ClipnestApp/project.yml`'s `MARKETING_VERSION` (the one existing version
+source of truth in this repo) with no `-N` Debian revision suffix, matching
+native-format convention.
+
+Per-series builds (jammy / noble / resolute)
+---------------------------------------------
+A jammy-built binary would technically run on noble, but this is packaged
+per-series anyway, on purpose:
+- `dpkg-shlibdeps` then generates correct, versioned `${shlibs:Depends}`
+  automatically for each series' actual GTK4/libadwaita/glibc versions,
+  rather than one binary needing a hand-maintained union of every series'
+  minimum versions.
+- Launchpad builds per series for free once a source upload targets it.
+- libadwaita differs sharply — verified for real: `1.1.7-0ubuntu0.22.04.1` on
+  jammy vs `1.5.0-1ubuntu2` on noble (checked via `apt-cache show` against
+  real `ubuntu:22.04`/`ubuntu:24.04` container images, not assumed). Target
+  the jammy API from `ClipnestGTK` and runtime-gate anything noble-only.
+
+Real bug found and fixed via container verification — `dh_dwz` vs Swift's
+DWARF5 debug info
+------------------------------------------------------------------------
+A full `dpkg-buildpackage -d` run inside `swift:6.0-jammy` got all the way
+through building and installing `clipnest` and (with throwaway fake model
+files staged only inside the container, never committed) `clipnest-ocr`/
+`clipnest-ocr-data`, then failed at `dh_dwz` with `dwz: ...: Unknown
+debugging section .debug_str_offsets` against `debian/clipnest/usr/bin/
+clipnest`, and separately `.debug_info section not present` against the
+vendored (pre-stripped) `libonnxruntime*.so`. jammy's `dwz` predates
+DWARF5 support; Swift 6's toolchain emits DWARF5. `dh_dwz` is a
+debug-symbol size optimization for the auto-generated `-dbgsym` package
+only — it has no effect on whether the shipped binary works — so
+`debian/rules` overrides it as a no-op rather than trying to coerce `dwz`
+into understanding a debug format it doesn't support on this series.
+
+Real bug found and fixed via container verification — `libsqlite3-dev`
+------------------------------------------------------------------------
+`Package.swift`'s own comment on the `CSQLite` systemLibrary target says
+"`link \"sqlite3\"` resolves against the SDK on macOS and libsqlite3-dev on
+Ubuntu" — but that target has no `providers:` array (unlike `CXlib`/
+`CGtk4`), so nothing surfaces this dependency automatically. A real
+`dpkg-buildpackage -d` run inside `swift:6.0-jammy` (see the Known gap #1
+paragraph below for why `-d` is needed there) reproduced the exact failure
+this causes when omitted: `Sources/CSQLite/shim.h:1:10: error: 'sqlite3.h'
+file not found`, which cascades into `could not build C module 'CSQLite'`
+for every target that transitively imports it (`ClipnestSQLite`,
+`ClipnestCore` tests, etc). Fixed by adding `libsqlite3-dev` to
+`debian/control`'s Build-Depends.
+
+Known gap #1 (real, verified, cross-scope) — Swift has no apt-installable
+toolchain on jammy/noble
+--------------------------------------------------------------------------
+`debian/control` lists `swift (>= 6.0)` as a Build-Depends because it's the
+technically correct constraint, but as of this packaging pass **no such apt
+package exists in Ubuntu's archives for 22.04/24.04** — verified by
+searching Ubuntu's real package indexes; swift.org distributes a tarball
+toolchain for those series, not an apt repo (the closest, a community
+`swiftlang.xyz` repo, was last updated in 2021 for Swift 5.4.2 and cannot be
+trusted for Swift 6). Ubuntu 26.04 (resolute) reportedly carries an
+archive-provided `swiftlang` package, unverified against a real resolute
+apt index at packaging time — recheck before relying on it.
+
+Practical effect:
+- `.github/workflows/ci.yml` and `.github/workflows/release-linux.yml` both
+  run inside the real `swift:6.0-jammy` / `swift:6.0-noble` Docker images
+  (note: **not** `swiftlang/swift:6.0-jammy` — that image repository only
+  ever published `nightly-*` tags on Docker Hub, verified directly against
+  its real tag list; `swift:*` is the correct, stable Docker Official Image).
+  Those images have the toolchain baked in, so GitHub Actions' `.deb`s (the
+  ones attached to GitHub Releases, which `scripts/install.sh`-equivalent /
+  `UpdateChecker` actually consume) build correctly today.
+- **Launchpad PPA source builds on jammy/noble cannot currently satisfy
+  `Build-Depends: swift` at all** — Launchpad's build farm has no network
+  access and only pulls from Ubuntu's archives plus any PPA explicitly
+  whitelisted as an "external dependency" in the target PPA's own settings.
+  Until archive-Swift lands on a target series (or a maintained, trusted
+  Swift apt repo is added as an external dependency — a decision for
+  whoever administers the PPA, not made here), the PPA upload for jammy/
+  noble will fail at dependency-resolution time, before a build even starts.
+  This is a real constraint to solve before `dput`-ing to the PPA for real,
+  not a packaging bug in this tree.
+
+Known gap #2 (real, verified, cross-scope) — OCR cannot yet be a soft
+Recommends at the binary level
+--------------------------------------------------------------------------
+`Sources/COnnxRuntime/module.modulemap` declares `link "onnxruntime"` — a
+HARD link (`DT_NEEDED` in the produced ELF). If `clipnest` were built with
+`-DCLIPNEST_HAS_ONNXRUNTIME` (the flag
+`Sources/ClipnestLinuxOCR/Runtime/OrtRuntimeAvailability.swift` gates real
+ONNX Runtime usage behind), the `clipnest` binary would hard-require
+`libonnxruntime.so.1` to even start the dynamic linker — and
+`dpkg-shlibdeps` would then force `clipnest-ocr` into `clipnest`'s
+**Depends**, not just its Recommends, defeating the explicit "lighter
+install via `--no-install-recommends`" requirement.
+
+Interim decision for this packaging pass: `debian/rules` builds `clipnest`
+**without** `-DCLIPNEST_HAS_ONNXRUNTIME` — matching `Package.swift`'s own
+current, deliberate, documented safe default (see
+`OrtRuntimeAvailability.swift`'s own comment: "a build without vendored
+ONNX Runtime headers... degrades gracefully"). This keeps `clipnest`
+genuinely Recommends-only and installable without any vendored binary, and
+requires zero changes to `Sources/**`/`Package.swift` (out of this task's
+scope regardless). `clipnest-ocr`/`clipnest-ocr-data` are still fully
+packaged and ready — see `packaging/linux/vendor/onnxruntime/SOURCE.md` —
+for the moment `ClipnestLinuxOCR`'s onnxruntime linkage becomes `dlopen`-
+based instead of a hard link (mirroring the exact precedent already set for
+`Glibc.ioctl` — see decision D59 in `.claude/project-context.md`), which is
+the fix this really needs; that's Sources-owned work, not packaging's to
+make. Flagged for the architect to arbitrate/assign.
+
+Known gap #3 — PP-OCRv5 model files are not vendored
+-----------------------------------------------------
+See `packaging/linux/vendor/ppocr-models/README.md`. `debian/rules` fails
+the build loudly and explains why if they're absent, rather than shipping
+an empty/wrong `clipnest-ocr-data`.
+
+`clipnest-ctl`'s D-Bus action-name contract is unverified
+-----------------------------------------------------------
+`packaging/linux/scripts/clipnest-ctl` assumes `clipnest` registers
+`org.freedesktop.Application.ActivateAction` handlers named `toggle-picker`
+and `expand-snippet` — matching the same action names
+`extension/src/core/keybindings.js`'s `Keybindings.ACTIONS` already use and
+the two keys in `app.clipnest.Clipnest.Keybindings.gschema.xml`, but
+`ClipnestGTK`/`ClipnestLinuxApp` are still placeholder targets as of this
+packaging pass (verified: both contain only a single `Placeholder.swift`),
+so this is a documented assumption for their authors to confirm, not a
+verified contract.

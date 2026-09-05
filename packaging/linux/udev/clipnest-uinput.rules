@@ -1,0 +1,23 @@
+# Installed by dh_installudev (see debian/rules) as
+# /lib/udev/rules.d/70-clipnest-uinput.rules.
+#
+# /dev/uinput is used to synthesize keystrokes for Clipnest's auto-paste
+# feature and is not group-accessible by default on a stock Ubuntu
+# install. This rule grants access via a DEDICATED `clipnest-input`
+# system group, created (empty) by clipnest.postinst — deliberately NOT
+# the built-in `input` group: membership in `input` also grants READ
+# access to every /dev/input/event* node, i.e. every physical keystroke
+# and mouse movement on the machine, making any member a full keylogging
+# vector. `clipnest-input` grants only the ability to open /dev/uinput
+# and CREATE a new virtual input device — it cannot read anything.
+#
+# No `TAG+="uaccess"`: that systemd-logind tag would hand every active
+# graphical-session user access automatically and unconditionally,
+# exactly the blanket, no-consent grant this dedicated group exists to
+# avoid. Membership in clipnest-input is only ever added by the user's
+# own explicit, admin-authenticated action (pkexec, gated by the
+# app.clipnest.grant-input polkit action — see
+# packaging/linux/polkit/app.clipnest.grant-input.policy and
+# packaging/linux/scripts/clipnest-grant-input) — never by this package's
+# own maintainer scripts, and never automatically by udev.
+KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="clipnest-input", MODE="0660"

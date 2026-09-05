@@ -1,0 +1,86 @@
+#!/usr/bin/make -f
+# debian/rules for clipnest / clipnest-ocr / clipnest-ocr-data.
+#
+# See debian/README.source for the two real, verified constraints that
+# shape this file:
+#   1. No apt-installable Swift toolchain exists on jammy/noble — this
+#      Build-Depends on `swift (>= 6.0)` for correctness, but a real build
+#      needs a toolchain pre-installed in the build environment (the
+#      swift:6.0-jammy/6.0-noble Docker images .github/workflows/ci.yml and
+#      release-linux.yml use, NOT a Launchpad PPA chroot as-is today).
+#   2. `clipnest` is built WITHOUT -DCLIPNEST_HAS_ONNXRUNTIME for now — see
+#      the "Known gap" section of debian/README.source for exactly why
+#      (short version: Sources/COnnxRuntime hard-links libonnxruntime.so.1,
+#      which would force clipnest-ocr from a Recommends into a de-facto
+#      hard Depends the moment OCR is actually compiled in).
+
+MODEL_DIR := packaging/linux/vendor/ppocr-models
+REQUIRED_MODELS := det.onnx rec.onnx cls.onnx dict.txt
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	# Regenerate both GNOME Shell extension variants from source rather than
+	# trusting whatever happens to be sitting in extension/dist/ — build.sh
+	# is idempotent (rm -rf dist first) and needs no compiler, so this is
+	# cheap correctness insurance, not a real build step.
+	extension/build.sh
+	# `-Xswiftc -static-stdlib`: the app has no URLSession (privacy policy —
+	# see coding-standards.md), so FoundationNetworking is never linked,
+	# which is what usually makes -static-stdlib painful on Linux (see this
+	# task's own handoff notes). Deliberately NOT the Static Linux SDK
+	# (musl) — that toolchain cannot dynamically link the glibc GTK4/GIO/
+	# gdk-pixbuf stack GTK needs to dlopen (GIO modules, pixbuf loaders,
+	# GDK backends).
+	swift build -c release -Xswiftc -static-stdlib
+
+override_dh_auto_test:
+	# `swift test` (771 tests as of this packaging pass, per this task's
+	# handoff) already runs per-series in .github/workflows/ci.yml on every
+	# PR. Re-running the full suite again inside every `dpkg-buildpackage`
+	# invocation (including every Launchpad PPA build, per architecture)
+	# would multiply CI minutes for zero new signal on an already-gated
+	# commit — skip here, matching common practice for compiled-language
+	# debian/rules (build and test stay separate concerns).
+
+override_dh_auto_install:
+	install -Dm755 .build/release/clipnest debian/clipnest/usr/bin/clipnest
+	install -Dm755 packaging/linux/scripts/clipnest-ctl debian/clipnest/usr/bin/clipnest-ctl
+	install -Dm755 packaging/linux/scripts/clipnest-grant-input debian/clipnest/usr/libexec/clipnest/clipnest-grant-input
+	install -Dm644 assets/clipnest-icons/clipnest-app-icon.svg debian/clipnest/usr/share/icons/hicolor/scalable/apps/app.clipnest.Clipnest.svg
+	# clipnest-ocr-data cannot be meaningfully built without the real
+	# PP-OCRv5 model files — see packaging/linux/vendor/ppocr-models/README.md
+	# for exactly why this packaging task did not fetch/fabricate them.
+	# Fail loudly and specifically here rather than let dh_install's
+	# generic "not found" error (or, worse, a silently empty/broken
+	# clipnest-ocr-data) surface instead.
+	for f in $(REQUIRED_MODELS); do \
+		if [ ! -f "$(MODEL_DIR)/$$f" ]; then \
+			echo "ERROR: $(MODEL_DIR)/$$f is missing." >&2; \
+			echo "clipnest-ocr-data cannot be built without the real PP-OCRv5" >&2; \
+			echo "model files verified against ClipnestLinuxOCR's actual tensor" >&2; \
+			echo "conventions -- see $(MODEL_DIR)/README.md before adding any." >&2; \
+			exit 1; \
+		fi; \
+	done
+	install -Dm644 $(MODEL_DIR)/det.onnx debian/clipnest-ocr-data/usr/share/clipnest-ocr/models/det.onnx
+	install -Dm644 $(MODEL_DIR)/rec.onnx debian/clipnest-ocr-data/usr/share/clipnest-ocr/models/rec.onnx
+	install -Dm644 $(MODEL_DIR)/cls.onnx debian/clipnest-ocr-data/usr/share/clipnest-ocr/models/cls.onnx
+	install -Dm644 $(MODEL_DIR)/dict.txt debian/clipnest-ocr-data/usr/share/clipnest-ocr/models/dict.txt
+	dh_install
+
+override_dh_installudev:
+	dh_installudev --priority=70 --name=clipnest-uinput
+
+override_dh_dwz:
+	# Real, reproduced failure (see debian/README.source): jammy's `dwz`
+	# cannot parse the DWARF5 debug info Swift 6's toolchain emits --
+	# "Unknown debugging section .debug_str_offsets" on debian/clipnest/
+	# usr/bin/clipnest -- and separately has nothing to do on the vendored,
+	# pre-stripped libonnxruntime*.so (no .debug_info section at all).
+	# dh_dwz is a debug-symbol SIZE optimization for the auto-generated
+	# -dbgsym package, not required for a working binary (dh_strip/
+	# dh_fixperms still run normally) -- skipping it is the standard,
+	# no-functional-effect fix for this class of "compiler emits a debug
+	# format dwz doesn't understand yet" gap.

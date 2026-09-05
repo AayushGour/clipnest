@@ -1,0 +1,19 @@
+# Basename MUST equal the D-Bus bus name (app.clipnest.Clipnest) — the
+# freedesktop Application Activation spec requires the two to match
+# exactly for DBusActivatable=true to resolve. See
+# packaging/linux/dbus/app.clipnest.Clipnest.service (Name=app.clipnest.Clipnest).
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Clipnest
+GenericName=Clipboard Manager
+Comment=Clipboard history, snippets, and on-device OCR
+Exec=clipnest %U
+Icon=app.clipnest.Clipnest
+Terminal=false
+NoDisplay=false
+DBusActivatable=true
+StartupNotify=false
+Categories=Utility;GTK;
+Keywords=clipboard;paste;history;snippet;clip;
+X-GNOME-UsesNotifications=false

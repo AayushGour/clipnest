@@ -1,0 +1,31 @@
+.TH CLIPNEST-CTL 1 "2026" "clipnest" "User Commands"
+.SH NAME
+clipnest-ctl \- control a running Clipnest instance over D-Bus
+.SH SYNOPSIS
+.B clipnest-ctl
+\fICOMMAND\fR
+.SH DESCRIPTION
+.B clipnest-ctl
+is a thin wrapper around Clipnest's D-Bus service
+.RI ( app.clipnest.Clipnest ,
+activated automatically if not already running \- see
+.IR /usr/share/dbus-1/services/app.clipnest.Clipnest.service ).
+It never talks to the network and never spawns Clipnest itself; D-Bus
+activation handles that.
+.SH COMMANDS
+.TP
+.B toggle-picker
+Open or close the clipboard-history picker.
+.TP
+.B expand-snippet
+Expand the current text selection as a snippet keyword.
+.TP
+.B version
+Print the installed
+.B clipnest
+version.
+.TP
+.B \-h, \-\-help
+Show usage.
+.SH SEE ALSO
+.BR clipnest (1)

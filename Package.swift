@@ -98,14 +98,22 @@ let package = Package(
     .target(
       name: "ClipnestLinuxOCR", dependencies: ["ClipnestCore", "COnnxRuntime"]),
     .target(name: "ClipnestGTK", dependencies: ["ClipnestViewModels", "CGtk4"]),
-    .executableTarget(
-      name: "ClipnestLinuxApp",
+    // The app is split into a LIBRARY plus a thin executable because an
+    // executable target's module cannot be `@testable import`ed — SwiftPM
+    // reports "is the main module of an executable, and cannot be imported by
+    // tests". All orchestration lives in the Kit; main.swift is an 8-line shim.
+    .target(
+      name: "ClipnestLinuxAppKit",
       dependencies: [
         "ClipnestCore", "ClipnestSQLite", "ClipnestViewModels",
-        "ClipnestPlatformLinux", "ClipnestGTK", "ClipnestLinuxOCR",
+        "ClipnestPlatformLinux", "ClipnestGTK", "ClipnestLinuxOCR", "CXlib",
       ]),
+    .executableTarget(name: "ClipnestLinuxApp", dependencies: ["ClipnestLinuxAppKit"]),
     .testTarget(
       name: "ClipnestPlatformLinuxTests",
-      dependencies: ["ClipnestPlatformLinux", "ClipnestLinuxOCR", "ClipnestCore"]),
+      dependencies: [
+        "ClipnestPlatformLinux", "ClipnestLinuxOCR", "ClipnestGTK",
+        "ClipnestLinuxAppKit", "ClipnestCore",
+      ]),
   ]
 #endif

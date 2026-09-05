@@ -1,0 +1,8 @@
+clipnest (0.9.1) jammy; urgency=medium
+
+  * Initial Debian packaging for the Ubuntu port (P7-F): clipnest,
+    clipnest-ocr, and clipnest-ocr-data. See debian/README.source for the
+    per-series build process (.github/workflows/release-linux.yml
+    retargets this entry's distribution field per series before building).
+
+ -- Aayush Gour <ag14906@gmail.com>  Fri, 04 Sep 2026 00:00:00 +0000

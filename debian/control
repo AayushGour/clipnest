@@ -1,0 +1,72 @@
+Source: clipnest
+Section: utils
+Priority: optional
+Maintainer: Aayush Gour <ag14906@gmail.com>
+Build-Depends: debhelper-compat (= 13),
+               pkg-config,
+               swift (>= 6.0),
+               libgtk-4-dev,
+               libx11-dev,
+               libxfixes-dev,
+               libxtst-dev,
+               libsqlite3-dev
+Standards-Version: 4.6.2
+Rules-Requires-Root: no
+Homepage: https://github.com/AayushGour/clipnest
+Vcs-Git: https://github.com/AayushGour/clipnest.git
+Vcs-Browser: https://github.com/AayushGour/clipnest
+
+Package: clipnest
+Architecture: any
+Depends: ${shlibs:Depends},
+         ${misc:Depends},
+         libglib2.0-bin,
+         desktop-file-utils,
+         gtk-update-icon-cache,
+         pkexec,
+         polkitd,
+         udev,
+         kmod
+Recommends: clipnest-ocr
+Description: clipboard history, snippets, and on-device OCR
+ Clipnest watches the clipboard, keeps a searchable history, lets you save
+ reusable text snippets, and expand them by keyword anywhere. On a Wayland
+ session an optional GNOME Shell extension (installed per-user by the app
+ itself, not by this package — see /usr/share/clipnest/gnome-shell-extension/)
+ supplies capabilities a native Wayland client cannot have on its own:
+ clipboard access while unfocused, a picker positioned at the pointer, and
+ app-aware privacy exclusions.
+ .
+ 100% local: there is no account, no sync, and no analytics. The only
+ network traffic this package ever makes is an optional, once-a-day check
+ against GitHub's public Releases API for a newer version, toggled off in
+ Settings.
+ .
+ Install clipnest-ocr as well (the default — this package only
+ Recommends it, so `apt install --no-install-recommends clipnest` skips
+ it for a lighter install) to recognize text in copied images, entirely
+ on-device.
+
+Package: clipnest-ocr
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, clipnest-ocr-data (= ${source:Version})
+Description: on-device OCR runtime for Clipnest
+ Vendored ONNX Runtime (CPU inference only, MIT-licensed — see
+ /usr/share/doc/clipnest-ocr/copyright) that Clipnest uses to recognize
+ text in copied images entirely on-device. Nothing in this package ever
+ makes a network request or downloads a model at runtime.
+ .
+ Split out from the clipnest package (which only Recommends this one) so
+ that installing without OCR support needs no vendored native library at
+ all.
+
+Package: clipnest-ocr-data
+Architecture: all
+Depends: ${misc:Depends}
+Description: PP-OCRv5 model data for Clipnest's on-device OCR
+ The detection, recognition, and text-line orientation ONNX models (and
+ character dictionary) clipnest-ocr's vendored ONNX Runtime loads to
+ recognize text in copied images. Architecture-independent data only — no
+ executable code. Nothing here is ever fetched or updated over the network
+ by this package; models are pinned to the version they were built and
+ tested against.

@@ -1,0 +1,65 @@
+#!/bin/sh
+# postinst for clipnest.
+#
+# Every step here is idempotent and best-effort (guarded with `command -v`
+# and `|| true`) — this must never fail an install on a minimal/non-GNOME
+# system (containers, headless servers, other desktop environments), per
+# this package's own packaging brief.
+set -e
+
+case "$1" in
+  configure)
+    # Dedicated system group for /dev/uinput access — see
+    # packaging/linux/udev/clipnest-uinput.rules. Created here, but NEVER
+    # populated here: adding a user is an explicit, admin-authenticated
+    # action the user triggers from Clipnest's own Settings (pkexec, gated
+    # by the app.clipnest.grant-input polkit action — see
+    # packaging/linux/scripts/clipnest-grant-input), never automatic, and
+    # never done by this package.
+    if ! getent group clipnest-input >/dev/null 2>&1; then
+      addgroup --system clipnest-input
+    fi
+
+    # Compile GSettings schemas so app.clipnest.Clipnest(.Keybindings)
+    # are usable immediately, without waiting for the libglib2.0-0
+    # dpkg trigger (which still fires independently — this is a
+    # belt-and-suspenders immediate refresh, harmless to run twice).
+    if command -v glib-compile-schemas >/dev/null 2>&1 && [ -d /usr/share/glib-2.0/schemas ]; then
+      glib-compile-schemas /usr/share/glib-2.0/schemas >/dev/null 2>&1 || true
+    fi
+
+    if command -v update-desktop-database >/dev/null 2>&1 && [ -d /usr/share/applications ]; then
+      update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || true
+    fi
+
+    if command -v gtk-update-icon-cache >/dev/null 2>&1 && [ -d /usr/share/icons/hicolor ]; then
+      gtk-update-icon-cache -q -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
+    fi
+
+    # Re-read udev rules so 70-clipnest-uinput.rules takes effect without
+    # a reboot, and load uinput — it is a loadable kernel module not
+    # auto-loaded on a stock desktop kernel, so without this the very
+    # first attempt to open /dev/uinput would fail even once a user has
+    # been granted clipnest-input membership. Both are best-effort:
+    # containers, minimal chroots, and kernels with uinput built statically
+    # (or not at all) must not fail the install over this.
+    if command -v udevadm >/dev/null 2>&1; then
+      udevadm control --reload-rules >/dev/null 2>&1 || true
+      udevadm trigger --subsystem-match=misc >/dev/null 2>&1 || true
+    fi
+    if command -v modprobe >/dev/null 2>&1; then
+      modprobe uinput >/dev/null 2>&1 || true
+    fi
+    ;;
+
+  abort-upgrade | abort-remove | abort-deconfigure) ;;
+
+  *)
+    echo "postinst called with unknown argument \`$1'" >&2
+    exit 1
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

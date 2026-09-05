@@ -1,0 +1,102 @@
+.TH CLIPNEST 1 "2026" "clipnest" "User Commands"
+.SH NAME
+clipnest \- clipboard history, snippets, and on-device OCR
+.SH SYNOPSIS
+.B clipnest
+[\fIOPTIONS\fR]
+.br
+.B clipnest-ctl
+\fICOMMAND\fR
+.SH DESCRIPTION
+Clipnest watches the clipboard, keeps a searchable history, lets you save
+reusable text snippets, and (with the optional
+.B clipnest-ocr
+package installed) recognizes text in copied images entirely on-device \-
+no network access is ever used for this or anything else Clipnest does.
+.PP
+Clipnest is normally started automatically over D-Bus activation (see
+.I /usr/share/dbus-1/services/app.clipnest.Clipnest.service
+and
+.IR /usr/share/applications/app.clipnest.Clipnest.desktop )
+the first time something calls it \- e.g. its own autostart entry, or a
+global shortcut. Running
+.B clipnest
+directly is only needed for debugging.
+.SH OPTIONS
+.TP
+.B \-\-gapplication-service
+Run as the background D-Bus service instance rather than opening a window
+immediately. This is how autostart and D-Bus activation both invoke it.
+.TP
+.B \-\-version
+Print the installed version and exit.
+.SH CLIPNEST-CTL
+.B clipnest-ctl
+is a thin command-line wrapper around the running instance's D-Bus
+interface, for scripting global actions without a keyboard shortcut:
+.TP
+.B clipnest-ctl toggle-picker
+Open or close the clipboard-history picker.
+.TP
+.B clipnest-ctl expand-snippet
+Expand the current selection as a snippet keyword.
+.SH FILES
+.TP
+.I ~/.config/clipnest/settings.json
+Per-user settings (capture on/off, history retention, excluded apps, OCR
+toggle/quality, update-check preference). Plain JSON, XDG Base Directory
+Specification location (falls back to
+.I ~/.config
+if
+.B $XDG_CONFIG_HOME
+is unset).
+.TP
+.I ~/.local/share/clipnest/
+Per-user clipboard history database and blob storage (large payloads \-
+images, rich text \- content-addressed by hash).
+.TP
+.I ~/.config/autostart/clipnest.desktop
+Present only if you have enabled "Launch at login" in Clipnest's own
+Settings. Clipnest manages this file itself; it is not installed by the
+.B clipnest
+package.
+.SH UNINSTALLING
+Removing the
+.B clipnest
+package (e.g.
+.IR "apt remove clipnest" )
+does not delete your clipboard history or settings \- dpkg has no
+supported mechanism to reach into a per-user home directory during
+package removal, and a system package purge must not destroy personal
+data that never belonged to the package in the first place. Purging the
+package (\fIapt purge clipnest\fR) removes the
+.B clipnest-input
+system group (see
+.BR clipnest-grant-input (8))
+and recompiles system caches, but still leaves your data in place.
+.PP
+To remove your data as well, once you are sure you want to, run for each
+user who has used Clipnest:
+.PP
+.RS
+.nf
+rm -rf ~/.config/clipnest ~/.local/share/clipnest
+.fi
+.RE
+.PP
+If you also ran the auto-paste opt-in (see
+.BR clipnest-grant-input (8)),
+you may want to remove yourself from the
+.B clipnest-input
+group as well:
+.PP
+.RS
+.nf
+sudo gpasswd -d "$USER" clipnest-input
+.fi
+.RE
+.SH SEE ALSO
+.BR clipnest-grant-input (8),
+.BR clipnest-ctl (1)
+.SH AUTHOR
+Aayush Gour

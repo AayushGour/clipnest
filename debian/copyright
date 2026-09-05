@@ -1,0 +1,46 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: clipnest
+Upstream-Contact: Aayush Gour <ag14906@gmail.com>
+Source: https://github.com/AayushGour/clipnest
+
+Files: *
+Copyright: 2026 Aayush Gour
+License: MIT
+
+Files: packaging/linux/vendor/onnxruntime/*
+Copyright: Microsoft Corporation
+License: MIT
+Comment:
+ Vendored ONNX Runtime (CPU) shared library + headers, used unmodified from
+ upstream release v1.28.1 — see packaging/linux/vendor/onnxruntime/SOURCE.md
+ for exact provenance, checksums, and why it is vendored rather than an apt
+ build-dependency. Ships in the clipnest-ocr binary package.
+
+Files: packaging/linux/vendor/ppocr-models/*
+Copyright: TBD — not yet vendored, see packaging/linux/vendor/ppocr-models/README.md
+License: TBD
+Comment:
+ PP-OCRv5 model files are not present in this source tree as of this
+ packaging pass (see that README for why and what's needed). This stanza
+ is a placeholder to be filled in with the real upstream copyright/license
+ once the model files are sourced and vendored — do not ship
+ clipnest-ocr-data with this stanza still unresolved.
+
+License: MIT
+ Permission is hereby granted, free of charge, to any person obtaining a copy
+ of this software and associated documentation files (the "Software"), to deal
+ in the Software without restriction, including without limitation the rights
+ to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ copies of the Software, and to permit persons to whom the Software is
+ furnished to do so, subject to the following conditions:
+ .
+ The above copyright notice and this permission notice shall be included in
+ all copies or substantial portions of the Software.
+ .
+ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+ THE SOFTWARE.

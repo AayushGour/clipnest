@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  app.clipnest.Clipnest — the root GSettings schema for the application ID
+  used throughout the Linux port (D-Bus service/bus name, desktop file,
+  polkit action namespace, GTK application ID — see
+  packaging/linux/dbus/app.clipnest.Clipnest.service,
+  packaging/linux/desktop/app.clipnest.Clipnest.desktop).
+
+  Deliberately ships with NO keys of its own right now. SettingsStore's
+  actual production backend on Linux is a JSON file, not GSettings — see
+  Sources/ClipnestViewModels/Platform/JSONFileKeyValueStore.swift's own doc
+  comment ("UserDefaults... has no meaningful on-disk persistence guarantee
+  to build a real settings feature on" -> a real JSON file was chosen
+  instead, deliberately not GSettings either). Packaging inventing keys
+  here that no Swift code reads would be a dead, drifting contract — the
+  one thing this schema needs to exist for today is the <child> declaration
+  below, which is what makes Keybindings' path
+  ("/app/clipnest/Clipnest/keybindings/") a real, addressable child of this
+  root path, the standard GNOME convention (mirrors e.g.
+  org.gnome.desktop.wm.preferences declaring org.gnome.desktop.wm.keybindings
+  as its "keybindings" child).
+
+  If/when the GTK Settings UI (Sources/ClipnestGTK, in progress in parallel
+  with this packaging task) adopts GSettings for general preferences
+  instead of/alongside the JSON store, add keys here then — matching the
+  actual reader, not a guess made ahead of it.
+-->
+<schemalist gettext-domain="clipnest">
+  <schema id="app.clipnest.Clipnest" path="/app/clipnest/Clipnest/">
+    <child name="keybindings" schema="app.clipnest.Clipnest.Keybindings"/>
+  </schema>
+</schemalist>
