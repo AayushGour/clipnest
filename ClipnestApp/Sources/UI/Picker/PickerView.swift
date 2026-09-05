@@ -82,6 +82,7 @@
 // never touches AppKit/`NSPanel` directly.
 
 import ClipnestCore
+import ClipnestViewModels
 import SwiftUI
 
 struct PickerView: View {

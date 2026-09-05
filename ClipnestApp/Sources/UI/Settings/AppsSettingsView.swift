@@ -9,6 +9,7 @@
 
 import AppKit
 import ClipnestCore
+import ClipnestViewModels
 import SwiftUI
 
 struct AppsSettingsView: View {

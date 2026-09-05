@@ -69,6 +69,7 @@
 
 import AppKit
 import ClipnestCore
+import ClipnestViewModels
 import SwiftUI
 import UniformTypeIdentifiers
 

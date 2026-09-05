@@ -6,6 +6,7 @@
 // dependency on `ClipnestCore` or picker state.
 
 import AppKit
+import ClipnestViewModels
 import SwiftUI
 
 /// Non-activating floating panel that hosts Clipnest's picker UI.
@@ -241,7 +242,10 @@ public final class PickerPanel: NSPanel {
 
   private func clampedOrigin(_ origin: NSPoint, in bounds: NSRect) -> NSPoint {
     // Delegates to the shared helper — see `WindowPlacement`'s doc comment
-    // for why this formula lives in exactly one place.
-    WindowPlacement.clampedOrigin(origin, size: frame.size, in: bounds)
+    // for why this formula lives in exactly one place. Fully qualified
+    // (P5, Phase 3 Linux port): this SDK's `SwiftUI` also declares a public
+    // `WindowPlacement` struct, so the bare name is ambiguous once both
+    // `ClipnestViewModels` and `SwiftUI` are imported.
+    ClipnestViewModels.WindowPlacement.clampedOrigin(origin, size: frame.size, in: bounds)
   }
 }

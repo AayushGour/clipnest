@@ -49,7 +49,7 @@ extension PickerViewModel {
   /// after `Self.previewShowDelay`; leaving re-resolves after
   /// `Self.previewCloseGrace` (long enough to cross the gap onto the popover
   /// without it closing).
-  func hoverItem(_ id: ClipItem.ID?) {
+  public func hoverItem(_ id: ClipItem.ID?) {
     hoveredItemID = id
     scheduleResolve(delay: id == nil ? Self.previewCloseGrace : Self.previewShowDelay)
   }
@@ -58,7 +58,7 @@ extension PickerViewModel {
   /// While the pointer is over the popover it stays open (and scrollable);
   /// leaving re-resolves after the grace delay so the pointer can move back
   /// onto a row without the popover closing underfoot.
-  func previewHoverChanged(_ hovering: Bool) {
+  public func previewHoverChanged(_ hovering: Bool) {
     isHoveringPreview = hovering
     scheduleResolve(delay: hovering ? Self.previewShowDelay : Self.previewCloseGrace)
   }

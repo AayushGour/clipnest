@@ -28,7 +28,7 @@ import Testing
 // The `ClipnestApp` target's actual Swift module name is `Clipnest` (see
 // `PRODUCT_NAME` in `project.yml`) — see `ItemKind+SFSymbolTests.swift`'s
 // top doc comment for the full explanation.
-@testable import Clipnest
+@testable import ClipnestViewModels
 
 // MARK: - HighlightedItemCapabilities(item:) — the per-kind/OCR-state truth
 // table T-SET4's audit established (see `ShortcutHints.swift`'s top doc

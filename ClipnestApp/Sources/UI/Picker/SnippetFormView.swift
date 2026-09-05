@@ -22,24 +22,19 @@
 // item's content ("Save as Snippet"); the user fills in the Tag.
 
 import ClipnestCore
+import ClipnestViewModels
 import SwiftUI
 
-/// Which mode `SnippetFormView` is presenting: a fresh, empty form
-/// (`.create`), a fresh form with `Body` pre-filled from a `ClipItem`'s
-/// content ("Save as Snippet", T23 fix round item 2), or an existing
-/// snippet's fields pre-filled for editing (`.edit`).
-enum SnippetFormMode {
-  case create
-  case createFromClip(String)
-  case edit(Snippet)
-
-  var isNew: Bool {
-    switch self {
-    case .create, .createFromClip: return true
-    case .edit: return false
-    }
-  }
-}
+// P5 (Phase 3, Linux port): `SnippetFormMode` — "which mode `SnippetFormView`
+// is presenting: a fresh, empty form (`.create`), a fresh form with `Body`
+// pre-filled from a `ClipItem`'s content ('Save as Snippet', T23 fix round
+// item 2), or an existing snippet's fields pre-filled for editing (`.edit`)"
+// — moved to `ClipnestViewModels/UI/Picker/SnippetFormMode.swift`:
+// `PickerViewModel.presentSnippetEditor`/`presentCreateSnippetForm()`/
+// `presentEditSnippetForm(_:)`/`presentSaveAsSnippetForm(from:)` are hard
+// compile dependencies of the now cross-platform `PickerViewModel`, while
+// this `View` stays macOS/SwiftUI-only. Pure code motion; no behavior
+// change.
 
 struct SnippetFormView: View {
   let mode: SnippetFormMode

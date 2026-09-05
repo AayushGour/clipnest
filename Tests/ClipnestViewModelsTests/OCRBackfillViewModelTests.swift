@@ -17,7 +17,7 @@ import ClipnestCore
 import Foundation
 import Testing
 
-@testable import Clipnest
+@testable import ClipnestViewModels
 
 @Suite("OCRBackfillViewModel")
 @MainActor

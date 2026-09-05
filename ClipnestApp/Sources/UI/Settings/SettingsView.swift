@@ -6,6 +6,7 @@
 // lives in the injected SettingsStore.
 
 import ClipnestCore
+import ClipnestViewModels
 import SwiftUI
 
 struct SettingsView: View {

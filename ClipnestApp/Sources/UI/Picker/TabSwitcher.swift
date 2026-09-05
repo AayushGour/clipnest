@@ -1,33 +1,20 @@
 // TabSwitcher.swift
 //
-// Plan task T23: the picker's tab model (`PickerTab`) and the segmented
-// control that switches between them — History (unchanged from T11),
-// Pinned (pinned items only, same `pinnedAt`-ascending order as History's
-// pinned group), and Snippets (user-authored text snippets, T22/T23). The
-// "+  New Snippet" trigger lives in `PickerView.swift` (only relevant on
-// the Snippets tab), not here — this file is purely the tab switcher itself,
-// per its own name.
+// Plan task T23: the segmented control that switches between the picker's
+// tabs — History (unchanged from T11), Pinned (pinned items only, same
+// `pinnedAt`-ascending order as History's pinned group), and Snippets
+// (user-authored text snippets, T22/T23). The "+  New Snippet" trigger lives
+// in `PickerView.swift` (only relevant on the Snippets tab), not here — this
+// file is purely the tab switcher itself, per its own name.
+//
+// P5 (Phase 3, Linux port): the tab model itself, `PickerTab`, moved to
+// `ClipnestViewModels/UI/Picker/PickerTab.swift` — `PickerViewModel.activeTab`
+// needs it and `PickerViewModel` is now shared cross-platform, while this
+// `View` stays macOS/SwiftUI-only. Pure code motion of the enum; this file
+// just imports it now instead of declaring it locally.
 
+import ClipnestViewModels
 import SwiftUI
-
-/// The picker's three tabs. `Int`-backed so `⌘1`/`⌘2`/`⌘3` (wired in
-/// `PickerView`'s key handler) can map directly to `rawValue + 1` instead
-/// of a separate lookup table.
-enum PickerTab: Int, CaseIterable, Identifiable {
-  case history
-  case pinned
-  case snippets
-
-  var id: Int { rawValue }
-
-  var title: String {
-    switch self {
-    case .history: return "History"
-    case .pinned: return "Pinned"
-    case .snippets: return "Snippets"
-    }
-  }
-}
 
 /// A minimal segmented control for switching `PickerTab`s by click.
 /// `PickerView` wires `⌘1`/`⌘2`/`⌘3` to the same `selection` binding via

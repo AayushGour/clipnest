@@ -32,7 +32,7 @@
 import Foundation
 
 @MainActor
-final class UpdateChecker {
+public final class UpdateChecker {
   /// How often to re-check, per the approved design's literal "once every
   /// 24 hours" ask. No adaptive backoff/retry on failure — kept simple, see
   /// `checkNow()`'s doc comment.
@@ -82,8 +82,8 @@ final class UpdateChecker {
     static let lastCheckedAt = "updateChecker.lastCheckedAt"
   }
 
-  private(set) var isUpdateAvailable: Bool = false
-  private(set) var latestVersion: String?
+  public private(set) var isUpdateAvailable: Bool = false
+  public private(set) var latestVersion: String?
 
   /// Fired every time a real `checkNow()` completes successfully. Set by
   /// the composition root (`AppEnvironment`) to push `isUpdateAvailable`/
@@ -92,7 +92,7 @@ final class UpdateChecker {
   /// `updatePreview`/`requestAppUpdate` (not Combine, not `@Observable`).
   /// Defaults to a no-op so this type stays usable without a listener (e.g.
   /// in tests).
-  var onStateChanged: (Bool, String?) -> Void = { _, _ in }
+  public var onStateChanged: (Bool, String?) -> Void = { _, _ in }
 
   private let defaults: UserDefaults
 
@@ -123,7 +123,7 @@ final class UpdateChecker {
     set { defaults.set(newValue, forKey: Key.lastCheckedAt) }
   }
 
-  init(defaults: UserDefaults = .standard) {
+  public init(defaults: UserDefaults = .standard) {
     self.defaults = defaults
   }
 
@@ -136,14 +136,14 @@ final class UpdateChecker {
   /// of the call. Call exactly once, post-construction, from
   /// `AppEnvironment` (mirrors `ClipboardMonitor.start()`'s "no background
   /// work from `init`" rule — see this file's top doc comment).
-  func start(settings: SettingsStore) {
+  public func start(settings: SettingsStore) {
     guard settings.automaticallyCheckForUpdates else { return }
     isEnabled = true
     scheduleTimer()
   }
 
   /// Stops the background check. Safe to call even if not started.
-  func stop() {
+  public func stop() {
     isEnabled = false
     timer?.invalidate()
     timer = nil
@@ -153,7 +153,7 @@ final class UpdateChecker {
   /// "Automatically check for updates" live — starts or stops the timer
   /// immediately, rather than waiting up to 24h for the next scheduled tick
   /// to notice a disabled setting.
-  func settingChanged(enabled: Bool) {
+  public func settingChanged(enabled: Bool) {
     isEnabled = enabled
     if enabled {
       scheduleTimer()
@@ -214,9 +214,23 @@ final class UpdateChecker {
     }
   }
 
+  /// Set by the composition root (`AppEnvironment`) to `AppUpdater
+  /// .currentVersion`. `UpdateChecker` now lives in `ClipnestViewModels`
+  /// (shared cross-platform, P5) and must not reference `AppUpdater`
+  /// directly — an App-layer, macOS-only type (shells out to Terminal via
+  /// `NSWorkspace` to self-update) that would invert the module dependency
+  /// (`ClipnestApp` depends on `ClipnestViewModels`, never the reverse).
+  /// Same plain-closure-injection pattern already used for `onStateChanged`/
+  /// `PickerViewModel.dismiss`/etc. Defaults to `"?"` — the same
+  /// "no real version known" fallback `AppUpdater.currentVersion` itself
+  /// falls back to — so this type stays usable without the composition root
+  /// (e.g. in tests; none of `UpdateCheckerTests`' 16 cases call
+  /// `checkNow()` — see that file's own top doc comment for why).
+  public var installedVersion: @Sendable () -> String = { "?" }
+
   /// Checks GitHub once, right now. Spawns `/usr/bin/curl` (never
   /// `URLSession`) against `releasesAPIURL`, parses `tag_name` out of the
-  /// JSON reply, and compares it to `AppUpdater.currentVersion`.
+  /// JSON reply, and compares it to `installedVersion()`.
   ///
   /// On success: updates `isUpdateAvailable`/`latestVersion` and fires
   /// `onStateChanged`. On ANY failure — curl missing, offline, non-zero
@@ -225,13 +239,13 @@ final class UpdateChecker {
   /// silent-fallback precedent. `lastCheckedAt` is updated in BOTH cases
   /// (the `defer` below), so a persistently-offline machine still only
   /// polls once per 24h instead of hammering on every timer tick.
-  func checkNow() async {
+  public func checkNow() async {
     defer { lastCheckedAt = Date() }
     guard let data = await Self.fetchLatestReleaseJSON(),
       let tag = Self.parseTagName(fromReleaseJSON: data)
     else { return }
 
-    let available = Self.isUpdateAvailable(installed: AppUpdater.currentVersion, latestTag: tag)
+    let available = Self.isUpdateAvailable(installed: installedVersion(), latestTag: tag)
     let normalized = Self.normalizedVersion(fromTag: tag)
     isUpdateAvailable = available
     latestVersion = normalized
@@ -245,14 +259,14 @@ final class UpdateChecker {
   /// Deliberately no semver comparison/library: that script is the single
   /// source of truth for "what counts as up to date," and string equality
   /// after stripping a leading `v` is exactly what it already does.
-  nonisolated static func isUpdateAvailable(installed: String, latestTag: String) -> Bool {
+  public nonisolated static func isUpdateAvailable(installed: String, latestTag: String) -> Bool {
     installed != normalizedVersion(fromTag: latestTag)
   }
 
   /// Strips a leading `v` from a GitHub tag (`"v1.2.3"` -> `"1.2.3"`),
   /// mirroring `scripts/update.sh`'s `LATEST="${LATEST#v}"`. A tag with no
   /// `v` prefix passes through unchanged.
-  nonisolated static func normalizedVersion(fromTag tag: String) -> String {
+  public nonisolated static func normalizedVersion(fromTag tag: String) -> String {
     tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
   }
 
@@ -262,7 +276,7 @@ final class UpdateChecker {
   /// no choice; this is Swift and does). Returns `nil` on any malformed or
   /// unexpected shape rather than throwing, so `checkNow()` can treat it
   /// exactly like every other failure mode.
-  nonisolated static func parseTagName(fromReleaseJSON data: Data) -> String? {
+  public nonisolated static func parseTagName(fromReleaseJSON data: Data) -> String? {
     guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
       let tag = object["tag_name"] as? String
     else { return nil }
@@ -276,7 +290,7 @@ final class UpdateChecker {
   /// without actually spawning a process or touching the network. `-fsSL`
   /// is unchanged from the original invocation (fail on HTTP errors,
   /// silent, show errors, follow redirects).
-  nonisolated static func curlArguments(for urlString: String) -> [String] {
+  public nonisolated static func curlArguments(for urlString: String) -> [String] {
     [
       "--max-time", String(curlMaxTimeSeconds),
       "--connect-timeout", String(curlConnectTimeoutSeconds),

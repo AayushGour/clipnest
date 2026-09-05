@@ -38,7 +38,11 @@
 // behavior-preserving refactor, not a "no behavior change" one like the
 // original M-4 extraction — see `select`'s and `performPaste`'s doc
 // comments for exactly what was preserved and why.
-import AppKit
+// P5 (Phase 3, Linux port): `import AppKit` dropped — this file never used
+// an AppKit symbol directly (its `NSPasteboard.PasteboardType` reads were
+// always really `ClipMediaType`, already a portable typealias/struct — see
+// `ClipnestCore/Clipboard/ClipMediaType.swift`), so this was already
+// removable independent of the move.
 import ClipnestCore
 import Foundation
 
@@ -67,7 +71,7 @@ extension PickerViewModel {
   // the "give the OS time to hand focus back before posting ⌘V" invariant,
   // never less safe, since it only pushes the delay's start later, not
   // earlier.
-  func select(_ item: ClipItem, plainText: Bool = false) {
+  public func select(_ item: ClipItem, plainText: Bool = false) {
     Task { [weak self] in
       guard let self else { return }
       guard let content = await self.pasteContent(for: item, plainText: plainText) else {
@@ -152,7 +156,7 @@ extension PickerViewModel {
         return .richText(rtf: rtf, plain: item.previewText)
       } catch {
         Self.logger.error(
-          "Failed to load RTF blob for paste (item \(item.id, privacy: .public)): \(String(describing: error))"
+          "Failed to load RTF blob for paste (item \(item.id)): \(String(describing: error))"
         )
         return .text(item.previewText)
       }
@@ -166,7 +170,7 @@ extension PickerViewModel {
         // never blob bytes, per coding-standards.md's "never log clipboard
         // content".
         Self.logger.error(
-          "Failed to load image blob for paste (item \(item.id, privacy: .public)): \(String(describing: error))"
+          "Failed to load image blob for paste (item \(item.id)): \(String(describing: error))"
         )
         return nil
       }
@@ -201,7 +205,7 @@ extension PickerViewModel {
   /// is already an in-memory `String`), so — unlike `select(_:)` — there's
   /// no async content resolution to sequence before capturing
   /// `frontmostApp`/dismissing.
-  func pasteSnippet(_ snippet: Snippet) {
+  public func pasteSnippet(_ snippet: Snippet) {
     let frontmostApp = frontmostAppTracker.consume()
     dismiss()
     Task { [weak self] in
@@ -219,7 +223,7 @@ extension PickerViewModel {
   /// this action when it does (see `ItemRow.hasRecognizedText`), so
   /// reaching here with nothing to copy would mean a caller bug, not a
   /// normal path; guarding rather than crashing keeps this safe either way.
-  func copyRecognizedText(from item: ClipItem) {
+  public func copyRecognizedText(from item: ClipItem) {
     guard item.hasRecognizedText, let ocrText = item.ocrText else { return }
     pasteboard.writeString(ocrText, forType: .string)
     // Same self-write suppression every other Clipnest-originated

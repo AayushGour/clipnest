@@ -11,23 +11,51 @@
 // NOT stored here: the two global shortcuts (the KeyboardShortcuts library
 // persists + re-registers those itself) and launch-at-login (SMAppService is
 // its own persistent source of truth — see LaunchAtLoginController).
+//
+// P5 (Phase 3, Linux port): persistence now goes through `any KeyValueStore`
+// (see `KeyValueStore.swift`) instead of `UserDefaults` directly — macOS's
+// production default stays real `UserDefaults` (see
+// `Platform/macOS/PlatformDefaultsKeyValueStore.swift`); Linux's production
+// default is a real JSON file (see `Platform/JSONFileKeyValueStore.swift`),
+// not `UserDefaults` (which compiles there but has no real persistence
+// story). The `UserDefaults`-typed convenience `init` below is kept so every
+// existing macOS call site (`AppEnvironment.swift`'s `SettingsStore()`, all
+// 13 `SettingsStoreTests`) keeps compiling completely unchanged — Swift's
+// overload resolution picks it over the `any KeyValueStore` designated init
+// whenever a concrete `UserDefaults` is actually passed (verified: this
+// applies even to the zero-argument `SettingsStore()` call, since both
+// initializers have all-defaulted parameters). The three `object(forKey:)
+// as? Bool ?? true`-shaped reads below are preserved byte-for-byte — see
+// each one's existing doc comment — because they distinguish "never
+// written" from "explicitly stored false," which `bool(forKey:)` cannot.
 
 import ClipnestCore
 import Foundation
-import Observation
+#if canImport(Darwin)
+  import Observation
+#endif
 
 @MainActor
-@Observable
-final class SettingsStore {
+// P5 (Linux port): `Observation` IMPORTS on Linux but does NOT LINK -- Swift
+// 6.0.3 and 6.1 on Ubuntu 22.04 both ship a libswiftObservation.so with an
+// undefined reference to `swift::threading::fatal`. `canImport(Observation)`
+// is therefore a misleading signal, so this gates on `canImport(Darwin)`
+// instead. macOS keeps `@Observable` exactly as before (SwiftUI's Settings
+// window depends on it); off Apple this is a plain class, which is all the
+// GTK layer needs since it observes explicitly rather than via SwiftUI.
+#if canImport(Darwin)
+  @Observable
+#endif
+public final class SettingsStore {
   /// How history retention is capped. Maps 1:1 to `RetentionCap?`.
-  enum RetentionMode: String, CaseIterable, Sendable {
+  public enum RetentionMode: String, CaseIterable, Sendable {
     case unlimited
     case items
     case days
   }
 
-  static let defaultItemCount = 1000
-  static let defaultDays = 30
+  public static let defaultItemCount = 1000
+  public static let defaultDays = 30
 
   private enum Key {
     static let isCaptureEnabled = "settings.isCaptureEnabled"
@@ -42,21 +70,25 @@ final class SettingsStore {
   }
 
   // `@ObservationIgnored`: the backing store is not observable UI state.
-  @ObservationIgnored private let defaults: UserDefaults
+  #if canImport(Darwin)
+    @ObservationIgnored private let defaults: any KeyValueStore
+  #else
+    private let defaults: any KeyValueStore
+  #endif
 
-  var isCaptureEnabled: Bool {
+  public var isCaptureEnabled: Bool {
     didSet { defaults.set(isCaptureEnabled, forKey: Key.isCaptureEnabled) }
   }
-  var retentionMode: RetentionMode {
+  public var retentionMode: RetentionMode {
     didSet { defaults.set(retentionMode.rawValue, forKey: Key.retentionMode) }
   }
-  var retentionItemCount: Int {
+  public var retentionItemCount: Int {
     didSet { defaults.set(retentionItemCount, forKey: Key.retentionItemCount) }
   }
-  var retentionDays: Int {
+  public var retentionDays: Int {
     didSet { defaults.set(retentionDays, forKey: Key.retentionDays) }
   }
-  private(set) var userExcludedBundleIDs: [String] {
+  public private(set) var userExcludedBundleIDs: [String] {
     didSet { defaults.set(userExcludedBundleIDs, forKey: Key.userExcludedBundleIDs) }
   }
 
@@ -66,7 +98,7 @@ final class SettingsStore {
   /// re-prompted on every paste attempt made while untrusted. The Permissions
   /// tab's explicit Grant button ignores this flag — a user-initiated request
   /// is never rate-limited.
-  var hasRequestedAccessibility: Bool {
+  public var hasRequestedAccessibility: Bool {
     didSet { defaults.set(hasRequestedAccessibility, forKey: Key.hasRequestedAccessibility) }
   }
 
@@ -78,7 +110,7 @@ final class SettingsStore {
   /// `GeneralSettingsView`'s `.onChange` calls
   /// `UpdateChecker.settingChanged(enabled:)` so flipping this live starts/
   /// stops the timer immediately, not on the next launch.
-  var automaticallyCheckForUpdates: Bool {
+  public var automaticallyCheckForUpdates: Bool {
     didSet {
       defaults.set(automaticallyCheckForUpdates, forKey: Key.automaticallyCheckForUpdates)
     }
@@ -93,7 +125,7 @@ final class SettingsStore {
   /// `textRecognitionEnabledProvider` (see `AppEnvironment`'s wiring,
   /// mirroring `isCaptureEnabled`/`excludedBundleIDsProvider`'s identical
   /// `MainActor.assumeIsolated` pattern).
-  var isTextRecognitionEnabled: Bool {
+  public var isTextRecognitionEnabled: Bool {
     didSet {
       defaults.set(isTextRecognitionEnabled, forKey: Key.isTextRecognitionEnabled)
     }
@@ -114,13 +146,16 @@ final class SettingsStore {
   /// `textRecognitionQualityProvider` (see `AppEnvironment`'s wiring,
   /// mirroring `isTextRecognitionEnabled`/`textRecognitionEnabledProvider`'s
   /// identical `MainActor.assumeIsolated` pattern).
-  var textRecognitionQuality: TextRecognitionQuality {
+  public var textRecognitionQuality: TextRecognitionQuality {
     didSet {
       defaults.set(textRecognitionQuality.rawValue, forKey: Key.textRecognitionQuality)
     }
   }
 
-  init(defaults: UserDefaults = .standard) {
+  /// The designated initializer — takes any `KeyValueStore`, defaulting to
+  /// this platform's production backing (`PlatformDefaults.keyValueStore`;
+  /// see this file's top doc comment).
+  public init(defaults: any KeyValueStore = PlatformDefaults.keyValueStore) {
     self.defaults = defaults
     // `object(forKey:) as? Bool` distinguishes "absent" (-> default true)
     // from an explicitly-stored false — `bool(forKey:)` can't.
@@ -149,9 +184,30 @@ final class SettingsStore {
         TextRecognitionQuality.init(rawValue:)) ?? .accurate
   }
 
+  #if os(macOS)
+    /// Convenience forwarder to the designated initializer above, so every
+    /// existing macOS call site — `AppEnvironment.swift`'s `SettingsStore()`
+    /// and all 13 `SettingsStoreTests` — keeps constructing this with a
+    /// concrete `UserDefaults` instance, unchanged. `UserDefaults` conforms
+    /// to `KeyValueStore` on every platform (see
+    /// `UserDefaultsKeyValueStore.swift`), but this overload itself is kept
+    /// macOS-only: it exists purely to preserve macOS call sites verbatim,
+    /// not to give Linux a second, easy-to-reach-for-by-mistake path back to
+    /// unpersisted `UserDefaults.standard` instead of the real
+    /// `PlatformDefaults.keyValueStore` JSON-file default (see this file's
+    /// top doc comment). `SettingsStoreTests`' Linux run instead resolves
+    /// its `SettingsStore(defaults: someUserDefaults)` calls through the
+    /// designated initializer above via the standard `UserDefaults ->
+    /// any KeyValueStore` existential conversion — same outcome, no test
+    /// changes needed either way.
+    public convenience init(defaults: UserDefaults = .standard) {
+      self.init(defaults: defaults as any KeyValueStore)
+    }
+  #endif
+
   /// The cap handed to `ClipStore.enforceRetention(cap:)`. Values are clamped
   /// to at least 1 so a stray 0 can never mean "delete everything."
-  var retentionCap: RetentionCap? {
+  public var retentionCap: RetentionCap? {
     switch retentionMode {
     case .unlimited: return nil
     case .items: return .maxCount(max(1, retentionItemCount))
@@ -162,7 +218,7 @@ final class SettingsStore {
   /// Adds a user exclusion. No-ops on blanks, duplicates, and built-in
   /// password-manager IDs (those are always enforced inside `PrivacyFilter`,
   /// so storing them here would be a meaningless duplicate).
-  func addExcludedApp(bundleID: String) {
+  public func addExcludedApp(bundleID: String) {
     let trimmed = bundleID.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else { return }
     guard !PrivacyFilter.builtInExcludedBundleIDs.contains(trimmed) else { return }
@@ -170,7 +226,7 @@ final class SettingsStore {
     userExcludedBundleIDs.append(trimmed)
   }
 
-  func removeExcludedApp(bundleID: String) {
+  public func removeExcludedApp(bundleID: String) {
     userExcludedBundleIDs.removeAll { $0 == bundleID }
   }
 }

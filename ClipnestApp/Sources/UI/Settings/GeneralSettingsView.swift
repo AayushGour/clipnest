@@ -8,6 +8,7 @@
 // launch-at-login change shows an inline error and reverts the switch —
 // never crashes (SMAppService can throw).
 
+import ClipnestViewModels
 import SwiftUI
 
 struct GeneralSettingsView: View {

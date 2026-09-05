@@ -13,6 +13,11 @@ let package = Package(
     // Name preserved: ClipnestApp/project.yml depends on this product.
     .library(name: "ClipnestCore", targets: ["ClipnestCore"]),
     .library(name: "ClipnestSQLite", targets: ["ClipnestSQLite"]),
+    // Phase 3 (Linux port): the platform-neutral view-model layer, shared by
+    // the macOS SwiftUI app and the future Linux GTK app. `ClipnestObservation`
+    // is a transitive dependency of this target (not its own product — no
+    // consumer needs it directly), pulled in automatically by SwiftPM.
+    .library(name: "ClipnestViewModels", targets: ["ClipnestViewModels"]),
   ],
   dependencies: [
     // Linked ONLY off-Apple; Apple platforms keep the system CryptoKit.
@@ -40,5 +45,20 @@ let package = Package(
     .target(name: "ClipnestSQLite", dependencies: ["ClipnestCore", "CSQLite"]),
     .testTarget(
       name: "ClipnestCoreTests", dependencies: ["ClipnestCore", "ClipnestSQLite"]),
+    // Phase 3 (Linux port): Combine-free `ObservableObject`/`@Published`/
+    // `objectWillChange` polyfill, compiled in only where `!canImport(Combine)`
+    // (i.e. Linux) — see `ObservableObject.swift`'s doc comment. Empty (zero
+    // public symbols) on Apple platforms, where the real `Combine` is used
+    // instead.
+    .target(name: "ClipnestObservation"),
+    // Phase 3 (Linux port): the platform-neutral view-model layer extracted
+    // from `ClipnestApp` — `PickerViewModel`, `SettingsStore`,
+    // `OCRBackfillViewModel`, `UpdateChecker`, and their pure supporting
+    // types. Every AppKit/Combine dependency is either an injected closure
+    // (already true before this extraction) or resolved through
+    // `PlatformDefaults`/`ClipnestObservation`.
+    .target(name: "ClipnestViewModels", dependencies: ["ClipnestCore", "ClipnestObservation"]),
+    .testTarget(
+      name: "ClipnestViewModelsTests", dependencies: ["ClipnestViewModels", "ClipnestCore"]),
   ]
 )

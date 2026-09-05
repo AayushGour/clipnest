@@ -29,28 +29,43 @@
 // accounting for the outer `Task.detached` here.
 
 import ClipnestCore
-import Observation
+#if canImport(Darwin)
+  import Observation
+#endif
 
 @MainActor
-@Observable
-final class OCRBackfillViewModel {
+// P5 (Linux port): `Observation` IMPORTS on Linux but does NOT LINK -- Swift
+// 6.0.3 and 6.1 on Ubuntu 22.04 both ship a libswiftObservation.so with an
+// undefined reference to `swift::threading::fatal`. `canImport(Observation)`
+// is therefore a misleading signal, so this gates on `canImport(Darwin)`
+// instead. macOS keeps `@Observable` exactly as before (SwiftUI's Settings
+// window depends on it); off Apple this is a plain class, which is all the
+// GTK layer needs since it observes explicitly rather than via SwiftUI.
+#if canImport(Darwin)
+  @Observable
+#endif
+public final class OCRBackfillViewModel {
   private let coordinator: OCRBackfillCoordinator
 
   /// `nil` until the first `refreshPendingCount()` completes — lets the
   /// view show a neutral/loading state for one frame instead of flashing
   /// "0 images" before the real count is known.
-  private(set) var pendingCount: Int?
-  private(set) var isRunning = false
-  private(set) var progress: OCRBackfillProgress?
-  private(set) var lastSummary: OCRBackfillSummary?
+  public private(set) var pendingCount: Int?
+  public private(set) var isRunning = false
+  public private(set) var progress: OCRBackfillProgress?
+  public private(set) var lastSummary: OCRBackfillSummary?
 
   /// Not observed UI state (it's plumbing, not something a view renders
   /// directly) — `@ObservationIgnored` keeps it out of `@Observable`'s
   /// dependency tracking, same reasoning `SettingsStore.defaults` and
   /// `UpdateChecker.timer` already use for their own non-UI internals.
-  @ObservationIgnored private var runTask: Task<Void, Never>?
+  #if canImport(Darwin)
+    @ObservationIgnored private var runTask: Task<Void, Never>?
+  #else
+    private var runTask: Task<Void, Never>?
+  #endif
 
-  init(coordinator: OCRBackfillCoordinator) {
+  public init(coordinator: OCRBackfillCoordinator) {
     self.coordinator = coordinator
   }
 
@@ -61,7 +76,7 @@ final class OCRBackfillViewModel {
   /// "housekeeping, not a destructive action" precedent
   /// `HistorySettingsView`'s existing `clearError` handling sets for
   /// `clearHistory()`'s failure path.
-  func refreshPendingCount() async {
+  public func refreshPendingCount() async {
     pendingCount = try? await coordinator.pendingCount()
   }
 
@@ -73,7 +88,7 @@ final class OCRBackfillViewModel {
   /// already in flight — `HistorySettingsView` swaps the button for
   /// Cancel while `isRunning`, so a second tap can't reach this, but the
   /// guard makes that safe even if it somehow did.
-  func start(quality: TextRecognitionQuality) {
+  public func start(quality: TextRecognitionQuality) {
     guard !isRunning else { return }
     isRunning = true
     progress = nil
@@ -101,7 +116,7 @@ final class OCRBackfillViewModel {
   /// records as `lastSummary` exactly like a natural completion — so the
   /// finished-state UI needs no separate cancelled-vs-completed branch
   /// beyond reading `lastSummary.wasCancelled`.
-  func cancel() {
+  public func cancel() {
     runTask?.cancel()
   }
 }

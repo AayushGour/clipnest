@@ -111,7 +111,7 @@ import Foundation
 /// capabilities:)` — one place per hint's decision, and one thing for a
 /// test to construct/assert against per case, instead of positional Bools
 /// that are easy to transpose.
-struct HighlightedItemCapabilities: Equatable {
+public struct HighlightedItemCapabilities: Equatable, Sendable {
   /// Which wording ⌥⏎ should use — `nil` when ⌥⏎ would paste exactly what
   /// `⏎` already pastes for the highlighted row, in which case advertising
   /// it would be misleading (see `ShortcutHints.swift`'s top doc comment).
@@ -151,7 +151,7 @@ struct HighlightedItemCapabilities: Equatable {
   }
 }
 
-enum ShortcutHints {
+public enum ShortcutHints {
   /// Builds the picker footer's tab-aware shortcut-hint string.
   ///
   /// - Parameters:
@@ -171,7 +171,7 @@ enum ShortcutHints {
   /// — it's a picker-wide action (opens Settings via `PickerView`'s ⌘, key
   /// handler), not scoped to any one tab's own group, so it sits outside
   /// the `switch tab` below rather than being duplicated into both branches.
-  static func text(for tab: PickerTab, capabilities: HighlightedItemCapabilities) -> String {
+  public static func text(for tab: PickerTab, capabilities: HighlightedItemCapabilities) -> String {
     var parts = ["↑↓ move", "⏎ paste"]
     switch capabilities.altEnterHint {
     case .plain:

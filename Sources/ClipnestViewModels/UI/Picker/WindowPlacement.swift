@@ -22,15 +22,24 @@
 // edge and (whenever the two windows can possibly fit side by side on the
 // screen) zero overlap — moving the *picker* horizontally, not falling
 // back to stacking, is how that's guaranteed.
+//
+// P5 (Phase 3, Linux port): `CoreGraphics` (the module) does not exist on
+// Linux, but `CGRect`/`CGPoint`/`CGSize`/`CGFloat` themselves DO, via
+// `Foundation` — verified empirically in a `swift:6.0-jammy` container. The
+// macOS branch below is unchanged (`import CoreGraphics`, exactly as
+// before); every formula and all 16 tests survive untouched.
+#if canImport(CoreGraphics)
+  import CoreGraphics
+#else
+  import Foundation
+#endif
 
-import CoreGraphics
-
-enum WindowPlacement {
+public enum WindowPlacement {
   /// Clamps `origin` (for a window of `size`) so the resulting frame is
   /// fully contained within `bounds` (typically an `NSScreen`'s
   /// `visibleFrame`) — never partially off-screen, even if the unclamped
   /// origin would put it there.
-  static func clampedOrigin(_ origin: CGPoint, size: CGSize, in bounds: CGRect) -> CGPoint {
+  public static func clampedOrigin(_ origin: CGPoint, size: CGSize, in bounds: CGRect) -> CGPoint {
     let maxX = max(bounds.maxX - size.width, bounds.minX)
     let maxY = max(bounds.maxY - size.height, bounds.minY)
     return CGPoint(
@@ -67,7 +76,7 @@ enum WindowPlacement {
   /// AppKit screen coordinates: origin is bottom-left, Y increases
   /// upward — so "top-aligned" means the editor's `maxY` matches the
   /// picker's `maxY`.
-  static func pairLayout(
+  public static func pairLayout(
     pickerFrame: CGRect,
     editorSize: CGSize,
     screenVisibleFrame: CGRect,
@@ -107,7 +116,7 @@ enum WindowPlacement {
   }
 
   /// Which side of the picker the item-preview popover sits on.
-  enum PreviewSide {
+  public enum PreviewSide {
     case right
     case left
   }
@@ -123,7 +132,7 @@ enum WindowPlacement {
   /// either side of the picker gives one stable answer for every item in a
   /// session, and `previewAvailableWidth(...)` lets the caller cap the
   /// preview's width to that side so it still fits.
-  static func previewSide(
+  public static func previewSide(
     anchorRect: CGRect,
     screenVisibleFrame: CGRect,
     gap: CGFloat
@@ -136,7 +145,7 @@ enum WindowPlacement {
   /// How much horizontal room the preview has on `side`, between the picker
   /// and the screen edge, with `gap` already deducted. Can be negative on a
   /// pathologically narrow screen; callers clamp to their own minimum.
-  static func previewAvailableWidth(
+  public static func previewAvailableWidth(
     on side: PreviewSide,
     anchorRect: CGRect,
     screenVisibleFrame: CGRect,
@@ -156,7 +165,7 @@ enum WindowPlacement {
   /// screen wins: the panel is pushed flush against that screen edge and may
   /// then overlap the picker, which is still better than rendering partly
   /// off-screen where it can't be read.
-  static func previewOriginX(
+  public static func previewOriginX(
     on side: PreviewSide,
     anchorRect: CGRect,
     panelWidth: CGFloat,

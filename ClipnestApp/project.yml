@@ -37,6 +37,13 @@ targets:
     dependencies:
       - package: ClipnestCore
         product: ClipnestCore
+      # Phase 3 (Linux port), P5: the platform-neutral view-model layer
+      # (PickerViewModel, SettingsStore, OCRBackfillViewModel, UpdateChecker,
+      # and their pure supporting types), extracted so the future Linux GTK
+      # app can reuse it. Same local `ClipnestCore` package (`path: ..`
+      # above) — `ClipnestViewModels` is one of its products.
+      - package: ClipnestCore
+        product: ClipnestViewModels
       - package: KeyboardShortcuts
         product: KeyboardShortcuts
     settings:

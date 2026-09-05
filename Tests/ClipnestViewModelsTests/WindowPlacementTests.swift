@@ -6,14 +6,22 @@
 // Every expected value below is hand-computed straight from
 // `WindowPlacement.swift`'s own formulas, not just re-asserting whatever the
 // implementation happens to currently return.
+//
+// P5 (Phase 3, Linux port): moved from `ClipnestApp` into
+// `ClipnestViewModelsTests`. `CoreGraphics` (the module) doesn't exist on
+// Linux, so this file's import is fixed the same way `WindowPlacement.swift`'s
+// own is — see that file's doc comment; `CGRect`/`CGPoint`/`CGSize`/`CGFloat`
+// themselves are available via `Foundation` there. Bodies/assertions below
+// are byte-identical to the pre-move file.
 
-import CoreGraphics
+import Foundation
 import Testing
 
-// The `ClipnestApp` target's actual Swift module name is `Clipnest` (see
-// `PRODUCT_NAME` in `project.yml`) — see `ItemKind+SFSymbolTests.swift`'s
-// top doc comment for the full explanation.
-@testable import Clipnest
+@testable import ClipnestViewModels
+
+#if canImport(CoreGraphics)
+  import CoreGraphics
+#endif
 
 @Suite("WindowPlacement")
 struct WindowPlacementTests {

@@ -27,6 +27,7 @@
 // happens to already be."
 
 import AppKit
+import ClipnestViewModels
 import SwiftUI
 
 /// A real, standard, titled `NSWindow` (not a nonactivating panel) hosting
@@ -146,7 +147,10 @@ final class SnippetEditorWindow: NSWindow, NSWindowDelegate {
       center()
       return
     }
-    let (pickerOrigin, editorOrigin) = WindowPlacement.pairLayout(
+    // Fully qualified (P5, Phase 3 Linux port): this SDK's `SwiftUI` also
+    // declares a public `WindowPlacement` struct, so the bare name is
+    // ambiguous once both `ClipnestViewModels` and `SwiftUI` are imported.
+    let (pickerOrigin, editorOrigin) = ClipnestViewModels.WindowPlacement.pairLayout(
       pickerFrame: pickerPanel.frame,
       editorSize: frame.size,
       screenVisibleFrame: screen.visibleFrame,

@@ -18,7 +18,7 @@
 import Foundation
 import Testing
 
-@testable import Clipnest
+@testable import ClipnestViewModels
 
 @Suite("UpdateChecker")
 struct UpdateCheckerTests {

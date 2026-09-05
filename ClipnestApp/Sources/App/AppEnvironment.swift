@@ -48,6 +48,9 @@
 
 import AppKit
 import ClipnestCore
+// P5 (Phase 3, Linux port): `SettingsStore`/`OCRBackfillViewModel`/
+// `PickerViewModel`/`UpdateChecker` moved to `ClipnestViewModels`.
+import ClipnestViewModels
 import Foundation
 import os
 
@@ -296,6 +299,10 @@ final class AppEnvironment {
     // `registerHotkey()`.
     let updateChecker = UpdateChecker()
     self.updateChecker = updateChecker
+    // P5 (Phase 3, Linux port): `UpdateChecker` lives in `ClipnestViewModels`
+    // now and can't reference `AppUpdater` (App-layer, macOS-only) directly
+    // — see `UpdateChecker.installedVersion`'s doc comment.
+    updateChecker.installedVersion = { AppUpdater.currentVersion }
     updateChecker.onStateChanged = { [weak viewModel] available, latest in
       viewModel?.isUpdateAvailable = available
       viewModel?.latestVersion = latest

@@ -45,8 +45,18 @@ import Foundation
 /// `PickerViewModel`'s Rows and Snippets query pipelines. See this file's
 /// top doc comment for why it's shaped this way (closures-per-call, no
 /// owned item array).
+///
+/// P5 (Phase 3, Linux port): `Element: Sendable` added — both concrete
+/// instantiations (`ClipItem`, `Snippet`) already conform, so this is a
+/// no-op constraint for every existing caller, but the Swift 6.0 compiler
+/// (verified in a `swift:6.0-jammy` container; this repo's newer macOS
+/// toolchain accepts the unconstrained form without complaint, an
+/// inter-version diagnostic difference) requires it: `fetch`'s `[Element]`
+/// result crosses from a nonisolated closure back onto this `@MainActor`
+/// type, and an unconstrained `Element` is conservatively treated as
+/// possibly non-`Sendable`.
 @MainActor
-final class PagedQuery<Element> {
+final class PagedQuery<Element: Sendable> {
   /// `offset` is where the *next* page starts, `hasMore` is whether the
   /// last page came back full (`count == pageSize`) — a short page means
   /// the store has nothing left to give for the current text/kind/scope.
