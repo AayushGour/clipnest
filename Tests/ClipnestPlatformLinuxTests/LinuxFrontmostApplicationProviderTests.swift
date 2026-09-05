@@ -3,8 +3,7 @@ import Testing
 @testable import ClipnestPlatformLinux
 
 /// Fully in-memory `X11WindowIdentityQuerying` fake — no Xlib, no display.
-private final class FakeX11WindowIdentityQuerying: X11WindowIdentityQuerying, @unchecked Sendable
-{
+private final class FakeX11WindowIdentityQuerying: X11WindowIdentityQuerying, @unchecked Sendable {
   var activeWindow: UInt64?
   var classNames: [UInt64: String] = [:]
   var pids: [UInt64: Int32] = [:]
