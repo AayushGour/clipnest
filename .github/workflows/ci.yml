@@ -1,0 +1,66 @@
+name: CI (Linux)
+
+# The PR gate for the Linux port — did not exist before P7-F. release.yml
+# (macOS) only runs on push to main and only builds/releases the mac app;
+# nothing today validates a PR against the Ubuntu targets before merge.
+#
+# Runs inside the real `swift:6.0-jammy` / `swift:6.0-noble` Docker Official
+# Images (docker.io/library/swift — verified directly against Docker Hub's
+# real tag list; NOT `swiftlang/swift`, which only ever publishes
+# `nightly-*` tags there), not GitHub's hosted Ubuntu runner images: the
+# `ubuntu-22.04` GitHub-hosted runner image is retired, so jammy coverage
+# has to come from the container rather than `runs-on`. `runs-on: ubuntu-latest`
+# is just the *host* that runs the container — the container image is what
+# actually determines the userland/toolchain the build sees.
+#
+# See debian/README.source for why a plain `apt-get install swift` isn't an
+# option here: there is no such apt package on jammy/noble, which is
+# exactly why this workflow needs the toolchain baked into the image
+# instead.
+
+on:
+  pull_request:
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    container: swift:6.0-${{ matrix.series }}
+    strategy:
+      fail-fast: false
+      matrix:
+        series: [jammy, noble]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        # Exactly Package.swift's own `providers:` entries for CXlib/CGtk4,
+        # plus libsqlite3-dev — needed by CSQLite's systemLibrary target,
+        # which has no `providers:` array of its own to surface this
+        # automatically (see debian/README.source's own note on this exact
+        # gap, found and fixed via this task's container verification).
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq \
+            pkg-config \
+            libgtk-4-dev \
+            libx11-dev \
+            libxfixes-dev \
+            libxtst-dev \
+            libsqlite3-dev
+
+      - name: swift build
+        run: swift build
+
+      - name: swift test
+        run: swift test
+
+      - name: swift format lint --strict
+        # Matches coding-standards.md's Core/Tests lint command exactly —
+        # deliberately NOT `ClipnestApp/Sources` (that's the XcodeGen macOS
+        # app target; it isn't part of this SPM package graph at all and
+        # doesn't build outside Xcode — see Package.swift's own top comment).
+        run: swift format lint --recursive --strict Sources Tests
