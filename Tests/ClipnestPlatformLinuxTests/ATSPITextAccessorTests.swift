@@ -74,7 +74,9 @@ struct ATSPITextAccessorTests {
     #expect(accessor.readSelectedText() == nil)
   }
 
-  @Test("replaceSelectedText deletes the selection then inserts, using DeleteText+InsertText — never SetTextContents")
+  @Test(
+    "replaceSelectedText deletes the selection then inserts, using DeleteText+InsertText — never SetTextContents"
+  )
   func replaceDeletesThenInserts() {
     let fake = FakeATSPIObjectCalling()
     fake.repliesByMember["GetNSelections"] = methodReturn([.int32(1)])
@@ -85,8 +87,12 @@ struct ATSPITextAccessorTests {
       caller: fake, focusedObject: { testTarget }, timeout: .milliseconds(1), nextSerial: { 1 })
 
     #expect(accessor.replaceSelectedText(with: "héllo") == true)
-    #expect(fake.calls.map(\.member) == ["GetNSelections", "GetSelection", "DeleteText", "InsertText"])
-    #expect(fake.calls.allSatisfy { $0.interface != "org.a11y.atspi.EditableText" || $0.member != "SetTextContents" })
+    #expect(
+      fake.calls.map(\.member) == ["GetNSelections", "GetSelection", "DeleteText", "InsertText"])
+    #expect(
+      fake.calls.allSatisfy {
+        $0.interface != "org.a11y.atspi.EditableText" || $0.member != "SetTextContents"
+      })
 
     let deleteCall = fake.calls[2]
     #expect(deleteCall.body == [.int32(4), .int32(10)])

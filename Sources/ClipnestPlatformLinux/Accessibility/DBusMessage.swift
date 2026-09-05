@@ -81,14 +81,16 @@ public struct DBusMessage: Equatable, Sendable {
 
     var headerFields: [DBusValue] = []
     if let path {
-      headerFields.append(.structure([.byte(DBusHeaderFieldCode.path), .variant(.objectPath(path))]))
+      headerFields.append(
+        .structure([.byte(DBusHeaderFieldCode.path), .variant(.objectPath(path))]))
     }
     if let interface {
       headerFields.append(
         .structure([.byte(DBusHeaderFieldCode.interface), .variant(.string(interface))]))
     }
     if let member {
-      headerFields.append(.structure([.byte(DBusHeaderFieldCode.member), .variant(.string(member))]))
+      headerFields.append(
+        .structure([.byte(DBusHeaderFieldCode.member), .variant(.string(member))]))
     }
     if let errorName {
       headerFields.append(
@@ -103,7 +105,8 @@ public struct DBusMessage: Equatable, Sendable {
         .structure([.byte(DBusHeaderFieldCode.destination), .variant(.string(destination))]))
     }
     if let sender {
-      headerFields.append(.structure([.byte(DBusHeaderFieldCode.sender), .variant(.string(sender))]))
+      headerFields.append(
+        .structure([.byte(DBusHeaderFieldCode.sender), .variant(.string(sender))]))
     }
     if let bodySignature {
       headerFields.append(
@@ -113,7 +116,8 @@ public struct DBusMessage: Equatable, Sendable {
     var writer = DBusByteWriter()
     writer.writeByte(DBusProtocol.littleEndianMarker)
     writer.writeByte(type.rawValue)
-    writer.writeByte(0)  // flags: always 0 — this module always wants a reply, never sets NO_REPLY_EXPECTED
+    // flags: always 0 — this module always wants a reply, never sets NO_REPLY_EXPECTED.
+    writer.writeByte(0)
     writer.writeByte(DBusProtocol.version)
     writer.writeUInt32(UInt32(bodyBytes.count))
     writer.writeUInt32(serial)

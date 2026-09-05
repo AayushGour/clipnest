@@ -83,6 +83,18 @@ enum DBusSignatureParser {
     case DBusTypeCode.signature: return (.signature, rest)
     case DBusTypeCode.variant: return (.variant, rest)
     case DBusTypeCode.array:
+      // DICT_ENTRY (`{kv}`) is only a legal type when it's the DIRECT
+      // element of an array (`a{kv}`) — the D-Bus Specification's type
+      // grammar has no production for a bare/standalone `{kv}` anywhere
+      // else (as a struct field, another array's element type via a
+      // second level of nesting incorrectly, or a top-level signature
+      // entry). Handling it here, rather than as a general `parseOne`
+      // case reachable from anywhere, is what makes `"{sv}"` alone
+      // correctly rejected as malformed instead of silently accepted.
+      if rest.first == DBusTypeCode.dictEntryOpen {
+        guard let (dictEntry, remaining) = parseDictEntry(rest) else { return nil }
+        return (.array(dictEntry), remaining)
+      }
       guard let (element, remaining) = parseOne(rest) else { return nil }
       return (.array(element), remaining)
     case DBusTypeCode.structOpen:
@@ -95,13 +107,22 @@ enum DBusSignatureParser {
       }
       rest = rest.dropFirst()  // consume ')'
       return (.structure(fields), rest)
-    case DBusTypeCode.dictEntryOpen:
-      guard let (key, afterKey) = parseOne(rest) else { return nil }
-      guard let (value, afterValue) = parseOne(afterKey) else { return nil }
-      guard afterValue.first == DBusTypeCode.dictEntryClose else { return nil }
-      return (.dictEntry(key, value), afterValue.dropFirst())
     default:
       return nil
     }
+  }
+
+  /// Parses `{keyType valueType}` (the `{` has already been confirmed
+  /// present but NOT yet consumed by the caller) — factored out of
+  /// `parseOne` since it's reachable from exactly one place: immediately
+  /// after an `a` (see that case's comment above).
+  private static func parseDictEntry(
+    _ chars: ArraySlice<UInt8>
+  ) -> (DBusTypeSignature, ArraySlice<UInt8>)? {
+    let afterOpenBrace = chars.dropFirst()  // consume '{'
+    guard let (key, afterKey) = parseOne(afterOpenBrace) else { return nil }
+    guard let (value, afterValue) = parseOne(afterKey) else { return nil }
+    guard afterValue.first == DBusTypeCode.dictEntryClose else { return nil }
+    return (.dictEntry(key, value), afterValue.dropFirst())
   }
 }

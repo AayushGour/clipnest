@@ -95,7 +95,7 @@ struct ATSPIResponsesTests {
   @Test("an ERROR reply never parses as a success value")
   func errorReplyNeverParsesAsSuccess() {
     let errorReply = DBusMessage(
-      type: .error, serial: 2, replySerial: 1, errorName: "org.freedesktop.DBus.Error.Failed",
+      type: .error, serial: 2, errorName: "org.freedesktop.DBus.Error.Failed", replySerial: 1,
       body: [.boolean(true)])
     #expect(ATSPIResponses.parseBooleanReply(errorReply) == nil)
     #expect(ATSPIResponses.parseInt32Reply(errorReply) == nil)

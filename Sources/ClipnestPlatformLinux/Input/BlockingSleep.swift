@@ -1,7 +1,8 @@
+import Foundation
+
 #if canImport(Glibc)
   import Glibc
 #endif
-import Foundation
 
 /// The real, blocking sleep `ModifierReleaseWaiter` uses outside tests — a
 /// plain enum rather than a closure literal at each call site, so there is

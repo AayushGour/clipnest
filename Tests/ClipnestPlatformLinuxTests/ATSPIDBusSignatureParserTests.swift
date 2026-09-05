@@ -45,7 +45,9 @@ struct DBusSignatureParserTests {
   @Test("parses nested structs")
   func parsesNestedStruct() {
     #expect(
-      DBusSignatureParser.parse("(s(ii))") == [.structure([.string, .structure([.int32, .int32])])]
+      DBusSignatureParser.parse("(s(ii))") == [
+        .structure([.string, .structure([.int32, .int32])])
+      ]
     )
   }
 

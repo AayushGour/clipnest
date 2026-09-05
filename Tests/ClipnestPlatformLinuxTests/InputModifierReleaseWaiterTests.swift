@@ -1,4 +1,5 @@
 import Foundation
+import Synchronization
 import Testing
 
 @testable import ClipnestPlatformLinux
@@ -19,6 +20,20 @@ private final class FakeModifierMaskReader: ModifierMaskReading, @unchecked Send
   }
 }
 
+/// A plain `Int` counter safe to mutate from inside a `@Sendable` closure
+/// (`ModifierReleaseWaiter`'s injected `sleep` parameter) — a bare
+/// captured `var` is rejected by strict concurrency ("mutation of captured
+/// var in concurrently-executing code") even though `waitForRelease()` is
+/// actually fully synchronous; `Mutex` is the same synchronization
+/// primitive the production code (`DBusConnection`, `ATSPIFocusTracker`)
+/// already uses for real shared mutable state.
+private final class SleepCounter: Sendable {
+  private let count = Mutex<Int>(0)
+
+  func increment() { count.withLock { $0 += 1 } }
+  var value: Int { count.withLock { $0 } }
+}
+
 @Suite("ModifierReleaseWaiter")
 struct ModifierReleaseWaiterTests {
   @Test("returns released immediately when nothing is held")
@@ -33,24 +48,24 @@ struct ModifierReleaseWaiterTests {
 
   @Test("polls until modifiers are released, without exceeding the ceiling")
   func pollsUntilReleased() {
-    var sleepCount = 0
+    let sleepCount = SleepCounter()
     let reader = FakeModifierMaskReader([.control, .control, []])
     let waiter = ModifierReleaseWaiter(
       reader: reader, pollInterval: .milliseconds(10), releaseCeiling: .milliseconds(400),
-      sleep: { _ in sleepCount += 1 })
+      sleep: { _ in sleepCount.increment() })
     #expect(waiter.waitForRelease() == .released)
-    #expect(sleepCount == 2)
+    #expect(sleepCount.value == 2)
   }
 
   @Test("times out rather than sending with a modifier still held")
   func timesOutWithoutSending() {
-    var sleepCount = 0
+    let sleepCount = SleepCounter()
     let reader = FakeModifierMaskReader([.control])
     let waiter = ModifierReleaseWaiter(
       reader: reader, pollInterval: .milliseconds(10), releaseCeiling: .milliseconds(40),
-      sleep: { _ in sleepCount += 1 })
+      sleep: { _ in sleepCount.increment() })
     #expect(waiter.waitForRelease() == .timedOut)
     // Ceiling 40ms / 10ms interval = 4 sleeps before giving up.
-    #expect(sleepCount == 4)
+    #expect(sleepCount.value == 4)
   }
 }

@@ -1,8 +1,9 @@
+import Foundation
+import Synchronization
+
 #if canImport(Glibc)
   import Glibc
 #endif
-import Foundation
-import Synchronization
 
 /// A real, blocking `AF_UNIX` D-Bus connection: connects, performs the
 /// `EXTERNAL` SASL handshake (`DBusAuthHandshake`), then sends/receives

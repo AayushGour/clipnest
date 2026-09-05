@@ -1,7 +1,8 @@
+import Foundation
+
 #if canImport(Glibc)
   import Glibc
 #endif
-import Foundation
 
 /// Errors specific to standing up the `/dev/uinput` virtual keyboard.
 public enum UInputError: Error, Equatable, Sendable {
@@ -39,7 +40,8 @@ public enum UInputError: Error, Equatable, Sendable {
   // entirely.)
   private enum RawIoctl {
     private typealias IntArgFunction = @convention(c) (Int32, UInt, Int32) -> Int32
-    private typealias PointerArgFunction = @convention(c) (Int32, UInt, UnsafeRawPointer?) ->
+    private typealias PointerArgFunction =
+      @convention(c) (Int32, UInt, UnsafeRawPointer?) ->
       Int32
     private typealias NoArgFunction = @convention(c) (Int32, UInt) -> Int32
 

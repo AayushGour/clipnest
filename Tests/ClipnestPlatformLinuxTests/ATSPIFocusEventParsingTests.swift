@@ -5,7 +5,9 @@ import Testing
 
 @Suite("ATSPIFocusEventParsing")
 struct ATSPIFocusEventParsingTests {
-  private func focusedSignal(sender: String? = ":1.42", path: String? = "/org/a11y/atspi/accessible/1")
+  private func focusedSignal(
+    sender: String? = ":1.42", path: String? = "/org/a11y/atspi/accessible/1"
+  )
     -> DBusMessage
   {
     DBusMessage(
