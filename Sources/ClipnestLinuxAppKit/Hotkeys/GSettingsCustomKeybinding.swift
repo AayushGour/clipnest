@@ -53,7 +53,6 @@ enum GSettingsCustomKeybinding {
     }
   }
 
-
   /// Whether a GSettings schema is actually installed on this machine.
   ///
   /// This check is NOT optional. `g_settings_new` and `g_settings_new_with_path`
