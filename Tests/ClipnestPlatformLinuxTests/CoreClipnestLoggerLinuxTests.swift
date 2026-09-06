@@ -14,10 +14,23 @@ import Testing
 ///
 /// `.serialized`: this test temporarily redirects the process's real
 /// `STDERR_FILENO` (a single, process-wide resource) to a pipe so it can
-/// capture what `ClipnestLogger` writes. Nothing else in this target logs
-/// through `ClipnestLogger` during test execution (grep confirms it), but
-/// serializing this suite's own tests removes any chance of them
-/// clobbering each other's redirection window.
+/// capture what `ClipnestLogger` writes, and serializing this suite's own
+/// tests removes any chance of them clobbering each other's redirection
+/// window.
+///
+/// `.serialized` is NOT sufficient on its own, though, and the assertions
+/// below therefore filter the captured bytes by this logger's own
+/// `[LoggerTest]` tag rather than comparing the whole buffer. It only
+/// orders THIS suite's tests; swift-testing still runs other suites
+/// concurrently and — more importantly — the test runner writes its own
+/// progress lines ("◇ Test ... started", "✔ Test ... passed") to fd 2,
+/// which during the redirection window IS this pipe. A whole-buffer
+/// equality check therefore captured runner output and failed
+/// nondeterministically: measured failing on 2 of 3 consecutive runs even
+/// at `swift test --jobs 1`, which would have turned any CI leg red at
+/// random. Filtering keeps the assertion that actually matters — that
+/// `ClipnestLogger` wrote exactly one correctly-tagged line to the real
+/// fd 2 — while ignoring bytes this test never claimed to own.
 @Suite("ClipnestLogger (Linux stderr emission) — T-LX2", .serialized)
 struct ClipnestLoggerLinuxTests {
   @Test("error/info/debug each write one tagged line to real stderr, none are no-ops")
@@ -25,14 +38,27 @@ struct ClipnestLoggerLinuxTests {
     let logger = ClipnestLogger(subsystem: ClipnestLog.subsystem, category: "LoggerTest")
 
     let errorOutput = try captureStderr { logger.error("boom") }
-    #expect(errorOutput == "[LoggerTest] ERROR: boom\n")
+    #expect(taggedLines(in: errorOutput) == ["[LoggerTest] ERROR: boom"])
 
     let infoOutput = try captureStderr { logger.info("hello") }
-    #expect(infoOutput == "[LoggerTest] INFO: hello\n")
+    #expect(taggedLines(in: infoOutput) == ["[LoggerTest] INFO: hello"])
 
     let debugOutput = try captureStderr { logger.debug("trace") }
-    #expect(debugOutput == "[LoggerTest] DEBUG: trace\n")
+    #expect(taggedLines(in: debugOutput) == ["[LoggerTest] DEBUG: trace"])
   }
+}
+
+/// The lines of `captured` that this test's own logger emitted, identified
+/// by the category tag `ClipnestLogger` prefixes every line with. Everything
+/// else in the buffer belongs to the test runner (see the suite doc comment)
+/// and is not this test's to assert on. Returning an array rather than a
+/// joined string keeps the "exactly one line, no duplicates" part of the
+/// original assertion.
+private func taggedLines(in captured: String) -> [String] {
+  captured
+    .split(separator: "\n", omittingEmptySubsequences: true)
+    .map(String.init)
+    .filter { $0.hasPrefix("[LoggerTest] ") }
 }
 
 private enum StderrCaptureError: Error {
