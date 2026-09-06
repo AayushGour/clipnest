@@ -29,12 +29,39 @@ public enum KeyEventMapping {
   /// these are hardcoded rather than imported), spelled out as named
   /// constants (not inline `4`/`8`) per coding-standards.md's no-magic-
   /// numbers rule. `controlMask` gates the Linux-conventional primary
-  /// modifier (Ctrl+F/P/Delete/1/2/3 — this picker's substitute for
-  /// macOS's ⌘-chords); `altMask` gates the Enter/plain-text variant,
-  /// mirroring macOS's ⌥⏎ specifically (not ⌘⏎) — see `.commit`'s case
-  /// below.
+  /// modifier (Ctrl+F/P/1/2/3 — this picker's substitute for macOS's
+  /// ⌘-chords); Delete is the one exception — it matches with or without
+  /// Ctrl held, see `Keyval.delete`'s case below for why. `altMask` gates
+  /// the Enter/plain-text variant, mirroring macOS's ⌥⏎ specifically (not
+  /// ⌘⏎) — see `.commit`'s case below.
   static let controlMask: UInt32 = 1 << 2
   static let altMask: UInt32 = 1 << 3
+
+  /// `GDK_SHIFT_MASK` / `GDK_SUPER_MASK` — bit values verified against
+  /// GTK's own `gdk/gdkenums.h` (not guessed): Shift is `1 << 0`; Super
+  /// (the "Windows"/Meta key most Linux keyboards actually have) is
+  /// `1 << 26` — GTK4 dropped the legacy X11 `Mod1`-`Mod5` bits entirely
+  /// (`GDK_MOD1_MASK` was renamed `GDK_ALT_MASK`, `GDK_MOD2_MASK` renamed
+  /// `GDK_META_MASK`), so Super is the closest, most-likely-to-exist
+  /// analogue of macOS's ⌘ for this "modifier Return doesn't implement
+  /// anything for" check below. Used only by `returnAction(forState:)`.
+  static let shiftMask: UInt32 = 1 << 0
+  static let superMask: UInt32 = 1 << 26
+
+  /// `GDK_LOCK_MASK` — "Caps Lock (or Shift Lock, depending on the
+  /// windowing system configuration)" per GDK's own documentation: a
+  /// TOGGLE state, not a modifier the user is deliberately holding down to
+  /// request a different action. Masked out before deciding Return's
+  /// action (T-BUG1/parity-audit bug #4) — mirrors macOS's
+  /// `PickerView.returnAction(for:)` excluding `.capsLock` for exactly the
+  /// same reason: a plain Return pressed with Caps Lock toggled on must
+  /// still commit normally, not be silently ignored. (GDK has no Num Lock
+  /// bit in `GdkModifierType` at all — verified against GTK's own source;
+  /// Num Lock is only queryable via `GdkDevice.numLockState`, so unlike
+  /// macOS there is nothing further to exclude for the numeric-keypad half
+  /// of that same exclusion — `Keyval.kpEnter` below already unifies the
+  /// numpad Enter keyval with plain Return at the KEYVAL level instead.)
+  static let lockMask: UInt32 = 1 << 1
 
   /// GDK keysym values (`gdk/gdkkeysyms.h`) this file maps — one named
   /// constant per key, not inlined at each `switch` case, for the same
@@ -72,15 +99,20 @@ public enum KeyEventMapping {
   ///   - keyval: the GDK keysym reported by `GtkEventControllerKey`'s
   ///     "key-pressed" signal — e.g. `GDK_KEY_Up`'s numeric value (see
   ///     `Keyval` above).
-  ///   - state: the `GdkModifierType` bitmask reported alongside it. Only
-  ///     `controlMask` is consulted; every other bit (Shift, CapsLock, a
-  ///     mouse-button chord, etc.) is ignored, matching how `GDK_CONTROL_
-  ///     MASK`-gated shortcuts are conventionally checked (masking the bit
-  ///     you care about, not requiring an exact full-state match, so e.g.
-  ///     NumLock being on doesn't silently break every Ctrl-chord).
+  ///   - state: the `GdkModifierType` bitmask reported alongside it. Every
+  ///     Ctrl-gated case below (`focusSearch`/`togglePin`/`switchTab`)
+  ///     consults only `controlMask`, ignoring every other bit (Shift, Lock,
+  ///     a mouse-button chord, etc.) — masking the bit you care about, not
+  ///     requiring an exact full-state match, so e.g. Caps Lock being on
+  ///     doesn't silently break every Ctrl-chord. `delete` ignores `state`
+  ///     entirely (see its case below — bare Delete and Ctrl+Delete are both
+  ///     accepted). Return/numpad-Enter is the other exception:
+  ///     `returnAction(forState:)` below also consults Shift/Super (and
+  ///     masks out Lock) so an unimplemented modifier held on Return is
+  ///     reported as unhandled rather than silently aliased to plain Return
+  ///     (T-BUG1/parity-audit bug #4).
   public static func action(keyval: UInt32, state: UInt32) -> PickerKeyAction? {
     let isControlDown = state & controlMask != 0
-    let isAltDown = state & altMask != 0
 
     switch keyval {
     case Keyval.up:
@@ -88,7 +120,7 @@ public enum KeyEventMapping {
     case Keyval.down:
       return .moveDown
     case Keyval.return, Keyval.kpEnter:
-      return .commit(plainText: isAltDown)
+      return returnAction(forState: state)
     case Keyval.escape:
       return .dismiss
     // NOTE (bug found by GTKKeyEventMappingTests, fixed here): `case a, b
@@ -103,8 +135,24 @@ public enum KeyEventMapping {
       return isControlDown ? .focusSearch : nil
     case Keyval.pLower, Keyval.pUpper:
       return isControlDown ? .togglePin : nil
+    // Bare Delete now deletes, matching macOS's `PickerView.handle(_:)`
+    // `.delete` case, which — per that method's own "Reliability note
+    // (T24)" doc comment — "matches the physical Delete key regardless of
+    // modifiers, so this one case covers both plain Delete and ⌘⌫." Linux
+    // previously required Ctrl+Delete, an inconsistency with no platform
+    // reason behind it (GTK has no text-field-swallows-bare-Delete
+    // complication the way macOS's always-focused search field does).
+    // Ctrl+Delete is DELIBERATELY kept working too — not narrowed to just
+    // bare Delete — because it's this app's already-documented/shipped
+    // Linux convention (`LinuxShortcutDescriptions.swift`'s Settings ->
+    // Shortcuts listing, and this file's own prior test suite); a user who
+    // already learned Ctrl+Delete must not have it stop working. Ignoring
+    // `state` entirely (rather than special-casing "state == 0 ||
+    // isControlDown") makes bare Delete a superset of the old behavior, not
+    // a replacement — every modifier combination that used to delete still
+    // does, plus the one that didn't (plain Delete) now also does.
     case Keyval.delete:
-      return isControlDown ? .delete : nil
+      return .delete
     case Keyval.one:
       return isControlDown ? .switchTab(.one) : nil
     case Keyval.two:
@@ -114,5 +162,33 @@ public enum KeyEventMapping {
     default:
       return nil
     }
+  }
+
+  /// T-BUG1 (parity-audit bug #4): decides Return/numpad-Enter's action —
+  /// mirrors macOS's `PickerView.returnAction(for:)` fix for the exact same
+  /// defect (see that method's doc comment): the previous single-line
+  /// `.commit(plainText: isAltDown)` silently treated ANY modifier other
+  /// than Alt (Shift+Return, Ctrl+Return, Super+Return, ...) as if it were
+  /// plain Return, with no indication anything differed. `lockMask` (Caps/
+  /// Shift Lock) is masked out FIRST since it's an incidental toggle, not a
+  /// held-down request — see that constant's doc comment.
+  ///
+  /// - Returns: `.commit(plainText: true)` when Alt is held (checked
+  ///   first, so e.g. Alt+Shift+Return still commits plain text, exactly
+  ///   like macOS's ⌥⌘Return still selecting plain text); `nil` (ignored —
+  ///   `PickerWindow.handleKeyPressed` then reports `GDK_EVENT_PROPAGATE`,
+  ///   letting the keypress fall through unhandled, matching macOS's
+  ///   `.ignore` → `.ignored`) when Shift, Control, or Super is held
+  ///   without Alt; `.commit(plainText: false)` (plain Return) otherwise.
+  private static func returnAction(forState state: UInt32) -> PickerKeyAction? {
+    let meaningfulState = state & ~lockMask
+    guard meaningfulState & altMask == 0 else {
+      return .commit(plainText: true)
+    }
+    let unimplementedReturnModifiers = shiftMask | controlMask | superMask
+    guard meaningfulState & unimplementedReturnModifiers == 0 else {
+      return nil
+    }
+    return .commit(plainText: false)
   }
 }

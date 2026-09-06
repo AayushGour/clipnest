@@ -17,6 +17,8 @@ struct GTKKeyEventMappingTests {
   private static let controlMask: UInt32 = 1 << 2
   private static let altMask: UInt32 = 1 << 3
   private static let shiftMask: UInt32 = 1 << 0
+  private static let lockMask: UInt32 = 1 << 1
+  private static let superMask: UInt32 = 1 << 26
 
   private static let up: UInt32 = 0xff52
   private static let down: UInt32 = 0xff54
@@ -52,11 +54,54 @@ struct GTKKeyEventMappingTests {
         == .commit(plainText: true))
   }
 
-  @Test("Ctrl+Enter is NOT the plain-text variant — Control isn't Alt")
-  func controlEnterStaysNonPlain() {
+  // MARK: - T-BUG1 (parity-audit bug #4): modified Return must never alias
+  // plain Return silently — mirrors macOS's `PickerView.returnAction(for:)`
+  // fix for the identical defect.
+
+  @Test("Ctrl+Enter is ignored — Control isn't Alt, and must NOT silently alias plain Return")
+  func controlEnterIsIgnored() {
+    #expect(KeyEventMapping.action(keyval: Self.returnKey, state: Self.controlMask) == nil)
+  }
+
+  @Test("Shift+Enter is ignored, not aliased to plain Return")
+  func shiftEnterIsIgnored() {
+    #expect(KeyEventMapping.action(keyval: Self.returnKey, state: Self.shiftMask) == nil)
+  }
+
+  @Test("Super+Enter is ignored, not aliased to plain Return")
+  func superEnterIsIgnored() {
+    #expect(KeyEventMapping.action(keyval: Self.returnKey, state: Self.superMask) == nil)
+  }
+
+  @Test("Numpad Enter with an unimplemented modifier is ignored too, same as plain Enter")
+  func controlKPEnterIsIgnored() {
+    #expect(KeyEventMapping.action(keyval: Self.kpEnter, state: Self.controlMask) == nil)
+  }
+
+  @Test("Alt wins over an accompanying unimplemented modifier — still commits plain text")
+  func altPlusUnimplementedModifierStillCommitsPlainText() {
     #expect(
-      KeyEventMapping.action(keyval: Self.returnKey, state: Self.controlMask)
+      KeyEventMapping.action(keyval: Self.returnKey, state: Self.altMask | Self.shiftMask)
+        == .commit(plainText: true))
+    #expect(
+      KeyEventMapping.action(keyval: Self.returnKey, state: Self.altMask | Self.controlMask)
+        == .commit(plainText: true))
+  }
+
+  @Test(
+    "Lock (Caps/Shift Lock) alone doesn't disqualify a plain Enter — it's a toggle, not a held modifier"
+  )
+  func lockAloneStillCommitsPlain() {
+    #expect(
+      KeyEventMapping.action(keyval: Self.returnKey, state: Self.lockMask)
         == .commit(plainText: false))
+  }
+
+  @Test("Lock doesn't rescue an otherwise-unimplemented modifier combination")
+  func lockDoesNotRescueUnimplementedModifier() {
+    #expect(
+      KeyEventMapping.action(keyval: Self.returnKey, state: Self.controlMask | Self.lockMask)
+        == nil)
   }
 
   @Test("Escape always dismisses")
@@ -77,10 +122,29 @@ struct GTKKeyEventMappingTests {
     #expect(KeyEventMapping.action(keyval: Self.pLower, state: 0) == nil)
   }
 
-  @Test("Ctrl+Delete deletes; plain Delete does nothing")
-  func ctrlDeleteDeletes() {
+  // MARK: - Delete: bare Delete now works, Ctrl+Delete kept as an accepted
+  // alias (see `KeyEventMapping.swift`'s own doc comment on this case for
+  // why both are intentionally accepted, mirroring macOS's `PickerView
+  // .handle(_:)` `.delete` case matching "regardless of modifiers").
+
+  @Test("Plain Delete deletes — no modifier required, matching macOS parity")
+  func plainDeleteDeletes() {
+    #expect(KeyEventMapping.action(keyval: Self.delete, state: 0) == .delete)
+  }
+
+  @Test("Ctrl+Delete still deletes — kept as an accepted alias, not dropped")
+  func ctrlDeleteStillDeletes() {
     #expect(KeyEventMapping.action(keyval: Self.delete, state: Self.controlMask) == .delete)
-    #expect(KeyEventMapping.action(keyval: Self.delete, state: 0) == nil)
+  }
+
+  @Test("Delete deletes regardless of any other modifier bit held (Shift, Super, Lock)")
+  func deleteDeletesRegardlessOfOtherModifiers() {
+    #expect(KeyEventMapping.action(keyval: Self.delete, state: Self.shiftMask) == .delete)
+    #expect(KeyEventMapping.action(keyval: Self.delete, state: Self.superMask) == .delete)
+    #expect(KeyEventMapping.action(keyval: Self.delete, state: Self.lockMask) == .delete)
+    #expect(
+      KeyEventMapping.action(keyval: Self.delete, state: Self.controlMask | Self.shiftMask)
+        == .delete)
   }
 
   @Test("Ctrl+1/2/3 switch tabs by index")

@@ -99,6 +99,19 @@
 // has +24pt. Both positive; the hint was added. A future addition anywhere
 // in this bar needs the same re-measurement — the margin is real but no
 // longer the +85/+89pt this file's T-SET4 round left.
+//
+// Linux Delete parity fix: `KeyEventMapping.swift`'s `Keyval.delete` case
+// used to require Ctrl (an inconsistency with no platform reason — macOS's
+// own `.delete` case has always matched bare Delete unconditionally). Now
+// that bare Delete works on Linux too, `ShortcutModifierVocabulary
+// .platformDefault`'s Linux `delete` hint changed from `"Ctrl+Delete
+// delete"` to `"Delete delete"` — see that property's own doc comment
+// below for why Ctrl+Delete (still accepted, just no longer advertised)
+// isn't listed as a second alias. Text-length-only change (19 chars ->
+// 13), so it can only shrink this footer's total width, never grow it — no
+// re-measurement against the width budget above is needed (that budget is
+// macOS-only in the first place; this file's Linux branch renders in
+// `ClipnestGTK`'s own window, not `PickerPanel`'s fixed-width one).
 import ClipnestCore
 import Foundation
 
@@ -151,6 +164,121 @@ public struct HighlightedItemCapabilities: Equatable, Sendable {
   }
 }
 
+// T-BUG2 (parity-audit bug #2): the footer used to hardcode macOS glyphs
+// unconditionally — `Sources/ClipnestGTK/Window/PickerWindow+Reconcile.swift`
+// (out of this file's scope) calls this SAME `ShortcutHints.text(for:
+// capabilities:)` to build the GTK picker's own footer label, so Linux users
+// were shown "⌘F search · ⌘P pin · ⌘S save · ⌘⌫ delete · ⌘1/2/3 tabs · ⌘,
+// settings" verbatim — Mac glyphs for chords that don't exist there at all
+// (Linux's real bindings are Ctrl-based, per `KeyEventMapping.swift`, which
+// has NO binding whatsoever for save/new-snippet/replace-snippet/settings).
+// `ShortcutModifierVocabulary` below parameterizes every rendered chord so
+// each platform advertises only its own true bindings; `text(for:
+// capabilities:vocabulary:)`'s `vocabulary` parameter defaults to
+// `.platformDefault`, which resolves via `#if os(macOS)` INSIDE THIS FILE
+// (compiled once per platform, like every other `#if os(macOS)` in this
+// codebase) — so neither `PickerView.swift`'s macOS call site nor
+// `PickerWindow+Reconcile.swift`'s Linux call site needs to change AT ALL;
+// each keeps calling `text(for:capabilities:)` exactly as before and
+// automatically gets its own platform's real chords.
+//
+// Content-level reuse only, not an `import`: the task's own brief points at
+// `Sources/ClipnestGTK/Support/LinuxShortcutDescriptions.swift` as the
+// existing source of Linux combo strings, and the wording below is
+// deliberately kept identical to its entries — but `ShortcutHints.swift`
+// lives in `ClipnestViewModels`, which `ClipnestGTK` DEPENDS ON (see
+// `Package.swift`); `ClipnestViewModels` importing `ClipnestGTK` back would
+// be a circular module dependency and simply fail to build. There is
+// currently no lower shared module both `ClipnestGTK`'s Settings-tab
+// display and this footer can both import for a single source of truth,
+// and creating one would mean relocating `LinuxShortcutDescriptions.swift`
+// itself — a file owned by a different task/agent, out of this one's
+// scope. Flagged here (and in this task's decision log) as a known,
+// bounded duplication rather than a silent one: `ShortcutHintsTests.swift`
+// pins the exact Linux strings below, so any future rebind that updates
+// `LinuxShortcutDescriptions` without updating this file fails a test
+// instead of drifting unnoticed.
+/// The set of rendered chord strings `ShortcutHints.text(for:capabilities:)`
+/// composes its footer from — one platform's true key bindings. A
+/// capability whose chord doesn't exist on a platform at all (e.g. Linux's
+/// `KeyEventMapping` has no save/new-snippet/replace-snippet/settings
+/// binding) is `nil`, which `text(for:capabilities:vocabulary:)` omits
+/// entirely rather than rendering a nonexistent shortcut.
+public struct ShortcutModifierVocabulary: Sendable {
+  let move: String
+  let paste: String
+  let altEnterPlain: String
+  let altEnterOCRText: String
+  let search: String
+  let pin: String
+  let save: String?
+  let delete: String
+  let newSnippet: String?
+  let replaceSnippet: String?
+  let tabs: String
+  let settings: String?
+}
+
+extension ShortcutModifierVocabulary {
+  #if os(macOS)
+    /// macOS's real bindings — byte-identical to this file's pre-T-BUG2
+    /// hardcoded strings; `ShortcutHintsTests.swift`'s exact-string
+    /// assertions are the guard.
+    public static let platformDefault = ShortcutModifierVocabulary(
+      move: "↑↓ move",
+      paste: "⏎ paste",
+      altEnterPlain: "⌥⏎ plain",
+      altEnterOCRText: "⌥⏎ OCR text",
+      search: "⌘F search",
+      pin: "⌘P pin",
+      save: "⌘S save",
+      delete: "⌘⌫ delete",
+      newSnippet: "⌘N new",
+      replaceSnippet: "⌥⌘E replace",
+      tabs: "⌘1/2/3 tabs",
+      settings: "⌘, settings"
+    )
+  #else
+    /// Linux's real bindings, per `KeyEventMapping.swift` (the single
+    /// source of truth for what a key press actually DOES) — wording kept
+    /// identical to `LinuxShortcutDescriptions.all`'s combo strings for the
+    /// chords it also lists (compacted, no spaces around "/", matching this
+    /// footer's own terse style — e.g. `Ctrl+1/2/3` not `Ctrl+1 / 2 / 3`).
+    /// `save`/`newSnippet`/`replaceSnippet`/`settings` are `nil`: Linux has
+    /// no ⌘S/⌘N/⌥⌘E/⌘, equivalent bound at all, so this footer must not
+    /// advertise them (that was exactly the bug).
+    ///
+    /// `delete: "Delete delete"` (not "Ctrl+Delete delete"): `KeyEventMapping
+    /// .action(keyval:state:)`'s `Keyval.delete` case now matches bare
+    /// Delete regardless of modifiers (parity fix — it used to require
+    /// Ctrl, an inconsistency with macOS with no platform reason behind
+    /// it). Ctrl+Delete is still ALSO accepted (kept as an alias, not
+    /// dropped, for anyone who already learned it), but the footer
+    /// advertises only the simpler, canonical form actually bound — the
+    /// same "one hint per action, not a list of every accepted alias"
+    /// precedent macOS's own `delete: "⌘⌫ delete"` already sets one line
+    /// up: mac's `.delete` case *also* matches bare Delete unconditionally
+    /// (see `PickerView.handle(_:)`'s own doc comment), yet the mac hint
+    /// only ever names ⌘⌫, its own platform's conventional chord for
+    /// deleting a list item — Linux's convention is the bare key itself, so
+    /// that's what this hint names.
+    public static let platformDefault = ShortcutModifierVocabulary(
+      move: "↑/↓ move",
+      paste: "Enter paste",
+      altEnterPlain: "Alt+Enter plain",
+      altEnterOCRText: "Alt+Enter OCR text",
+      search: "Ctrl+F search",
+      pin: "Ctrl+P pin",
+      save: nil,
+      delete: "Delete delete",
+      newSnippet: nil,
+      replaceSnippet: nil,
+      tabs: "Ctrl+1/2/3 tabs",
+      settings: nil
+    )
+  #endif
+}
+
 public enum ShortcutHints {
   /// Builds the picker footer's tab-aware shortcut-hint string.
   ///
@@ -161,6 +289,11 @@ public enum ShortcutHints {
   ///   - capabilities: what the highlighted row supports — see
   ///     `HighlightedItemCapabilities`. Selects ⌥⏎'s wording (or omits it)
   ///     and whether `⌘S save` appears at all.
+  ///   - vocabulary: which platform's real chords to render — see
+  ///     `ShortcutModifierVocabulary`. Defaults to `.platformDefault`
+  ///     (resolved per-platform at THIS file's own compile time), so
+  ///     neither macOS's `PickerView` nor Linux's `PickerWindow+Reconcile`
+  ///     call site needs to pass this explicitly or change at all (T-BUG2).
   ///
   /// Deliberately omits an `esc close` hint (see this file's top doc
   /// comment for the width budget that forced it) — Esc-to-close remains
@@ -168,31 +301,45 @@ public enum ShortcutHints {
   /// longer spelled out in the footer.
   ///
   /// T-SET5: `⌘, settings` is appended last, for every tab/capability state
-  /// — it's a picker-wide action (opens Settings via `PickerView`'s ⌘, key
-  /// handler), not scoped to any one tab's own group, so it sits outside
-  /// the `switch tab` below rather than being duplicated into both branches.
-  public static func text(for tab: PickerTab, capabilities: HighlightedItemCapabilities) -> String {
-    var parts = ["↑↓ move", "⏎ paste"]
+  /// on platforms that have it (`vocabulary.settings != nil`) — it's a
+  /// picker-wide action, not scoped to any one tab's own group, so it sits
+  /// outside the `switch tab` below rather than being duplicated into both
+  /// branches.
+  public static func text(
+    for tab: PickerTab,
+    capabilities: HighlightedItemCapabilities,
+    vocabulary: ShortcutModifierVocabulary = .platformDefault
+  ) -> String {
+    var parts = [vocabulary.move, vocabulary.paste]
     switch capabilities.altEnterHint {
     case .plain:
-      parts.append("⌥⏎ plain")
+      parts.append(vocabulary.altEnterPlain)
     case .ocrText:
-      parts.append("⌥⏎ OCR text")
+      parts.append(vocabulary.altEnterOCRText)
     case nil:
       break
     }
-    parts.append("⌘F search")
+    parts.append(vocabulary.search)
     switch tab {
     case .history, .pinned:
-      parts.append("⌘P pin")
-      if capabilities.supportsSaveAsSnippet {
-        parts.append("⌘S save")
+      parts.append(vocabulary.pin)
+      if capabilities.supportsSaveAsSnippet, let save = vocabulary.save {
+        parts.append(save)
       }
-      parts.append("⌘⌫ delete")
+      parts.append(vocabulary.delete)
     case .snippets:
-      parts += ["⌘N new", "⌥⌘E replace", "⌘⌫ delete"]
+      if let newSnippet = vocabulary.newSnippet {
+        parts.append(newSnippet)
+      }
+      if let replaceSnippet = vocabulary.replaceSnippet {
+        parts.append(replaceSnippet)
+      }
+      parts.append(vocabulary.delete)
     }
-    parts += ["⌘1/2/3 tabs", "⌘, settings"]
+    parts.append(vocabulary.tabs)
+    if let settings = vocabulary.settings {
+      parts.append(settings)
+    }
     return parts.joined(separator: " · ")
   }
 }
