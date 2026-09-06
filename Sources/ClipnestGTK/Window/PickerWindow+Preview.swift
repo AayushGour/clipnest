@@ -7,7 +7,7 @@
 // row is under the pointer, via a single `GtkEventControllerMotion` on
 // `listBox` (using `gtk_list_box_get_row_at_y`, so no per-row controller is
 // needed), and (2) renders whatever `previewTargetID` the view model
-// settles on, once `PickerWindow+Polling.swift` notices it changed.
+// settles on, once `PickerWindow+Reconcile.swift` notices it changed.
 //
 // BOUNDED DECODE (the load-bearing requirement this task called out by
 // name — see project-context.md D42-D45): `GdkPixbufLoader`'s
@@ -70,7 +70,7 @@ extension PickerWindow {
     }
   }
 
-  /// Called by `PickerWindow+Polling.swift` when a poll tick notices
+  /// Called by `PickerWindow+Reconcile.swift` when a reconcile notices
   /// `previewTargetID` changed. Resolves the target `ClipItem` from
   /// `renderedRows` (mirroring how `PickerView` resolves it from `rows` on
   /// macOS before calling `updatePreview` — see that property's doc

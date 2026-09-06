@@ -25,6 +25,9 @@ extension PickerWindow {
     connectSearchEntry()
     connectWindowActivation()
     connectPreviewMotion()
+    // Linux parity pass (routed follow-up, 2026-09-06): the row right-click
+    // context menu — see `PickerWindow+ContextMenu.swift`.
+    connectContextMenuGesture()
   }
 
   private func connectKeyController() {
@@ -72,7 +75,7 @@ extension PickerWindow {
     case .commit(let plainText):
       MainActor.assumeIsolated { viewModel.selectHighlighted(plainText: plainText) }
     case .dismiss:
-      onDismiss()
+      dismiss()
     case .focusSearch:
       gtk_widget_grab_focus(searchEntry)
     case .togglePin:
@@ -98,7 +101,22 @@ extension PickerWindow {
       return
     }
     guard !isAwaitingInitialActivation else { return }
-    onDismiss()
+    // Linux parity pass (routed follow-up, 2026-09-06), real bug found by
+    // this task's own runtime verification: see `isContextMenuOpen`'s doc
+    // comment (`PickerWindow.swift`) — the right-click context menu's
+    // implicit autohide grab fires this exact `notify::is-active`
+    // transition, indistinguishable here from a genuine focus loss to a
+    // different application, without this guard.
+    guard !isContextMenuOpen else { return }
+    // Linux parity pass (routed follow-up, 2026-09-06), a second real bug
+    // in the same family: see `isEditorSessionActive`'s doc comment
+    // (`PickerWindow.swift`) — presenting `SnippetEditorWindow` also fires
+    // this exact transition (window-manager focus genuinely moves to that
+    // window), which used to fully dismiss the picker instead of just
+    // losing window-manager prominence, unlike macOS's side-by-side
+    // non-dismissing design.
+    guard !isEditorSessionActive else { return }
+    dismiss()
   }
 }
 
