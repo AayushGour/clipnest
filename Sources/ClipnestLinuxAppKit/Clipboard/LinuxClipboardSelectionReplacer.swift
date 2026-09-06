@@ -37,8 +37,19 @@ import Foundation
 public final class LinuxClipboardSelectionReplacer: SelectionReplacing {
   private let poster: any SyntheticKeystrokePosting
   private let pasteboard: LinuxPasteboard
-  private let writer: GTKClipboardWriting
+  private let writer: any PasteboardWriting
   private let frontmostAppProvider: any FrontmostAppReferenceProviding
+
+  /// Reused, rather than re-implemented, for the snapshot/restore in T-BUG1:
+  /// `pullRawPayload(from:)` already encodes the exact same "most-specific
+  /// representation wins" priority (file → image → rich text → text) this
+  /// type's own doc comment promises, and is the same logic every other
+  /// capture path in the app is held to — a second, hand-rolled priority
+  /// order here would be exactly the kind of drift-prone duplication
+  /// coding-standards.md's DRY rule exists to prevent. Only the raw-payload
+  /// half is used (never `classify(_:)`) — this replacer restores bytes, it
+  /// never needs a `ClipItem`/hash/preview.
+  private let payloadReader = PasteboardReader()
 
   private static let copyWaitStep: Duration = .milliseconds(15)
   private static let copyMaxWait: Duration = .milliseconds(500)
@@ -50,7 +61,7 @@ public final class LinuxClipboardSelectionReplacer: SelectionReplacing {
   public init(
     poster: any SyntheticKeystrokePosting,
     pasteboard: LinuxPasteboard,
-    writer: GTKClipboardWriting,
+    writer: any PasteboardWriting,
     frontmostAppProvider: any FrontmostAppReferenceProviding
   ) {
     self.poster = poster
@@ -63,7 +74,11 @@ public final class LinuxClipboardSelectionReplacer: SelectionReplacing {
     -> SelectionReplaceResult
   {
     beginSuppression()
-    defer { endSuppression() }
+    let snapshot = payloadReader.pullRawPayload(from: pasteboard)
+    defer {
+      restoreClipboard(snapshot)
+      endSuppression()
+    }
 
     let modifiers = TerminalAppRegistry.modifiers(
       forAppIdentifier: frontmostAppProvider.currentFrontmostAppRef()?.bundleID)
@@ -83,6 +98,43 @@ public final class LinuxClipboardSelectionReplacer: SelectionReplacing {
     guard poster.post(KeyChord(modifiers: modifiers, character: "v")) else { return .noMatch }
     try? await Task.sleep(for: Self.pasteSettle)
     return .replaced
+  }
+
+  /// Writes `snapshot` back out through whichever `PasteboardWriting` method
+  /// matches its representation, so the transaction's transient selection-
+  /// copy/expansion-body never survives past this call — the T-BUG1 fix.
+  ///
+  /// `snapshot == nil` covers two cases `LinuxPasteboard.pullRawPayload`
+  /// cannot tell apart: the clipboard was genuinely empty, OR it held
+  /// privacy-marked (concealed/transient) content that `LinuxPasteboard`
+  /// fails closed on and therefore never surfaces through `availableTypes`/
+  /// `string(forType:)`/`data(forType:)` in the first place (see that
+  /// type's own fail-closed contract) — there is no byte for this replacer
+  /// to have captured. Unlike macOS's `ClipboardSelectionReplacer`, which
+  /// snapshots raw `NSPasteboardItem`s below the privacy layer and so can
+  /// restore concealed content too, this replacer only ever sees the
+  /// clipboard through the same privacy-aware `LinuxPasteboard` every other
+  /// Linux capture path uses — restoring a byte sequence it was never
+  /// allowed to read is not possible without bypassing that fail-closed
+  /// contract, which is out of this type's scope. The best available
+  /// recovery in that case is clearing the transaction's own leftover text
+  /// via the smallest "clear" `PasteboardWriting` exposes (an empty-string
+  /// write) rather than leaving the copied selection or expansion body
+  /// sitting on the clipboard indefinitely.
+  private func restoreClipboard(_ snapshot: PasteboardReader.RawPayload?) {
+    switch snapshot {
+    case .file(let urlString):
+      guard let url = URL(string: urlString) else { return }
+      writer.writeFileURL(url)
+    case .image(let data):
+      writer.writeData(data, forType: .png)
+    case .richText(let rtf, let fallbackPlainText):
+      writer.writeRichText(rtf: rtf, plain: fallbackPlainText ?? "")
+    case .plainText(let text):
+      writer.writeString(text, forType: .string)
+    case nil:
+      writer.writeString("", forType: .string)
+    }
   }
 
   private func waitForChange(after before: Int) async -> Bool {

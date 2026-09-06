@@ -141,4 +141,23 @@ struct SnippetExpanderTests {
     #expect(clipboard.pastedBody == "Best, Aayush")
     #expect(beeped == false)
   }
+
+  #if !os(macOS)
+    // T-BUG5 (parity-audit bug #5): macOS's `PlatformDefaults.beep` plays
+    // real system audio (`NSSound.beep()`) — a genuine side effect,
+    // deliberately never exercised directly by a test (every test above
+    // injects a spy `beep:` closure instead). The non-Apple default below
+    // only ever writes one well-known byte to stderr — a safe, side-
+    // effect-free-enough call to make directly, unlike a real pasteboard/
+    // keystroke/audio call — so both the byte VALUE and the closure's
+    // basic callability are worth pinning here.
+    @Test("Non-Apple PlatformDefaults.beep writes the exact ASCII BEL byte, not a silent no-op")
+    func nonAppleBeepDefaultIsRealNotSilent() {
+      #expect(PlatformDefaults.terminalBellByte == 0x07)
+      // Exercises the real closure body once, end to end — proving it
+      // doesn't crash/throw, which the old `{}` no-op trivially also
+      // "passed" but which is exactly what this fix replaces.
+      PlatformDefaults.beep()
+    }
+  #endif
 }

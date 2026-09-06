@@ -83,18 +83,92 @@ struct PrivacyFilterTests {
     #expect(result == false)
   }
 
-  @Test("Rejects a built-in password-manager bundle ID")
-  func rejectsBuiltInExcludedApp() {
-    let filter = PrivacyFilter()
+  #if os(macOS)
+    @Test("Rejects a built-in password-manager bundle ID")
+    func rejectsBuiltInExcludedApp() {
+      let filter = PrivacyFilter()
 
-    let result = filter.shouldCapture(
-      availableTypes: [.string],
-      sourceBundleID: "com.1password.1password",
-      isPaused: false
+      let result = filter.shouldCapture(
+        availableTypes: [.string],
+        sourceBundleID: "com.1password.1password",
+        isPaused: false
+      )
+
+      #expect(result == false)
+    }
+  #else
+    // T-BUG3 (parity-audit bug #3): the macOS bundle-ID list above can never
+    // match on Linux — see `PrivacyFilter.builtInExcludedBundleIDs`'s
+    // `#else` branch doc comment for the Linux identifier list and its
+    // per-entry verification. This is the Linux equivalent of the macOS
+    // test above, not an addition to it — same assertion shape, a real
+    // Linux identifier instead of a macOS bundle ID.
+    @Test("Rejects a built-in Linux password-manager identifier")
+    func rejectsBuiltInExcludedApp() {
+      let filter = PrivacyFilter()
+
+      let result = filter.shouldCapture(
+        availableTypes: [.string],
+        sourceBundleID: "org.keepassxc.KeePassXC",
+        isPaused: false
+      )
+
+      #expect(result == false)
+    }
+
+    @Test(
+      "Rejects a built-in Linux identifier reported via WM_CLASS's differently-cased class component"
     )
+    func rejectsBuiltInExcludedAppRegardlessOfCase() {
+      let filter = PrivacyFilter()
 
-    #expect(result == false)
-  }
+      // KeePassXC's real WM_CLASS is lowercase ("keepassxc") — a window
+      // manager or Qt build that reports it capitalized must still match.
+      let result = filter.shouldCapture(
+        availableTypes: [.string],
+        sourceBundleID: "KeePassXC",
+        isPaused: false
+      )
+
+      #expect(result == false)
+    }
+
+    @Test(
+      "A Linux app name that merely CONTAINS an excluded identifier as a substring is not excluded"
+    )
+    func substringOfExcludedIdentifierDoesNotFalselyMatch() {
+      let filter = PrivacyFilter()
+
+      // Case-insensitive comparison must still be a FULL match, not a
+      // substring/contains check — "notkeepassxc" must not be excluded
+      // just because it contains "keepassxc".
+      let result = filter.shouldCapture(
+        availableTypes: [.string],
+        sourceBundleID: "notkeepassxc",
+        isPaused: false
+      )
+
+      #expect(result == true)
+    }
+
+    @Test("Every documented Linux built-in identifier actually excludes a capture")
+    func everyDocumentedLinuxIdentifierExcludes() {
+      let filter = PrivacyFilter()
+
+      // Pins each literal string added for T-BUG3 individually, so a typo
+      // in any ONE entry (which would otherwise silently just mean that
+      // one password manager isn't actually protected — exactly this
+      // task's own warning) fails a test instead of shipping unnoticed.
+      for identifier in PrivacyFilter.builtInExcludedBundleIDs {
+        let result = filter.shouldCapture(
+          availableTypes: [.string],
+          sourceBundleID: identifier,
+          isPaused: false
+        )
+        #expect(result == false, "expected \(identifier) to be excluded")
+      }
+    }
+  #endif
 
   @Test("Rejects a caller-supplied custom excluded bundle ID")
   func rejectsCustomExcludedApp() {

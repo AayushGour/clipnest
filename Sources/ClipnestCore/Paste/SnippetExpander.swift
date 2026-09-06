@@ -99,9 +99,49 @@ public final class SnippetExpander {
   }
 #else
   extension PlatformDefaults {
-    /// No audible-feedback backend exists yet outside macOS — a silent
-    /// no-op. Never used in production; a future Linux backend will supply
-    /// a real one (e.g. a desktop-notification sound).
-    public static var beep: () -> Void { {} }
+    /// ASCII BEL (`\a`) — writing this byte to a terminal rings its bell
+    /// (and, under the X11/Xorg default `xset b` configuration, the
+    /// hardware/PC-speaker bell too on a plain X session), with no display
+    /// connection and no GTK/GDK link required. Internal (not `private`),
+    /// like `PrivacyFilter`'s concealed/transient raw UTI values, so
+    /// `SnippetExpanderTests` can pin its exact value directly — a typo'd
+    /// byte here would silently swap "audible feedback" for "print an
+    /// arbitrary control character," exactly the kind of silent failure
+    /// this feature's whole fix (T-BUG5) exists to prevent.
+    static let terminalBellByte: UInt8 = 0x07
+
+    /// T-BUG5 (parity-audit bug #5): previously a silent no-op — a snippet
+    /// expansion that matched nothing (or had no selection) gave the user
+    /// NO feedback at all on Linux, unlike macOS's audible `NSSound.beep()`
+    /// above, so there was no way to tell the feature had even run.
+    ///
+    /// `gdk_display_beep()` would be the closest Linux equivalent, but
+    /// it's unreachable from here: this file's module, `ClipnestCore`, is
+    /// a plain SPM library with ZERO third-party dependencies and no
+    /// GTK/display dependency at all by design (see coding-standards.md's
+    /// Dependency policy and Module layout — the whole point of this
+    /// module is being fully unit-testable with no UI/display). Linking
+    /// `CGtk4` into it would need a `Package.swift` change (out of this
+    /// task's scope, `Sources/ClipnestCore/Paste/Paster.swift`'s
+    /// `PlatformDefaults.beep` only) and would break that "zero UI"
+    /// contract for every other consumer of `ClipnestCore`. The terminal
+    /// bell is the dependency-free fallback the task's own brief names for
+    /// exactly this situation — no display, no GTK/GDK, and no extra
+    /// `libcanberra` dependency either (also not on coding-standards.md's
+    /// approved dependency list, and it would need its own new
+    /// `systemLibrary` target to add).
+    ///
+    /// This is audible only when Clipnest is actually attached to a
+    /// terminal (e.g. run manually or under CI) — a desktop-launched GUI
+    /// session's stderr is typically not a terminal at all. Still
+    /// injectable, like every other `PlatformDefaults.*` default (see
+    /// `SnippetExpander.init`'s `beep` parameter): a future Linux
+    /// composition-root change can override it with a real
+    /// `gdk_display_beep()`-backed closure once `LinuxAppEnvironment`
+    /// wires one up — out of this task's scope, since that file belongs to
+    /// a different owner.
+    public static var beep: () -> Void {
+      { FileHandle.standardError.write(Data([terminalBellByte])) }
+    }
   }
 #endif
