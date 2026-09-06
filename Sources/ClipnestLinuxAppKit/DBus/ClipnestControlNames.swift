@@ -8,6 +8,15 @@ import Foundation
 /// module spells any of these inline.
 enum ClipnestControlName {
   static let busName = "app.clipnest.Clipnest"
+  /// `WM_CLASS`'s `res_name` for every Clipnest toplevel, set via
+  /// `g_set_prgname` before `gtk_init()`. MUST stay equal to
+  /// `StartupWMClass` in `packaging/linux/desktop/applications/
+  /// app.clipnest.Clipnest.desktop` — a `.desktop` entry only associates
+  /// with a running window when the two match exactly.
+  static let programName = "clipnest"
+  /// Human-readable application name (`g_set_application_name`), matching
+  /// the `.desktop` entry's `Name=`.
+  static let displayName = "Clipnest"
   static let objectPath = "/app/clipnest/Clipnest"
   static let controlInterface = "app.clipnest.Control"
 }

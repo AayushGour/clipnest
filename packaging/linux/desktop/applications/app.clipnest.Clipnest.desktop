@@ -14,6 +14,11 @@ Terminal=false
 NoDisplay=false
 DBusActivatable=true
 StartupNotify=false
+# MUST equal WM_CLASS's res_name, which the app sets via g_set_prgname
+# (ClipnestControlNames.programName) before gtk_init(). Without this line the
+# shell cannot associate a running Clipnest window with this entry: wrong icon,
+# no launcher grouping.
+StartupWMClass=clipnest
 Categories=Utility;GTK;
 Keywords=clipboard;paste;history;snippet;clip;
 X-GNOME-UsesNotifications=false

@@ -36,8 +36,71 @@ public enum ClipnestGTKApplication {
 
   /// Initializes GTK — must be called exactly once, before constructing any
   /// `PickerWindow`/`SettingsWindow`, and before `runMainLoop()`.
-  public static func initializeGTK() {
+  ///
+  /// `programName` and `displayName` are set BEFORE `gtk_init()` because
+  /// GDK's X11 backend reads `g_get_prgname()` when it builds each toplevel's
+  /// `WM_CLASS` (`res_name` verbatim, `res_class` capitalized), and only at
+  /// window-realize time — a value set afterwards is silently ignored for
+  /// windows already realized.
+  ///
+  /// Not setting them at all is what this codebase did until a runtime check
+  /// on Ubuntu 22.04 caught it: every Clipnest toplevel carried
+  /// `WM_CLASS(STRING) = "", ""`, with three consequences, all user-visible.
+  /// (1) Nothing associates the running window with the installed
+  /// `app.clipnest.Clipnest.desktop`, so the shell shows a fallback icon and
+  /// cannot group windows to the launcher. (2)
+  /// `LinuxFrontmostApplicationProvider` resolves a source app by
+  /// `_GTK_APPLICATION_ID` → `WM_CLASS` → `_NET_WM_NAME`; with the first two
+  /// absent it fell all the way through to the window TITLE. (3) Because
+  /// `PickerWindow` deliberately sets its title to a per-invocation UUID (its
+  /// `windowToken`, the key the GNOME Shell extension matches on — see
+  /// `extension/src/core/placement.js`'s `_findByToken`), a clipboard change
+  /// captured while the picker held focus was recorded, and then DISPLAYED in
+  /// the picker's own source column, as a raw GUID.
+  ///
+  /// - Parameters:
+  ///   - programName: becomes `WM_CLASS`'s `res_name`. Must match the
+  ///     `StartupWMClass` in `packaging/linux/desktop/applications/
+  ///     app.clipnest.Clipnest.desktop` or the launcher association silently
+  ///     does not happen.
+  ///   - displayName: `g_set_application_name` — the human-readable name
+  ///     GTK/GLib surface in places like an app-chooser or a crash dialog.
+  public static func initializeGTK(programName: String, displayName: String) {
+    g_set_prgname(programName)
+    g_set_application_name(displayName)
     gtk_init()
+    installStyle()
+  }
+
+  /// Loads `PickerStyleSheet.css` once, for the default `GdkDisplay`, at
+  /// `GTK_STYLE_PROVIDER_PRIORITY_APPLICATION` — the exact priority band
+  /// meant for an application's own styling (above the active GTK theme,
+  /// below anything the user layers on top via `GTK_STYLE_PROVIDER_PRIORITY
+  /// _USER`/their own `gtk.css`). Every `PickerWindow`/`SettingsWindow`
+  /// instance shares this one provider; neither type loads its own.
+  ///
+  /// `gtk_css_provider_load_from_data` (not `_load_from_path`/`_load_from_
+  /// file`) because the stylesheet is a compiled-in Swift `String`, not a
+  /// loose file on disk — see `PickerStyleSheet.swift`'s top doc comment
+  /// for why.
+  private static func installStyle() {
+    let provider = gtk_css_provider_new()
+    let css = PickerStyleSheet.css
+    css.withCString { cString in
+      gtk_css_provider_load_from_data(provider, cString, -1)
+    }
+    guard let display = gdk_display_get_default() else { return }
+    // `gtk_style_context_add_provider_for_display`'s `provider` parameter is
+    // declared `GtkStyleProvider*` (an interface Clang couldn't synthesize a
+    // named Swift type for, unlike `GtkCssProvider` itself — see
+    // `GTKShims.swift`'s top doc comment for this exact per-type quirk) —
+    // `OpaquePointer(_:)` is a same-address reinterpretation, not an
+    // offsetting cast: GObject interfaces add no data to an instance's
+    // layout, only vtable methods looked up via its class, so this is
+    // exactly the "GObject subclass pointers are structurally compatible"
+    // fact `gtkPointer<T>(_:)` documents, applied in the other direction.
+    gtk_style_context_add_provider_for_display(
+      display, OpaquePointer(provider), UInt32(GTK_STYLE_PROVIDER_PRIORITY_APPLICATION))
   }
 
   /// Runs GTK's event loop on the calling thread until `quitMainLoop()` is
