@@ -93,7 +93,7 @@ The picker has three tabs, switchable by clicking or with **⌘1 / ⌘2 / ⌘3**
 
 ### Pasting an item
 
-Highlight an item (click it, or arrow to it) and press **Return** — Clipnest pastes it into whatever app was frontmost before you opened the picker. If the source item had rich formatting, Return keeps it; press **⌥Return** instead to strip it down to plain text.
+Highlight an item (click it, or arrow to it) and press **Return** — Clipnest pastes it into whatever app was frontmost before you opened the picker. If the source item had rich formatting, Return keeps it; press **⌥Return** instead to strip it down to plain text — or, for an image with [recognized text](#recognizing-text-in-images-ocr), to paste that text instead of the image.
 
 If Accessibility isn't granted, "pasting" just places the item on your regular clipboard — press ⌘V yourself to finish the paste.
 
@@ -113,9 +113,21 @@ Hover your pointer over any row (or arrow to it) and a preview panel appears bes
 - **Text** (including rich text and links) shows the full content, scrollable — it loads in chunks as you scroll for very large clips, so nothing hangs.
 - **Files** show the name, size, and full path — read from what was captured at copy time, not the live file, so it works even if the file has since moved.
 
+### Recognizing text in images (OCR)
+
+Clipnest can read the text inside a screenshot or copied image on-device (no upload, no network call) and make it searchable, and lets you paste that text instead of the image itself.
+
+This is **off by default** — it's a real privacy trade-off, since text a screenshot only ever showed visually becomes indexed and searchable, including anything sensitive that happened to be on screen. To turn it on: open Settings (`⌘,`) → **History** → **Recognize text in copied images**. Right below that toggle, a **Recognition quality** picker chooses **Fast** or **Accurate** (the default) for every *future* copy — Accurate reads punctuation, digits, and arrows correctly but takes longer; Fast is quicker but can confuse similar characters like `1` and `l`. Neither can read keyboard symbols such as ⌘⌥⇧.
+
+Turning the toggle on only affects new copies from then on — it never re-processes images already in your history. To recognize text in existing images, use the separate **Recognize Text in Existing Images** button on the same tab (it works independent of whether the toggle above is on, and never flips it).
+
+Once an image has recognized text:
+- It shows up in search results for that text, same as any other item.
+- Highlighting it in the picker adds an **⌥Return OCR text** option to the footer — pasting with `⌥Return` (instead of `Return`) pastes the recognized text instead of the image.
+
 ### How much history does Clipnest keep?
 
-There's currently no automatic limit or expiration — Clipnest keeps everything you copy until you delete it yourself (or delete your whole history — see [Uninstall](#10-uninstall)). Configurable retention (e.g. "keep the last 500 items" or "keep 30 days") is planned but not available yet.
+By default, Clipnest keeps everything you copy until you delete it yourself (or delete your whole history — see [Uninstall](#10-uninstall)). Open Settings (`⌘,`) → **History** to change this: keep **Everything** (the default), the most recent N items, or only the last N days — pinned items are always kept regardless of this setting. **Clear All History…** on the same tab deletes everything, including pinned items.
 
 ## 6. Snippets
 
@@ -160,6 +172,7 @@ If nothing is selected, or the selected text doesn't match any Tag, you'll hear 
 Clipnest is built to never see or store things it shouldn't:
 
 - **Password managers are ignored automatically**, with no setting that can turn this off. 1Password, Bitwarden, LastPass, Dashlane, and Keeper are excluded by default whenever a copy comes from one of those apps.
+- **You can exclude other apps too.** Open Settings (`⌘,`) → **Apps** to add any app to the exclude list (pick it from an Open panel) or remove one you added — the built-ins above stay locked and can't be removed from there.
 - **"Don't record this" copies are always honored.** Many apps (password managers among them) mark a copy as *concealed* or *transient* using a standard macOS clipboard convention — Clipnest checks for this marker first, before anything else, and it can never be bypassed.
 - **No content ever appears in logs.** If something goes wrong internally, Clipnest logs only metadata (an item's ID, an error type) — never the text, image, or file content involved.
 - **Nothing leaves your Mac.** There are no servers, no sync, no telemetry, and no network calls anywhere in the app.
@@ -192,7 +205,7 @@ Nothing here is synced or backed up anywhere outside your normal Mac backups (e.
 | --- | --- |
 | Move selection up / down | `↑` / `↓` |
 | Paste selected item / snippet | `Return` |
-| Paste without formatting | `⌥Return` |
+| Paste without formatting (or recognized text, for an OCR'd image) | `⌥Return` |
 | Focus the search field | `⌘F` |
 | Pin / unpin highlighted item | `⌘P` |
 | Save highlighted item as a snippet | `⌘S` |
@@ -204,7 +217,7 @@ Nothing here is synced or backed up anywhere outside your normal Mac backups (e.
 | Open Settings | `⌘,` |
 | Close the picker | `Esc` |
 
-These shortcuts aren't yet customizable from within the app — a Settings window for rebinding them is planned but not shipped.
+The picker's own action chords above (`⌘F`, `⌘P`, `⌘S`, `⌘⌫`/`Delete`, `⌘1`/`⌘2`/`⌘3`) are fixed and aren't customizable from within the app. The two **global** shortcuts (`⌥⌘V`, `⌥⌘E`) are, though: open Settings (`⌘,`) → **Shortcuts** and click either recorder to record a new key combination.
 
 `⌘,` (Command+Comma) also opens Settings while the Settings window itself is focused — the standard macOS convention — but it is deliberately **not** a global shortcut: unlike `⌥⌘V`/`⌥⌘E` above, it only works from inside the picker or from Settings itself, so it never takes `⌘,` away from whatever other app you're using (that app's own Preferences/Settings shortcut keeps working normally).
 
@@ -214,7 +227,7 @@ These shortcuts aren't yet customizable from within the app — a Settings windo
 Check whether you're copying from a password manager (1Password, Bitwarden, LastPass, Dashlane, Keeper) — those are deliberately never captured, by design. If it's a different app, make sure Clipnest is actually running (look for its icon in the menu bar) — if it quit or crashed, nothing will be captured until you relaunch it.
 
 **⌥⌘V (or ⌥⌘E) doesn't do anything.**
-Another app may already be using that combination — a common source of silent conflicts with global hotkeys. Quit or check the shortcut settings of anything else that might claim Option+Command+V or Option+Command+E (menu-bar utilities, window managers, other clipboard tools). There's currently no in-app way to rebind Clipnest's own shortcuts, so the fix has to come from the other app.
+Another app may already be using that combination — a common source of silent conflicts with global hotkeys. Open Settings (`⌘,`) → **Shortcuts** and rebind "Open Clipnest" or "Expand snippet" to something else, or quit/check the shortcut settings of whatever else claims Option+Command+V or Option+Command+E (menu-bar utilities, window managers, other clipboard tools).
 
 **Paste puts the item on my clipboard but doesn't type it into the app.**
 This means Accessibility isn't granted yet. Go to System Settings → Privacy & Security → Accessibility and make sure Clipnest is turned on. The paste attempt that triggered the permission dialog will still only copy to your clipboard — press ⌘V once yourself, and every paste after that should work automatically.

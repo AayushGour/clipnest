@@ -34,3 +34,9 @@ tools/glyph-classifier/real_eval_crops/
 # tools/stress-harness; the findings that matter live in .claude/logs/tester.md
 # and the task board, not in 15k lines of raw stack traces.
 .claude/logs/stress-artifacts/
+
+# extension/test/*.test.js load extension/src/core/*.js via `imports.core.*`
+# (mirroring how build.sh lays out a variant) -- test/core/ is a scratch copy
+# for that, never a second source of truth. See extension/README.md's Tests
+# section.
+extension/test/core/

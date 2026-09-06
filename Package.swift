@@ -77,6 +77,13 @@ let package = Package(
     .systemLibrary(
       name: "CGtk4", path: "Sources/CGtk4", pkgConfig: "gtk4",
       providers: [.apt(["libgtk-4-dev"])]),
+    // T-RT4: GDK's X11-backend-specific surface API (`<gdk/x11/gdkx.h>`) —
+    // a separate module from `CGtk4` (see `Sources/CGdkX11/shim.h`'s doc
+    // comment for why) so only `ClipnestGTK`, which actually needs
+    // `_NET_WM_WINDOW_TYPE_UTILITY` placement, links libX11 for it.
+    .systemLibrary(
+      name: "CGdkX11", path: "Sources/CGdkX11", pkgConfig: "gtk4",
+      providers: [.apt(["libgtk-4-dev", "libx11-dev"])]),
     // No pkgConfig: ONNX Runtime is NOT in Ubuntu's default repositories, so
     // it is vendored by the .deb rather than resolved from the distro. This is
     // the documented exception to the "system libraries only" dependency rule.
@@ -88,16 +95,23 @@ let package = Package(
     // repositories and must be vendored — mirroring the packaging split, where
     // clipnest-ocr is its own .deb that `clipnest` only Recommends. Everything
     // else builds on a stock Ubuntu box with apt dependencies alone.
-    // CLIPNEST_HAS_ONNXRUNTIME is deliberately NOT defined here. `canImport`
-    // cannot express "module declared but headers absent" — SwiftPM/Clang hard-
-    // errors on any textual import of a declared-but-unbuildable C module, even
-    // inside #if canImport. Until the .deb vendors onnxruntime_c_api.h, the
-    // target compiles with OCR reporting itself unavailable rather than failing
-    // the build. The packaging step adds:
-    //   swiftSettings: [.define("CLIPNEST_HAS_ONNXRUNTIME")]
+    //
+    // No compile-time flag gates this target. An earlier design used a
+    // `CLIPNEST_HAS_ONNXRUNTIME` flag (see D66 in .claude/project-context.md)
+    // because `import COnnxRuntime` textually appearing anywhere hard-errored
+    // the build the moment the real `onnxruntime_c_api.h` header was
+    // unreachable — `canImport` cannot express "module declared but headers
+    // absent." That no longer applies: `Sources/COnnxRuntime/shim.h` is now a
+    // fully self-contained, hand-derived OrtApi/OrtApiBase declaration that
+    // never includes the real header, so `import COnnxRuntime` always
+    // resolves and this target's OCR code is unconditionally compiled in.
+    // Whether OCR actually does anything is decided at RUNTIME instead, by
+    // `OrtRuntimeAvailability.isAvailable` (a `dlopen` check for
+    // `libonnxruntime.so.1` — see `Sources/ClipnestLinuxOCR/Runtime/
+    // OrtLibrary.swift`), which is `false` until `clipnest-ocr` is installed.
     .target(
       name: "ClipnestLinuxOCR", dependencies: ["ClipnestCore", "COnnxRuntime"]),
-    .target(name: "ClipnestGTK", dependencies: ["ClipnestViewModels", "CGtk4"]),
+    .target(name: "ClipnestGTK", dependencies: ["ClipnestViewModels", "CGtk4", "CGdkX11"]),
     // The app is split into a LIBRARY plus a thin executable because an
     // executable target's module cannot be `@testable import`ed — SwiftPM
     // reports "is the main module of an executable, and cannot be imported by

@@ -10,6 +10,8 @@ which constructs `PickerViewModel`/`SettingsStore` and owns their lifetime.
 ## Contents
 - [`ClipnestGTKApplication`](#clipnestgtkapplication)
 - [`PickerWindow`](#pickerwindow)
+- [Row actions and the right-click context menu](#row-actions-and-the-right-click-context-menu)
+- [`SnippetEditorWindow`](#snippeteditorwindow)
 - [`SettingsWindow`](#settingswindow)
 - [Actor isolation](#actor-isolation)
 - [Window placement](#window-placement)
@@ -44,6 +46,8 @@ public final class PickerWindow: @unchecked Sendable {
   public init(viewModel: PickerViewModel, onDismiss: @escaping () -> Void)
   public func show(at point: (x: Int, y: Int)?)
   public func hide()
+  public func dismiss()                    // the single user-initiated-dismissal path
+  public func refocusAfterEditorClose()    // called once SnippetEditorWindow closes
   public var windowToken: String { get }
 }
 ```
@@ -77,8 +81,134 @@ the human-readable list also shown in Settings → Shortcuts):
 | Escape | Dismiss (via `onDismiss`) |
 | Ctrl+F | Focus the search field |
 | Ctrl+P | Toggle pin |
-| Ctrl+Delete | Delete highlighted item |
+| Delete (Ctrl+Delete also accepted) | Delete highlighted item |
 | Ctrl+1 / 2 / 3 | Switch to History / Pinned / Snippets |
+
+## Row actions and the right-click context menu
+
+Linux parity pass (2026-09-06): the picker previously had no way to act on a
+row beyond selecting it — no clickable pin/delete, no way to save a row as a
+snippet, no right-click menu at all, and snippets were entirely read-only
+(`PickerViewModel.presentSnippetEditor` was never injected). Every action
+below routes through the shared `PickerViewModel` (`ClipnestViewModels`) —
+this module reimplements none of the pin/delete/snippet-CRUD logic, only the
+GTK presentation of it.
+
+Gating is pure, GTK-free, and unit-tested — `ItemRowActions`/
+`SnippetRowActions` (`Sources/ClipnestGTK/Window/ItemRowActionContent.swift`/
+`SnippetRowActionContent.swift`), mirroring macOS `ItemRow.swift`/
+`SnippetRow.swift` exactly:
+
+```swift
+public enum ItemRowAction: Equatable, Sendable {
+  case togglePin, saveAsSnippet, copyRecognizedText, delete
+}
+public struct ItemRowActionEntry: Equatable, Sendable {
+  public let action: ItemRowAction
+  public let label: String
+  public let isDestructive: Bool
+}
+public enum ItemRowActions {
+  public static func buttons(for item: ClipItem) -> [ItemRowActionEntry]
+  public static func contextMenu(for item: ClipItem) -> [ItemRowActionEntry]
+}
+```
+
+- **History/Pinned row buttons** (`buttons(for:)`, rendered by
+  `PickerWindow+Rows.swift`): always Pin/Unpin and Delete; "Save as Snippet"
+  only when `item.supportsSaveAsSnippet` (`.text`/`.link`) — no dead button
+  renders for `.richText`/`.image`/`.file`. "Copy Recognized Text" never
+  appears as a button, matching `ItemRow.rowActions`.
+- **History/Pinned right-click menu** (`contextMenu(for:)`, rendered by
+  `PickerWindow+ContextMenu.swift`): everything `buttons(for:)` offers, plus
+  "Copy Recognized Text" when `item.hasRecognizedText` is true.
+- **Snippets row buttons and context menu** (`SnippetRowActions.buttons()`/
+  `.contextMenu()`): identical, ungated — Edit, Delete.
+- **Dispatch** — one shared pair of methods
+  (`PickerWindow.performItemRowAction(_:for:)`/`.performSnippetRowAction(_:for:)`,
+  `PickerWindow+RowActions.swift`) used by BOTH the always-visible buttons
+  and the context menu, so each action is wired to `PickerViewModel` exactly
+  once: `.togglePin` → `togglePin(_:)`, `.saveAsSnippet` →
+  `presentSaveAsSnippetForm(from:)`, `.copyRecognizedText` →
+  `copyRecognizedText(from:)`, `.delete`/`.edit` → `delete(_:)`/
+  `deleteSnippet(_:)`/`presentEditSnippetForm(_:)`.
+- The context menu is a plain `GtkPopover` of `GtkButton`s (built fresh per
+  right-click via `gtk_popover_set_child`) rather than a `GtkPopoverMenu`/
+  `GMenu` model — this module has no existing `GMenu`/`GAction`
+  infrastructure, and one small four-entries-at-most menu didn't warrant
+  introducing it. Right-click detection is one `GtkGestureClick` (button 3
+  only) attached to `listBox` itself, resolving the target row via
+  `gtk_list_box_get_row_at_y` — no per-row gesture needed.
+
+## Creating a snippet from scratch
+
+Third gap found while wiring the above: `PickerViewModel.presentCreateSnippetForm()`
+had no entry point anywhere on Linux — the row actions above only ever reach
+`presentSaveAsSnippetForm(from:)` (`.createFromClip`, prefilled from an
+existing item) or `presentEditSnippetForm(_:)`, never a blank `.create`
+form. `PickerWindow+Chips.swift` now adds a `newSnippetButton` (`list-add`
+icon, tooltip "New Snippet") to the tab row, trailing after a `hexpand`
+spacer — matching macOS `PickerView.tabBar`'s trailing `"plus.circle.fill"`
+button exactly, including its one piece of gating: visible ONLY while the
+Snippets tab is active (`PickerWindow.handleTabToggled(tab:isActive:)`
+toggles it on every tab switch, from either a tab-button click or
+`Ctrl+1/2/3`). Clicking it calls `presentCreateSnippetForm()` — no new
+`PickerViewModel` logic. Not mirrored: macOS's ⌘N keyboard shortcut for the
+same action — out of this file's owned scope
+(`Sources/ClipnestGTK/Support/KeyEventMapping.swift` is a different, in-
+progress agent's territory this session).
+
+## `SnippetEditorWindow`
+
+Linux parity pass (2026-09-06): the GTK4 counterpart of macOS's identically
+named `SnippetEditorWindow` (+ `SnippetFormView`) — the presenter
+`PickerViewModel.presentSnippetEditor` needed. This was the one unfilled
+seam that made every snippet-editing feature (create, edit, "Save as
+Snippet") a silent no-op on Linux; `saveHighlightedAsSnippet()`,
+`presentCreateSnippetForm()`, `presentEditSnippetForm(_:)`,
+`createSnippet(title:body:keyword:)`, `updateSnippet(_:title:body:keyword:)`,
+and `deleteSnippet(_:)` were already fully implemented in the shared
+`PickerViewModel` and simply had nowhere to render.
+
+```swift
+public final class SnippetEditorWindow: @unchecked Sendable {
+  public init()
+  public func show(
+    mode: SnippetFormMode,
+    onSave: @escaping (_ title: String, _ body: String, _ keyword: String?) -> Void,
+    onClose: @escaping () -> Void
+  )
+}
+```
+
+- Two fields, matching macOS exactly: **Tag** (single-line, shown as
+  placeholder text inside the field — no separate label row) and **Body**
+  (multi-line, `GtkTextView`). Save is disabled until both are non-empty
+  after trimming (`SnippetFormValidation.isSaveEnabled(tag:body:)`, mirroring
+  `SnippetFormView.isSaveDisabled`), re-evaluated live on every keystroke.
+- Buttons: **Cancel**, **Save** — same labels/order as macOS. Title (both
+  the window's titlebar text and an in-content heading): **"New Snippet"**/
+  **"Edit Snippet"** (`SnippetFormMode.isNew`).
+- On Save, `onSave` receives the trimmed Tag as BOTH `title` and `keyword`
+  (the Tag doubles as the expansion keyword) and the trimmed Body — the
+  caller (the composition root) decides create vs. update by switching on
+  the same `mode` it passed to `show`; this type has no `SnippetStore`
+  opinion of its own.
+- `onClose` fires exactly once per open, regardless of whether the user
+  clicked Save, Cancel, or the titlebar close button — all three route
+  through one `GtkWindow::close-request` handler.
+- Reused across calls (`gtk_window_set_hide_on_close`), mirroring
+  `SettingsWindow`'s lifetime — never destroyed/rebuilt.
+- **Not mirrored (impossible on this platform):** macOS's side-by-side pair
+  placement beside the picker panel — GTK4 removed `gtk_window_move` from
+  the portable `GtkWindow` API entirely (see
+  [Window placement](#window-placement)). This window falls back to the
+  window manager's own placement.
+- The composition root (`LinuxAppEnvironment.init`) calls
+  `pickerWindow.refocusAfterEditorClose()` from `onClose` — the GTK
+  counterpart of macOS's `panel.makeKey(); viewModel.refocusSearchField()`
+  (presenting this window takes window-manager focus away from the picker,
+  same as macOS's editor making itself key).
 
 ## `SettingsWindow`
 
@@ -97,9 +227,25 @@ public final class SettingsWindow: @unchecked Sendable {
   state from `settings`.
 - `show()` — presents the window. Clicking its native close button hides
   (not destroys) it — `gtk_window_set_hide_on_close`.
-- The Shortcuts tab is **read-only** on Linux (unlike macOS's rebindable
-  `ShortcutsSettingsView`) — see `LinuxShortcutDescriptions.swift`'s doc
-  comment for why.
+- The Shortcuts tab (`SettingsWindow+Shortcuts.swift`) has two sections.
+  The GLOBAL toggle-picker shortcut is shown with its live value (read from
+  the shared `app.clipnest.Clipnest.Keybindings` GSettings schema via
+  `Hotkeys/GlobalHotkeyAccelerator.swift` — the SAME schema the GNOME Shell
+  extension reads, see that schema's own header comment) and can be
+  rebound with the "Record New Shortcut…" button: it captures the next key
+  combination via a `GtkEventControllerKey`, validates it
+  (`Support/GlobalHotkeyAcceleratorValidation.swift` — requires at least one
+  of Control/Alt/Shift/Super, on top of GTK's own `gtk_accelerator_valid`),
+  persists it, and re-installs the GSettings custom-keybinding floor
+  (`ToggleHotkeyFloorBinding`, `ClipnestLinuxAppKit`) so the new chord also
+  works without the Shell extension. An empty/unmodified/reserved capture is
+  rejected with an inline error and recording stays open for another
+  attempt. The eight in-picker chords below it stay a **read-only**
+  reference list — macOS's own `ShortcutsSettingsView` has no rebind (or
+  listing) UI for those either, only its two `KeyboardShortcuts.Recorder`s
+  for the global hotkeys, so there is no parity gap to close there. See
+  `LinuxShortcutDescriptions.swift`'s doc comment for that list's own
+  scope.
 - The Apps tab's "excluded app" identifier is platform-agnostic free text
   (a bundle ID on macOS; whatever the platform layer's focused-app lookup
   reports on Linux, e.g. a `.desktop` file ID or WM class) — `SettingsStore`

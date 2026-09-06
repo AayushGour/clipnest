@@ -125,10 +125,14 @@ N days + clear-all · Apps: user exclusion list on top of the built-in password-
 Shortcuts: rebind both global hotkeys · Permissions). No free competitor has that combination — Maccy
 has none of the snippet/expansion story.
 
-**Verified against the code (2026-09-03, `main` @ 881b84d), not the README** — the README's roadmap is
-stale and still lists the Settings window as unbuilt. Settings live in `ClipnestApp/Sources/UI/Settings/`
-(5 tabs) backed by `ClipnestApp/Sources/System/SettingsStore.swift`; launch-at-login is
-`LaunchAtLoginController` (SMAppService); retention maps to `RetentionCap` in `ClipnestCore`.
+**Verified against the code (2026-09-03, `main` @ 881b84d), not the README** — at that commit, the
+README's roadmap was stale and still listed the Settings window as unbuilt. Settings live in
+`ClipnestApp/Sources/UI/Settings/` (5 tabs) backed by `ClipnestApp/Sources/System/SettingsStore.swift`;
+launch-at-login is `LaunchAtLoginController` (SMAppService); retention maps to `RetentionCap` in
+`ClipnestCore`. **Update (2026-09-06): the README has since been fixed** (commit 4fb0c15) — its Roadmap
+now checks off the Settings window and the feature list/§ Settings section both describe it in full, so
+this is no longer a live gap between the README and the code; kept here only as the historical record of
+what this analysis's own verification pass found.
 
 **Where Clipnest is actually behind:**
 
@@ -247,7 +251,9 @@ they'd break the "no network calls at all" claim, which is worth more than the f
 
 ## 5. Positioning
 
-The README undersells — it still advertises the Settings window as unbuilt. Clipnest's line should be:
+The README undersold Clipnest as of this analysis's 881b84d verification point (it advertised the
+Settings window as unbuilt) — since fixed in commit 4fb0c15, see §1's 2026-09-06 update. Clipnest's line
+should be:
 
 > **The free, open-source clipboard manager that also replaces your text expander.**
 > Native SwiftUI, opens at your cursor, remembers exactly as much as you tell it to, and never touches

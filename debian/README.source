@@ -87,33 +87,44 @@ Practical effect:
   This is a real constraint to solve before `dput`-ing to the PPA for real,
   not a packaging bug in this tree.
 
-Known gap #2 (real, verified, cross-scope) — OCR cannot yet be a soft
-Recommends at the binary level
+Known gap #2 (RESOLVED, kept here for the record) — OCR's hard-link problem
+is fixed; `clipnest` stays a genuine Recommends
 --------------------------------------------------------------------------
-`Sources/COnnxRuntime/module.modulemap` declares `link "onnxruntime"` — a
-HARD link (`DT_NEEDED` in the produced ELF). If `clipnest` were built with
-`-DCLIPNEST_HAS_ONNXRUNTIME` (the flag
-`Sources/ClipnestLinuxOCR/Runtime/OrtRuntimeAvailability.swift` gates real
-ONNX Runtime usage behind), the `clipnest` binary would hard-require
-`libonnxruntime.so.1` to even start the dynamic linker — and
-`dpkg-shlibdeps` would then force `clipnest-ocr` into `clipnest`'s
+This gap used to be real: `Sources/COnnxRuntime/module.modulemap` declared
+`link "onnxruntime"` — a HARD link (`DT_NEEDED` in the produced ELF) — so
+building `clipnest` with OCR compiled in at all would have made
+`libonnxruntime.so.1` a hard requirement to even start the dynamic linker,
+and `dpkg-shlibdeps` would then have forced `clipnest-ocr` into `clipnest`'s
 **Depends**, not just its Recommends, defeating the explicit "lighter
 install via `--no-install-recommends`" requirement.
 
-Interim decision for this packaging pass: `debian/rules` builds `clipnest`
-**without** `-DCLIPNEST_HAS_ONNXRUNTIME` — matching `Package.swift`'s own
-current, deliberate, documented safe default (see
-`OrtRuntimeAvailability.swift`'s own comment: "a build without vendored
-ONNX Runtime headers... degrades gracefully"). This keeps `clipnest`
-genuinely Recommends-only and installable without any vendored binary, and
-requires zero changes to `Sources/**`/`Package.swift` (out of this task's
-scope regardless). `clipnest-ocr`/`clipnest-ocr-data` are still fully
-packaged and ready — see `packaging/linux/vendor/onnxruntime/SOURCE.md` —
-for the moment `ClipnestLinuxOCR`'s onnxruntime linkage becomes `dlopen`-
-based instead of a hard link (mirroring the exact precedent already set for
-`Glibc.ioctl` — see decision D59 in `.claude/project-context.md`), which is
-the fix this really needs; that's Sources-owned work, not packaging's to
-make. Flagged for the architect to arbitrate/assign.
+**That is no longer true — verified against the current tree, not assumed.**
+`Sources/COnnxRuntime/module.modulemap` now declares no `link` directive at
+all, and `Sources/COnnxRuntime/shim.h` is a fully self-contained,
+hand-derived declaration of the ONNX Runtime C API structs (`OrtApi`/
+`OrtApiBase`) that never includes the real `onnxruntime_c_api.h` — so
+`import COnnxRuntime` always resolves, on any machine, whether or not
+`clipnest-ocr` is installed. `Sources/ClipnestLinuxOCR/Runtime/
+OrtLibrary.swift` resolves the real `libonnxruntime.so.1` and its
+`OrtGetApiBase()` entry point at RUNTIME via `dlopen`/`dlsym` (mirroring the
+`Glibc.ioctl` precedent, D59 in `.claude/project-context.md`) — never a
+link-time dependency — so `ClipnestLinuxOCR`'s OCR-calling code
+(`OrtSession`, `OrtEnvironment`, `OCRPipeline`) is unconditionally compiled
+into the `clipnest` binary, and there is nothing ONNX-Runtime-shaped for
+`dpkg-shlibdeps` to see in the produced ELF. `clipnest` genuinely stays
+Recommends-only for `clipnest-ocr`, with no packaging-time compile flag
+needed: `debian/rules` never passed `-DCLIPNEST_HAS_ONNXRUNTIME` (it still
+doesn't, and doesn't need to — see `Package.swift`'s own comment on the
+`ClipnestLinuxOCR` target), and that flag is now dead anyway — no
+`#if CLIPNEST_HAS_ONNXRUNTIME` remains anywhere in `Sources/**` (see
+`OrtRuntimeAvailability.swift`'s own "superseded design" note); whether OCR
+actually does anything is decided at RUNTIME instead, by
+`OrtRuntimeAvailability.isAvailable` (a `dlopen` check), which is `false`
+until `clipnest-ocr` is installed.
+
+The one genuinely open blocker left before `clipnest-ocr-data` can ship
+real recognition is Known gap #3, below — the PP-OCRv5 model files
+themselves, not anything about how `clipnest`/`clipnest-ocr` link together.
 
 Known gap #3 — PP-OCRv5 model files are not vendored
 -----------------------------------------------------
