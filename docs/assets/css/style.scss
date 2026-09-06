@@ -1,0 +1,171 @@
+---
+---
+
+// Clipnest — lightweight brand pass over the minima theme (T72, ux-designer).
+// This is minima's documented override path: Jekyll compiles this .scss (the
+// front matter above makes that happen) and importing "minima" pulls in the
+// theme's compiled CSS first; everything below layers on top of it via the
+// normal cascade. Deliberately NOT a from-scratch design system rebuild —
+// scope is a color/type/spacing pass only, per T72.
+//
+// Tokens are sampled directly from the existing, already-approved brand
+// artifacts, not invented here:
+//   - assets/clipnest-icons/README.md "Brand colors" table (card/nest/paper hexes)
+//   - assets/clipnest-icons/preview.html's own :root custom-property palette
+//     (--paper/--panel/--ink/--muted/--line/--accent, light + dark blocks)
+// This keeps the marketing site, the icon-set preview page, and the OG/social
+// PNGs (docs/assets/og-image.png, github-social-preview.png) visually one
+// family — Nielsen heuristic #4, consistency & standards.
+@import "minima";
+
+:root {
+  --paper: #F6F3EC;   // page background (light)
+  --panel: #FBF9F3;   // card/header background (light)
+  --ink: #2A231C;     // primary text / headings (light)
+  // NOTE: --muted below is intentionally split into two tokens where
+  // preview.html only had one (#7C7061). Verified contrast math (WCAG 2.2
+  // relative-luminance formula) showed #7C7061 on #F6F3EC = 4.36:1 — passes
+  // AA for large text (>=24px, or >=18.66px bold) but FAILS the 4.5:1 floor
+  // for regular body text. Splitting avoids silently shipping a body-text
+  // contrast failure while still reusing the exact brand hue family.
+  --muted-strong: #56493A; // regular-size secondary text — 7.9:1 on --paper (AA/AAA safe)
+  --muted-large: #7C7061;  // large-text-only (badges, eyebrows, captions >=24px) — 4.36:1 on --paper
+  --accent: #7A5A3C;       // links, eyebrows, CTA fills — 5.6:1 on --paper
+  --line: #E7DECF;         // borders, hairlines, table rules
+  --lilac: #C6BEDC;        // brand card accent (from clipnest-color.svg)
+  --peach: #E7CEB0;        // brand card accent (from clipnest-color.svg)
+  --nest: #9F7750;         // brand line accent (from clipnest-color.svg)
+  --radius: 14px;
+  --content-max: 46rem;    // ~72-78ch prose measure at the body size below
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    // Same palette family as preview.html's dark block — verified contrast:
+    // ink/paper ~14.2:1, muted-strong/paper ~6.3:1, accent/paper ~7.2:1.
+    --paper: #1E1915;
+    --panel: #282019;
+    --ink: #EFE7DA;
+    --muted-strong: #C7BAA8;
+    --muted-large: #A89A88;
+    --accent: #CB9E70;
+    --line: #3A2F25;
+  }
+}
+
+// ---- base ---------------------------------------------------------------
+html { scroll-behavior: smooth; }
+@media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
+  * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+}
+
+body {
+  background: var(--paper);
+  color: var(--ink);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 17px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+.wrapper { max-width: var(--content-max); }
+
+// Headings — Georgia/New York serif, matching the wordmark treatment used in
+// assets/clipnest-icons/preview.html (h1 { font-family: Georgia, "New York" }).
+h1, h2, h3, h4, h5, h6 {
+  font-family: Georgia, "New York", "Times New Roman", serif;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+h1 { font-size: clamp(2rem, 4.5vw, 2.75rem); }
+h2 { font-size: clamp(1.4rem, 3vw, 1.85rem); margin-top: 2.25em; }
+h3 { font-size: 1.25rem; }
+
+p, li { color: var(--ink); }
+.post-content, .page-content { color: var(--ink); }
+
+// Secondary/supporting copy — use the AA-safe token by default. Anything
+// intentionally >=24px (or >=18.66px bold) may use --muted-large instead.
+.post-meta, small, figcaption, .site-footer, .footer-col-wrapper { color: var(--muted-strong); }
+
+// ---- links ----------------------------------------------------------------
+// Underline kept (not color-only) so link identification doesn't depend on
+// color perception alone — WCAG 1.4.1 (Use of Color).
+a {
+  color: var(--accent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  transition: color 150ms ease, opacity 150ms ease;
+}
+a:hover { opacity: 0.75; }
+a:visited { color: var(--accent); }
+
+// Visible keyboard focus everywhere — WCAG 2.4.7 (Focus Visible), 2.4.11.
+a:focus-visible, button:focus-visible, input:focus-visible,
+[tabindex]:focus-visible, summary:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+// ---- header / nav -----------------------------------------------------
+.site-header {
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+}
+.site-title, .site-title:visited {
+  font-family: Georgia, "New York", "Times New Roman", serif;
+  font-weight: 700;
+  color: var(--ink) !important;
+}
+.site-nav .page-link {
+  color: var(--ink);
+  font-weight: 500;
+  // Hit target >=24px tall per WCAG 2.5.8 — minima's default nav padding
+  // already clears this, kept explicit so it isn't regressed by future edits.
+  padding: 8px 4px;
+}
+.site-nav .page-link:hover { color: var(--accent); }
+
+// ---- footer -------------------------------------------------------------
+.site-footer {
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+}
+
+// ---- generic CTA/button utility (opt-in; pages own their own markup) ----
+// Available for e.g. the Download page's install CTA. Not applied anywhere
+// automatically — this file only owns docs/assets/, page markup is out of
+// scope for T72.
+.button, .btn {
+  display: inline-block;
+  background: var(--accent);
+  color: var(--panel) !important;
+  font-weight: 600;
+  padding: 0.7em 1.4em;
+  border-radius: 999px;
+  text-decoration: none;
+  min-height: 24px; // WCAG 2.5.8 target size floor
+}
+.button:hover, .btn:hover { opacity: 0.85; }
+
+// ---- code / tables (used by the Compare page's feature table) -----------
+code, pre {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+table {
+  border-color: var(--line);
+}
+th {
+  background: var(--panel);
+  color: var(--ink);
+}
+td, th { border-color: var(--line) !important; }
+
+// ---- misc -----------------------------------------------------------------
+hr { border-color: var(--line); }
+img { border-radius: var(--radius); }

@@ -1,0 +1,58 @@
+{%- comment -%}
+  Open Graph + Twitter Card meta tags (T77). See .claude/seo-aeo-plan.md §5.
+
+  jekyll-seo-tag (the seo tag, called earlier in this layout's <head>) already
+  emits, with correct per-page-falling-back-to-site-config values and
+  absolute_url'd links: og:title, og:description, og:url, og:site_name,
+  og:locale, og:type, twitter:title (plus <title>/meta description/
+  canonical). This include does NOT re-emit any of those — a second copy of
+  the same property is a duplicate/conflicting tag, not harmless
+  redundancy (verified directly against the installed jekyll-seo-tag 2.8.0
+  gem's lib/template.html and lib/jekyll-seo-tag/drop.rb).
+
+  What jekyll-seo-tag does NOT cover today, verified the same way:
+    - og:image / og:image:width / og:image:height / og:image:alt — only
+      emitted when a page sets `image:` front matter (ImageDrop reads
+      page["image"] only, no site-wide fallback). No page in this site sets
+      that today, and _config.yml has no `defaults:` image block either.
+    - twitter:image / twitter:image:alt — same gate as above.
+    - twitter:description — jekyll-seo-tag never emits this tag, regardless
+      of image config; there is no branch for it in its template at all.
+  This include supplies exactly those. The image-gated ones are wrapped in
+  an "unless page.image" conditional so that if a future page (or a future
+  _config.yml `defaults:` block) sets its own `image:`, jekyll-seo-tag's own
+  per-page image handling — which can read real width/height/alt from that
+  page's front matter — takes over automatically and this include steps
+  aside, avoiding a future duplicate.
+
+  KNOWN RESIDUAL OVERLAP — twitter:card only, flagged to senior-dev:
+  jekyll-seo-tag's template unconditionally renders a twitter:card tag on
+  every page: "summary" in its else branch, which is the branch taken
+  site-wide right now (no page.image anywhere). There is no config knob to
+  suppress just that one line short of editing _config.yml (a `defaults:`
+  image block, jekyll-seo-tag's own documented "Setting a default image"
+  pattern) or _layouts/default.html (the seo tag call itself only accepts a
+  `title=false` param, nothing for twitter:card) —
+  both owned by T71, out of this task's one-file scope. This task's spec
+  requires `summary_large_image` (the real og-image.png is a 1200x630
+  large-image asset), so this include emits that value anyway rather than
+  ship the wrong, smaller card type by default. Net effect until someone
+  with _config.yml ownership adds that `defaults:` block: two
+  <meta name="twitter:card"> tags render on every page today (verified by
+  build below). Once that block is added, page.image becomes truthy
+  site-wide, jekyll-seo-tag's own twitter:card branch naturally produces
+  "summary_large_image" itself, and this include's "unless page.image"
+  guard makes its own output stop firing — the duplicate resolves itself
+  with no further change needed here.
+{%- endcomment -%}
+
+{%- unless page.image -%}
+<meta property="og:image" content="{{ '/assets/og-image.png' | absolute_url }}">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta property="og:image:alt" content="{{ site.title }} — {{ site.description | normalize_whitespace }}">
+<meta name="twitter:image" content="{{ '/assets/og-image.png' | absolute_url }}">
+<meta name="twitter:image:alt" content="{{ site.title }} — {{ site.description | normalize_whitespace }}">
+<meta name="twitter:card" content="summary_large_image">
+{%- endunless -%}
+<meta name="twitter:description" content="{{ page.description | default: site.description | normalize_whitespace }}">
