@@ -34,13 +34,21 @@ private final class FakeX11WindowIdentityQuerying: X11WindowIdentityQuerying, @u
   }
 }
 
+/// Matches the real production value (`ClipnestControlName.programName` in
+/// `ClipnestLinuxAppKit`) without depending on that module — this file
+/// tests `ClipnestPlatformLinux` in isolation, so it defines its own copy
+/// of the literal for test data, same as the production type receives it
+/// threaded in from its caller rather than importing it.
+private let ownProgramName = "clipnest"
+
 @Suite("LinuxFrontmostApplicationProvider")
 struct LinuxFrontmostApplicationProviderTests {
   @Test("Nothing focused (no _NET_ACTIVE_WINDOW) reports nil identity and .none")
   func nothingFocusedReportsNil() {
     let querying = FakeX11WindowIdentityQuerying()
     querying.activeWindow = nil
-    let provider = LinuxFrontmostApplicationProvider(querying: querying)
+    let provider = LinuxFrontmostApplicationProvider(
+      querying: querying, ownProgramName: ownProgramName)
 
     #expect(provider.frontmostBundleID == nil)
     #expect(provider.frontmostAppName == nil)
@@ -51,7 +59,8 @@ struct LinuxFrontmostApplicationProviderTests {
   func zeroActiveWindowSkipsPropertyQueries() {
     let querying = FakeX11WindowIdentityQuerying()
     querying.activeWindow = 0
-    let provider = LinuxFrontmostApplicationProvider(querying: querying)
+    let provider = LinuxFrontmostApplicationProvider(
+      querying: querying, ownProgramName: ownProgramName)
 
     #expect(provider.lastOutcome == .none)
     #expect(querying.propertyQueryCallCount == 0)
@@ -66,7 +75,8 @@ struct LinuxFrontmostApplicationProviderTests {
   func waylandFocusedAppReportsDistinctOutcome() {
     let querying = FakeX11WindowIdentityQuerying()
     querying.activeWindow = 555
-    let provider = LinuxFrontmostApplicationProvider(querying: querying)
+    let provider = LinuxFrontmostApplicationProvider(
+      querying: querying, ownProgramName: ownProgramName)
 
     #expect(provider.frontmostBundleID == nil)
     #expect(provider.frontmostAppName == nil)
@@ -80,7 +90,8 @@ struct LinuxFrontmostApplicationProviderTests {
     querying.activeWindow = 1
     querying.classNames[1] = "Gnome-text-editor"
     querying.gtkIDs[1] = "org.gnome.TextEditor"
-    let provider = LinuxFrontmostApplicationProvider(querying: querying)
+    let provider = LinuxFrontmostApplicationProvider(
+      querying: querying, ownProgramName: ownProgramName)
 
     #expect(provider.frontmostBundleID == "org.gnome.TextEditor")
   }
@@ -90,7 +101,8 @@ struct LinuxFrontmostApplicationProviderTests {
     let querying = FakeX11WindowIdentityQuerying()
     querying.activeWindow = 1
     querying.classNames[1] = "Firefox"
-    let provider = LinuxFrontmostApplicationProvider(querying: querying)
+    let provider = LinuxFrontmostApplicationProvider(
+      querying: querying, ownProgramName: ownProgramName)
 
     #expect(provider.frontmostBundleID == "Firefox")
   }
@@ -101,7 +113,8 @@ struct LinuxFrontmostApplicationProviderTests {
     querying.activeWindow = 1
     querying.classNames[1] = "firefox"
     querying.names[1] = "My Document - Mozilla Firefox"
-    let provider = LinuxFrontmostApplicationProvider(querying: querying)
+    let provider = LinuxFrontmostApplicationProvider(
+      querying: querying, ownProgramName: ownProgramName)
 
     #expect(provider.frontmostAppName == "firefox")
   }
@@ -111,8 +124,107 @@ struct LinuxFrontmostApplicationProviderTests {
     let querying = FakeX11WindowIdentityQuerying()
     querying.activeWindow = 1
     querying.names[1] = "Untitled Document"
-    let provider = LinuxFrontmostApplicationProvider(querying: querying)
+    let provider = LinuxFrontmostApplicationProvider(
+      querying: querying, ownProgramName: ownProgramName)
 
     #expect(provider.frontmostAppName == "Untitled Document")
+  }
+
+  // MARK: - T-RT6: ignore Clipnest's own focused window for attribution
+
+  @Test(
+    """
+    First launch: our own window is focused before any other app has ever been observed — \
+    reports nil (unknown source), never "clipnest" itself.
+    """
+  )
+  func ownWindowFocusedAtFirstLaunchReportsNilNotSelf() {
+    let querying = FakeX11WindowIdentityQuerying()
+    querying.activeWindow = 1
+    querying.classNames[1] = "Clipnest"  // GDK-capitalized CLASS component.
+    let provider = LinuxFrontmostApplicationProvider(
+      querying: querying, ownProgramName: ownProgramName)
+
+    #expect(provider.frontmostBundleID == nil)
+    #expect(provider.frontmostAppName == nil)
+  }
+
+  @Test(
+    """
+    lastOutcome stays the RAW classification (including our own window) even though \
+    frontmostBundleID/frontmostAppName substitute — it answers a different question \
+    ("what's actually focused" vs. "who made this capture").
+    """
+  )
+  func lastOutcomeReportsOwnWindowUnsubstituted() {
+    let querying = FakeX11WindowIdentityQuerying()
+    querying.activeWindow = 1
+    querying.classNames[1] = "Clipnest"
+    let provider = LinuxFrontmostApplicationProvider(
+      querying: querying, ownProgramName: ownProgramName)
+
+    #expect(
+      provider.lastOutcome
+        == .identified(
+          WindowIdentity(
+            className: "Clipnest", processID: nil, gtkApplicationID: nil, windowName: nil)))
+  }
+
+  @Test("Falls back to the previously-focused non-Clipnest app once our own window is focused")
+  func fallsBackToPreviousAppWhenOwnWindowFocused() {
+    let querying = FakeX11WindowIdentityQuerying()
+    querying.activeWindow = 1
+    querying.classNames[1] = "Firefox"
+    let provider = LinuxFrontmostApplicationProvider(
+      querying: querying, ownProgramName: ownProgramName)
+    #expect(provider.frontmostAppName == "Firefox")
+
+    // The picker takes focus — our own toplevel is now _NET_ACTIVE_WINDOW.
+    querying.activeWindow = 2
+    querying.classNames[2] = "Clipnest"
+
+    #expect(provider.frontmostBundleID == "Firefox")
+    #expect(provider.frontmostAppName == "Firefox")
+  }
+
+  @Test("Own-window match is case-insensitive against the GDK-capitalized CLASS component")
+  func ownWindowMatchIsCaseInsensitive() {
+    let querying = FakeX11WindowIdentityQuerying()
+    querying.activeWindow = 1
+    querying.classNames[1] = "CLIPNEST"
+    let provider = LinuxFrontmostApplicationProvider(
+      querying: querying, ownProgramName: ownProgramName)
+
+    #expect(provider.frontmostAppName == nil)
+    #expect(provider.frontmostBundleID == nil)
+  }
+
+  @Test("The fallback tracks the MOST RECENT non-Clipnest app, not just the first one ever seen")
+  func fallbackTracksMostRecentNonOwnApp() {
+    let querying = FakeX11WindowIdentityQuerying()
+    querying.activeWindow = 1
+    querying.classNames[1] = "Firefox"
+    let provider = LinuxFrontmostApplicationProvider(
+      querying: querying, ownProgramName: ownProgramName)
+    #expect(provider.frontmostAppName == "Firefox")
+
+    querying.activeWindow = 2
+    querying.classNames[2] = "Gnome-text-editor"
+    #expect(provider.frontmostAppName == "Gnome-text-editor")
+
+    querying.activeWindow = 3
+    querying.classNames[3] = "Clipnest"
+    #expect(provider.frontmostAppName == "Gnome-text-editor")
+  }
+
+  @Test("A window with no readable WM_CLASS is never treated as our own window")
+  func classlessWindowIsNeverTreatedAsOwnWindow() {
+    let querying = FakeX11WindowIdentityQuerying()
+    querying.activeWindow = 1
+    querying.names[1] = "Some Untitled Window"
+    let provider = LinuxFrontmostApplicationProvider(
+      querying: querying, ownProgramName: ownProgramName)
+
+    #expect(provider.frontmostAppName == "Some Untitled Window")
   }
 }
