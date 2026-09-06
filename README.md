@@ -15,17 +15,22 @@
 
 ---
 
+<!-- TODO(T78): add site link once Pages is live -->
+
 ## Why Clipnest?
 
-macOS only remembers the **last** thing you copied. Copy something new and the old one is gone forever — the link you needed, the code snippet, the address you just had. A good **clipboard history manager** fixes that, and once you have one you'll wonder how you lived without it.
+macOS 26 Tahoe added a basic clipboard history to Spotlight (⌘4) — but it's opt-in, caps out at 7 days, and can't organize, pin, or expand anything. Clipnest is a free, open-source, native menu-bar app that picks up where that leaves off: history you control, instant search, pinned favorites, and reusable snippets that expand by keyword in any app.
 
-Clipnest is built to be the one you actually keep running: **native, tiny, instant, and completely private.** No Electron, no web view, no account, no cloud, no telemetry. Just a clean menu-bar app that does one job extremely well.
+**Update Clipnest and you don't have to re-grant Accessibility — your permission survives, because every release is signed with the same certificate.** Most apps that rebuild or re-sign between versions quietly invalidate that grant, so a routine update leaves you back in System Settings, re-adding the app by hand. Clipnest doesn't do that to you, by design — see [Signing, honestly](#release) for exactly how.
+
+It's free and open source, built in pure SwiftUI/AppKit — no Electron, no web view, no account, no cloud, no telemetry. And its **snippets** expand by keyword in any app, so a reusable signature, boilerplate, or command replaces your text expander too, not just your clipboard history — see [Snippets & keyword expansion](#snippets--keyword-expansion).
 
 > Looking for a **free, open-source clipboard manager for Mac** — a lightweight alternative to Paste, Maccy, or Pastebot? Clipnest is a fresh, from-scratch take built in pure SwiftUI.
 
 ## Features
 
 - 📋 **Full clipboard history** — automatically captures everything you copy: plain text, rich text, URLs, images, and files.
+- 🛡 **Accessibility permission survives updates** — update Clipnest and you don't have to re-grant Accessibility: your permission survives, because every release is signed with the same certificate (see [Signing, honestly](#release)).
 - ⚡ **Global hotkey** — press **⌥⌘V** anywhere to pop the picker open right at your cursor, over any app (even full-screen).
 - 🔎 **Instant search** — start typing to filter your entire copy-paste history in real time, with matches highlighted.
 - 🏷 **Type filters** — narrow the list to just text, images, files, or links with one click.
@@ -36,7 +41,7 @@ Clipnest is built to be the one you actually keep running: **native, tiny, insta
 - 👁 **Hover previews** — hover (or arrow to) an item and a popover shows the full content: the image at up to 40% of screen width (with any recognized text shown below it), the full scrollable text (loaded in chunks for huge clips), or a file's name, size, and path.
 - 📌 **Pin your favorites** — keep the items you reuse most pinned to the top, always a keystroke away.
 - 🧠 **Smart de-duplication** — copy the same thing twice and it won't clutter your history.
-- ✂️ **Snippets** — save reusable text (a signature, boilerplate, a command) with a **Tag**, and paste it from the Snippets tab or **expand it by keyword in any app** (see below). Turn a text or link history item into a snippet with **⌘S** — the only kinds ⌘S applies to, since those are the only ones with a plain-text body to seed one from.
+- ✂️ **Snippets** — save reusable text (a signature, boilerplate, a command) with a **Tag**, and paste it from the Snippets tab or **expand it by keyword in any app** (see below) — replaces your text expander too. Turn a text or link history item into a snippet with **⌘S** — the only kinds ⌘S applies to, since those are the only ones with a plain-text body to seed one from.
 - ⚙️ **A real Settings window** — General, History, Apps, Shortcuts, and Permissions tabs to tune Clipnest to how you work (see below). Open it from the menu-bar icon → *Settings…*, or with **⌘,**.
 - ⌨️ **Keyboard-first** — arrows to move, Return to paste, Esc to dismiss, ⌘F to search, ⌘P to pin, ⌘⌫ to delete, ⌘1/2/3 for tabs, ⌘, for Settings.
 - 🪶 **Featherweight & native** — pure Swift/SwiftUI, a few MB, sips almost no memory, feels like part of macOS. Lives in the menu bar with no Dock icon day-to-day (opening Settings briefly shows one — see [Settings](#settings)).
@@ -44,7 +49,7 @@ Clipnest is built to be the one you actually keep running: **native, tiny, insta
 
 ## Snippets & keyword expansion
 
-Snippets are reusable bits of text you author yourself (unlike captured history). Create one in the **Snippets** tab (⌘N) or save any history item as a snippet (⌘S). Each snippet has a **Tag** (its name — also its expansion keyword) and a **Body** (what gets pasted).
+Snippets are reusable bits of text you author yourself (unlike captured history). Create one in the **Snippets** tab (⌘N) or save any history item as a snippet (⌘S). Each snippet has a **Tag** (its name — also its expansion keyword) and a **Body** (what gets pasted). If you're running a separate text expander alongside your clipboard manager today, this replaces it — one keyword-expansion engine, built in, that works in every app.
 
 **Expand anywhere:** type a snippet's Tag in *any* app, select it, and press **⌥⌘E** — Clipnest replaces the selection with the snippet's Body.
 
@@ -60,7 +65,7 @@ No keyword match, or nothing selected → a gentle system beep, nothing changed.
 Everything about how Clipnest behaves lives in one Settings window, across five tabs. Open it from the menu-bar icon → *Settings…*, or press **⌘,** while the picker or the Settings window itself is focused — deliberately not a global hotkey, so it never takes ⌘, away from whatever other app you're using (that app's own shortcut keeps working normally). One side effect worth knowing: opening Settings briefly shows Clipnest's Dock icon — macOS won't bring a menu-bar-only app's window to the front without one — and it disappears again once you close the window.
 
 - **General** — launch Clipnest at login, pause clipboard capture with one toggle, and turn the background update check on/off.
-- **History** — controls how much history is kept. The default is the most recent **1,000** items; switch to a day-based cap (30 days by default) or *Everything* (no cap at all) instead. Pinned items are always kept regardless of the cap. **Clear All History…** wipes everything (including pinned items) after a confirmation. This tab also has **"Recognize text in copied images"** — optional on-device OCR, **off by default** (see [Privacy](#privacy-first) for why).
+- **History** — controls how much history is kept. The default is the most recent **1,000** items; switch to a day-based cap (30 days by default) or *Everything* (no cap at all) instead. Pinned items are always kept regardless of the cap. **Clear All History…** wipes everything (including pinned items) after a confirmation. This tab also has **"Recognize text in copied images"** — optional on-device OCR, **off by default**, with a **Fast**/**Accurate** (default) quality choice (see [Privacy](#privacy-first) for why it's off by default).
 - **Apps** — exclude specific apps from capture, on top of the built-in password-manager denylist (which can't be removed). Add an app by picking its `.app` bundle.
 - **Shortcuts** — rebind *both* global hotkeys (open the picker, expand a snippet) to whatever key combination you want.
 - **Permissions** — see whether Accessibility is granted and fix it in one click, including guidance for the one case System Settings can't diagnose on its own (a rebuilt/updated app whose old permission entry no longer matches).
@@ -180,7 +185,7 @@ Clipnest is intentionally boring in the best way — a small, well-tested native
 - **Persistence:** **SwiftData** for metadata; a content-addressed **blob store** on disk for image/rich-text bytes (deduped by SHA-256), so the database stays small.
 - **Capture:** macOS has no "pasteboard changed" event, so a lightweight `changeCount` poll detects new copies; a live hook pushes them straight into the picker.
 - **Paste & expansion:** synthesized ⌘V via `CGEvent`; snippet expansion uses an **Accessibility path** with a **clipboard-with-restore fallback** so it works in every app (see [Snippets](#snippets--keyword-expansion)).
-- **On-device OCR (optional, off by default):** Apple's **Vision** framework (`VNRecognizeTextRequest`, `.fast` recognition level, language correction off) recognizes text in a copied image entirely on-device — no model download, no network call, no new third-party dependency. Images are downscaled to a 1,600pt long edge before recognition runs, and anything over 50 MB or 20,000px on a side is skipped outright. Runs only at the moment of capture (never a background sweep) and only on images the privacy filter already admitted; recognized text is folded into the same search index as everything else. See [Settings](#settings) and [Privacy](#privacy-first).
+- **On-device OCR (optional, off by default):** Apple's **Vision** framework (`VNRecognizeTextRequest`) recognizes text in a copied image entirely on-device — no model download, no network call, no new third-party dependency. Recognition quality is a Settings → History choice, **Fast** or **Accurate** (default), trading a small latency difference for materially better digit/punctuation/arrow accuracy. Images are downscaled to a 1,600pt long edge before recognition runs, and anything over 50 MB or 20,000px on a side is skipped outright. Runs only at the moment of capture (never a background sweep) and only on images the privacy filter already admitted; recognized text is folded into the same search index as everything else. See [Settings](#settings) and [Privacy](#privacy-first).
 - **Focus-safe UI:** the picker is a non-activating `NSPanel` so it never steals keyboard focus from the app you were using; the preview popover is a separate non-key panel beside it.
 - **One dependency:** [`KeyboardShortcuts`](https://github.com/sindresorhus/KeyboardShortcuts) (MIT) for global-hotkey registration. Everything else is system frameworks.
 

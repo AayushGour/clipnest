@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="{{ page.lang | default: site.lang | default: "en" }}">
+
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    {%- comment -%}
+      jekyll-seo-tag: title, meta description, canonical link, and its own
+      basic OG/Twitter/JSON-LD output. Always uses relative_url/absolute_url
+      internally — no hand-written paths here.
+    {%- endcomment -%}
+    {%- seo -%}
+
+    {%- comment -%}
+      Structured data (T76) and Open Graph / Twitter Card meta (T77).
+      Scaffolded empty for now — see each include file for what fills it in.
+    {%- endcomment -%}
+    {%- include seo-jsonld.html -%}
+    {%- include og-tags.html -%}
+
+    <link rel="stylesheet" href="{{ "/assets/main.css" | relative_url }}">
+  </head>
+
+  <body>
+
+    {%- include header.html -%}
+
+    <main class="page-content" aria-label="Content">
+      <div class="wrapper">
+        {{ content }}
+      </div>
+    </main>
+
+    {%- include footer.html -%}
+
+  </body>
+
+</html>
