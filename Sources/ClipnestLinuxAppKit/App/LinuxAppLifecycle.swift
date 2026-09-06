@@ -98,7 +98,9 @@ public enum LinuxAppLifecycle {
   /// the tray's Quit item) — matches every other GTK application's
   /// `main()`.
   public static func run(arguments: [String]) {
-    ClipnestGTKApplication.initializeGTK()
+    ClipnestGTKApplication.initializeGTK(
+      programName: ClipnestControlName.programName,
+      displayName: ClipnestControlName.displayName)
     GTKMainActorBridge.install()
 
     let sessionBusAddress = ProcessInfo.processInfo.environment[
@@ -266,6 +268,15 @@ public enum LinuxAppLifecycle {
   ) {
     let shellExtensionAvailable =
       shellHelperClient?.currentCapabilities.canDeliverShortcuts ?? false
+    // See `HotkeyBackend.shellExtensionKeybinding`'s doc comment / this
+    // task's audit: a stub extension whose service exports no D-Bus
+    // methods at all still makes `Capabilities` advertise "hotkeys" —
+    // grabbing the mutter keybinding is a real, independent side effect —
+    // so that string is never trusted alone. Only skip the live probe
+    // entirely when hotkeys weren't even claimed, to avoid a pointless
+    // round trip.
+    let shellExtensionLiveDispatchConfirmed =
+      shellExtensionAvailable && (shellHelperClient?.probeLiveDispatch() ?? false)
     let portalAvailable: Bool
     if let probeConnection = DBusConnection.connect(
       address: sessionBusAddress, timeout: sessionBusConnectTimeout)
@@ -278,6 +289,7 @@ public enum LinuxAppLifecycle {
 
     let backend = HotkeyBackendResolver.resolve(
       shellExtensionKeybindingAvailable: shellExtensionAvailable,
+      shellExtensionLiveDispatchConfirmed: shellExtensionLiveDispatchConfirmed,
       // See `HotkeyBackend.xGrabKey`'s doc comment: no `CXlib` dependency
       // is declared for this target, so this tier can never be attempted
       // from here.
@@ -302,14 +314,16 @@ public enum LinuxAppLifecycle {
     }
   }
 
+  /// The `command` written here is executed later by gnome-settings-daemon,
+  /// which inherits neither this process's `$PATH` resolution nor its working
+  /// directory — see `OwnExecutablePath` for why `CommandLine.arguments.first`
+  /// (used here previously) silently produced a non-existent `//clipnest` for
+  /// the packaged bare-command launch this app actually ships as, disabling
+  /// the universal hotkey floor.
   private static func installGSettingsFloor() {
-    guard let executablePath = CommandLine.arguments.first else { return }
-    let absolutePath =
-      executablePath.hasPrefix("/")
-      ? executablePath : FileManager.default.currentDirectoryPath + "/" + executablePath
     GSettingsCustomKeybinding.install(
       name: "Clipnest — Toggle Picker",
-      command: "\(absolutePath) \(LinuxAppCLIFlag.togglePicker)",
+      command: "\(OwnExecutablePath.resolve()) \(LinuxAppCLIFlag.togglePicker)",
       binding: defaultToggleAccelerator, segment: toggleKeybindingSegment)
   }
 }
