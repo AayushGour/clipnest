@@ -38,7 +38,12 @@ final class LinuxAppEnvironment {
     subsystem: ClipnestLog.subsystem, category: "LinuxAppEnvironment")
 
   let blobStore: BlobStore
-  let clipStore: SQLiteClipStore
+  /// T-RT2: the real `SQLiteClipStore`, wrapped in a `NotifyingClipStore` —
+  /// see that type's doc comment (and `AppEnvironment.clipStore`'s exact
+  /// macOS mirror). Typed `any ClipStore` (not the concrete
+  /// `SQLiteClipStore`) — nothing in this file reaches for SQLite-specific
+  /// API on this property.
+  let clipStore: any ClipStore
   let snippetStore: SQLiteSnippetStore
   let ocrBackfillViewModel: OCRBackfillViewModel
   let privacyFilter: PrivacyFilter
@@ -50,6 +55,13 @@ final class LinuxAppEnvironment {
   let pickerViewModel: PickerViewModel
   let pickerWindow: PickerWindow
   let settingsWindow: SettingsWindow
+  /// Linux parity pass (routed follow-up, 2026-09-06): closes the one
+  /// unfilled seam that made snippets read-only on Linux — see
+  /// `SnippetEditorWindow.swift`'s top doc comment. Held so `init` can wire
+  /// `pickerViewModel.presentSnippetEditor` to it below; nothing else in
+  /// this type reaches for it directly (mirrors `pickerWindow`/
+  /// `settingsWindow`, held for the identical reason).
+  let snippetEditorWindow: SnippetEditorWindow
   let snippetExpander: SnippetExpander
   let updateChecker: UpdateChecker
 
@@ -62,6 +74,49 @@ final class LinuxAppEnvironment {
 
   private var pendingRetentionTask: Task<Void, Never>?
   private static let retentionDebounceInterval: Duration = .milliseconds(750)
+
+  /// The Linux port's analogue of `AppUpdater.currentVersion`
+  /// (`ClipnestApp/Sources/System/AppUpdater.swift`), which reads
+  /// `CFBundleShortVersionString` — this binary ships no bundle/plist, so
+  /// there is nothing to read that from at runtime, and no build step
+  /// substitutes a version into source today (`debian/rules` builds
+  /// straight `swift build -c release`, no codegen step). Kept as ONE named
+  /// constant (coding-standards.md's "no magic strings/numbers") rather than
+  /// scattered: it MUST move in lockstep with `ClipnestApp/project.yml`'s
+  /// `MARKETING_VERSION` and `debian/changelog`'s own upstream version —
+  /// `release-linux.yml` already reads that same `MARKETING_VERSION` to
+  /// version the `.deb`, so all three have to move together at every
+  /// release regardless; this is simply the fourth spot, and the cheapest
+  /// one to keep in sync (a single literal, greppable by the string
+  /// itself). A build-time-substituted version (e.g. via `debian/rules`)
+  /// would remove this manual step, but that is a packaging change outside
+  /// this task's scope (`Package.swift`/`debian/rules` are not owned here).
+  /// `nonisolated`: read from `updateChecker.installedVersion`'s `@Sendable
+  /// () -> String` closure below, which — being `@Sendable` — cannot
+  /// capture a `@MainActor`-isolated static property (this whole class is
+  /// `@MainActor`, so an un-annotated `static let` here would be isolated
+  /// too). Safe unconditionally: an immutable `String` literal has no
+  /// actor-affinity to protect in the first place.
+  private nonisolated static let installedVersion = "0.9.1"
+
+  /// Resolves this process's own absolute executable path for
+  /// `AutostartDesktopFile.setEnabled(_:executablePath:)`'s `.desktop`
+  /// `Exec=` line — the session's autostart mechanism inherits neither this
+  /// process's `$PATH` resolution nor its working directory.
+  ///
+  /// Shared with `LinuxAppLifecycle.installGSettingsFloor()`, which has the
+  /// same requirement for its GSettings custom keybinding; see
+  /// `OwnExecutablePath` for why the older `CommandLine.arguments.first`
+  /// formula was broken for the packaged bare-command launch.
+  private static func resolveOwnExecutablePath() -> String {
+    OwnExecutablePath.resolve()
+  }
+
+  /// T-RT2: keeps this environment's subscription to `clipStore.changes`
+  /// alive for the app's lifetime — see `AppEnvironment
+  /// .clipStoreChangeSubscription`'s exact macOS mirror (including why this
+  /// is `var`, not `let`, with an implicit-`nil` Optional default).
+  private var clipStoreChangeSubscription: ClipStoreChangeSubscription?
 
   /// `PickerViewModel.isVisible` is `private` (out of this task's scope to
   /// widen), and the minimal `PickerWindow` contract exposes no visibility
@@ -122,9 +177,15 @@ final class LinuxAppEnvironment {
         LinuxEventSynthesizerFactory.makeDefault()
       }.value
 
-    let (clipStore, snippetStore, synthesizerResult) = try await (
+    let (rawClipStore, snippetStore, synthesizerResult) = try await (
       clipStoreSetup, snippetStoreSetup, synthesizerSetup
     )
+
+    // T-RT2: wraps the real store — see `NotifyingClipStore`'s doc comment,
+    // and `AppEnvironment.init`'s exact macOS mirror of this same line.
+    // Every consumer below receives THIS wrapped value via the `clipStore`
+    // local — never `rawClipStore` directly.
+    let clipStore = NotifyingClipStore(wrapping: rawClipStore)
 
     self.blobStore = blobStore
     self.privacyFilter = privacyFilter
@@ -161,7 +222,8 @@ final class LinuxAppEnvironment {
       reader: pasteboardReader,
       blobStore: blobStore,
       pasteboard: LinuxPasteboard(),
-      frontmostApplicationProvider: LinuxFrontmostApplicationProvider(),
+      frontmostApplicationProvider: LinuxFrontmostApplicationProvider(
+        ownProgramName: ClipnestControlName.programName),
       excludedBundleIDsProvider: {
         MainActor.assumeIsolated { Set(settingsStore.userExcludedBundleIDs) }
       },
@@ -204,38 +266,150 @@ final class LinuxAppEnvironment {
 
     let viewModel = PickerViewModel(
       clipStore: clipStore, snippetStore: snippetStore, pasteboard: sharedWriter,
-      blobStore: blobStore, paster: paster, frontmostAppTracker: frontmostAppTracker)
+      blobStore: blobStore, paster: paster, frontmostAppTracker: frontmostAppTracker,
+      // T-RT2: lets an already-open picker re-query itself when SOMETHING
+      // ELSE mutates this store — a Settings "Clear All History…", or
+      // background retention — without either of those call sites needing
+      // to know `pickerViewModel` exists.
+      storeChanges: clipStore.changes)
     self.pickerViewModel = viewModel
 
     let pickerWindow = PickerWindow(
       viewModel: viewModel,
-      onDismiss: { [weak viewModel] in
-        // `onDismiss`'s calling thread isn't specified by the minimal
-        // `PickerWindow` contract — hop to `@MainActor` unconditionally
-        // before touching `viewModel` (itself `@MainActor`-isolated) via
-        // the exact bridge (`DispatchMainQueuePump`/`GTKMainActorBridge`)
-        // this whole port depends on for every such hop.
+      onDismiss: {
+        // Only the owner-side flag. `PickerWindow.dismiss()` — the single
+        // path every user-initiated dismissal now routes through — has
+        // already called `hide()`, which calls `viewModel.didHide()` on the
+        // GTK thread before this closure runs. Calling `didHide()` again
+        // here would be redundant, and doing it from a `Task { @MainActor }`
+        // made it land AFTER this closure returned, so the flag and the
+        // view model briefly disagreed.
         visibilityBox.value = false
-        Task { @MainActor in viewModel?.didHide() }
       })
     self.pickerWindow = pickerWindow
-    viewModel.dismiss = { [weak pickerWindow] in pickerWindow?.hide() }
+    // `dismiss()`, not `hide()`: hiding alone left `visibilityBox` true, so
+    // the next hotkey ran the "hide" half of `togglePicker` against an
+    // already-hidden window and appeared to do nothing.
+    viewModel.dismiss = { [weak pickerWindow] in pickerWindow?.dismiss() }
     viewModel.suppressOwnPasteboardWrite = { [weak monitor] changeCount in
       monitor?.ignore(changeCount: changeCount)
     }
 
-    self.settingsWindow = SettingsWindow(settings: settingsStore)
+    // Linux parity pass (routed follow-up, 2026-09-06): mirrors
+    // `AppEnvironment.init`'s macOS wiring of `viewModel.presentSnippetEditor`
+    // (`ClipnestApp/Sources/App/AppEnvironment.swift`) as closely as this
+    // platform allows. `onSave` decides create vs. update by switching on
+    // `mode` — the exact same `mode` this `presentSnippetEditor` closure was
+    // just called with — matching macOS exactly; `SnippetEditorWindow` (GTK)
+    // itself has no opinion on `SnippetStore`, same contract as its macOS
+    // counterpart. `onClose` calls `pickerWindow.refocusAfterEditorClose()`
+    // (see that method's doc comment) — the GTK counterpart of macOS's
+    // `panel.makeKey(); viewModel.refocusSearchField()`. No `pickerPanel`-
+    // style positioning parameter: GTK4 has no portable window-move API for
+    // this window to use even if it took one (see `SnippetEditorWindow
+    // .swift`'s top doc comment).
+    let snippetEditorWindow = SnippetEditorWindow()
+    self.snippetEditorWindow = snippetEditorWindow
+    viewModel.presentSnippetEditor = {
+      [weak snippetEditorWindow, weak viewModel, weak pickerWindow] mode in
+      guard let snippetEditorWindow, let viewModel else { return }
+      // Real bug found by this task's own runtime verification (see
+      // `PickerWindow.isEditorSessionActive`'s doc comment): presenting
+      // this real, activating `GtkWindow` makes the picker's OWN
+      // `notify::is-active` fire `false` too, which — without this flag —
+      // fully dismissed the picker (hid it AND cancelled the view model's
+      // in-flight queries) instead of just losing window-manager
+      // prominence, unlike macOS's side-by-side non-dismissing design.
+      // Cleared at the very start of `onClose`, before
+      // `refocusAfterEditorClose()` runs.
+      pickerWindow?.setEditorSessionActive(true)
+      snippetEditorWindow.show(
+        mode: mode,
+        onSave: { title, body, keyword in
+          switch mode {
+          case .create, .createFromClip:
+            viewModel.createSnippet(title: title, body: body, keyword: keyword)
+          case .edit(let snippet):
+            viewModel.updateSnippet(snippet.id, title: title, body: body, keyword: keyword)
+          }
+        },
+        onClose: { [weak pickerWindow] in
+          pickerWindow?.setEditorSessionActive(false)
+          pickerWindow?.refocusAfterEditorClose()
+        })
+    }
 
     let updateChecker = UpdateChecker()
+    // P10-A: was never set — `installedVersion` defaulted to `"?"`, which
+    // made `UpdateChecker.isUpdateAvailable(installed:latestTag:)`'s
+    // not-equal comparison permanently `true` (a `"?"` never equals a real
+    // release tag), so the picker's "update available" dot showed even on
+    // the latest version. Mirrors `AppEnvironment.init`'s `updateChecker
+    // .installedVersion = { AppUpdater.currentVersion }` — see
+    // `Self.installedVersion`'s doc comment for why Linux has no
+    // `CFBundleShortVersionString` equivalent to read this from at runtime.
+    updateChecker.installedVersion = { Self.installedVersion }
     updateChecker.onStateChanged = { [weak viewModel] available, latest in
       viewModel?.isUpdateAvailable = available
       viewModel?.latestVersion = latest
     }
     self.updateChecker = updateChecker
 
+    // P10-A: `AutostartDesktopFile` (this module) is unreachable from
+    // `ClipnestGTK` — `ClipnestGTK` depends on neither `ClipnestLinuxAppKit`
+    // nor anything that re-exports it (Package.swift's dependency edge runs
+    // the other way: `ClipnestLinuxAppKit -> ClipnestGTK`; the reverse would
+    // be a cycle). So `SettingsWindow` gets the launch-at-login capability
+    // as two plain closures, resolved here at the composition root — the
+    // same "inject a closure across a module boundary" shape already used
+    // for `captureEnabledProvider`/`excludedBundleIDsProvider` above and
+    // `placeWindowHandler` below, not a new pattern.
+    let resolvedExecutablePath = Self.resolveOwnExecutablePath()
+
+    self.settingsWindow = SettingsWindow(
+      settings: settingsStore,
+      updateChecker: updateChecker,
+      clipStore: clipStore,
+      ocrBackfillViewModel: ocrBackfillViewModel,
+      launchAtLoginProvider: { AutostartDesktopFile.isEnabled() },
+      setLaunchAtLogin: { enabled in
+        try AutostartDesktopFile.setEnabled(enabled, executablePath: resolvedExecutablePath)
+      },
+      // T-OPT2 (a concurrent agent's Settings > Shortcuts rebinding work):
+      // required, no default — same module as this file, so no import
+      // needed. `ToggleHotkeyFloorBinding`/`Hotkeys/**` are that agent's
+      // files, not this one's; only this call site's new argument is mine.
+      reinstallToggleHotkeyFloor: { accelerator in
+        ToggleHotkeyFloorBinding.reinstallFloor(withAccelerator: accelerator)
+      })
+
     monitor.onCapture = { [weak self, weak viewModel] _ in
       viewModel?.handleNewCapture()
       self?.scheduleRetentionEnforcement()
+    }
+
+    // T-RT2/T-HANG6: forwards every deletion/full-clear this store observes
+    // — regardless of which call site caused it (`pickerViewModel
+    // .delete(_:)`/`deleteHighlighted()` above, or a Settings "Clear All
+    // History…" call once wired to this same injected `clipStore`) — into
+    // `clipboardMonitor`'s existing (T-HANG5) pending-OCR cancellation, so a
+    // still-scheduled recognition job never outlives the row it targets.
+    // `[weak monitor]` (the same local already used above), not `[weak
+    // self]`: see `AppEnvironment`'s exact macOS mirror of this subscription
+    // for why capturing `self` at an earlier point in this initializer trips
+    // Swift's definite-initialization check.
+    self.clipStoreChangeSubscription = clipStore.changes.subscribe { [weak monitor] change in
+      Task { @MainActor in
+        guard let monitor else { return }
+        switch change {
+        case .deleted(let id):
+          monitor.cancelPendingRecognition(for: id)
+        case .clearedAll:
+          monitor.cancelAllPendingRecognition()
+        case .inserted, .updated, .retentionApplied:
+          break
+        }
+      }
     }
 
     // Event-driven capture (P2-A): the X11/XFixes backend calls this
