@@ -183,8 +183,11 @@
 // one conditional import the extraction into `ClipnestViewModels` requires.
 // See `ClipnestObservation/ObservableObject.swift`'s doc comment for the
 // portable `ObservableObject`/`@Published` stand-in used on the `#else`
-// branch (API-shaped identically to Combine's, so nothing else in this file
-// changes). `import AppKit` is gone — this file's only AppKit use was the
+// branch (API-shaped identically to Combine's). P10-D adds the one
+// exception to "nothing else in this file changes": a stored
+// `objectWillChange` property declared right on the class below, under the
+// same `#if !canImport(Combine)` gate — see that property's doc comment.
+// `import AppKit` is gone — this file's only AppKit use was the
 // literal `NSPasteboard.general` default below, now routed through
 // `PlatformDefaults.pasteboard` (see `init`), the same seam every other
 // platform-specific default in this codebase already resolves through.
@@ -203,6 +206,26 @@ import Foundation
 /// comment for the T50/T51 windowed-query design.
 @MainActor
 public final class PickerViewModel: ObservableObject {
+  // P10-D (Linux port, GTK4 view layer): on Apple platforms this is
+  // Combine's real, compiler-synthesized `objectWillChange` (unaffected —
+  // the whole block below compiles out via `#if !canImport(Combine)`, byte-
+  // identical to before this task). On Linux, `ClipnestObservation`'s
+  // `ObservableObject` protocol deliberately provides NO default
+  // `objectWillChange` (see that file's doc comment, defect #2): the real
+  // Apple/Combine behavior this replicates is the compiler AUTOMATICALLY
+  // synthesizing a stored `let objectWillChange = ObservableObjectPublisher()`
+  // for any type with at least one `@Published` property that doesn't
+  // already declare its own — which Swift only does for its own `Combine`
+  // protocol, not a plain one this module defines. This property is that
+  // synthesis, done by hand: ONE stored instance, so every read returns the
+  // SAME publisher (the actual bug being fixed — a computed default handed
+  // back a fresh, never-subscribable instance per access), and
+  // `PickerWindow` (`Sources/ClipnestGTK/Window/PickerWindow.swift`)
+  // subscribes to it directly to replace its former 33ms poll loop.
+  #if !canImport(Combine)
+    public let objectWillChange = ObservableObjectPublisher()
+  #endif
+
   // Not `private` (M-4 extraction — see `PickerViewModel+Paste.swift`'s top
   // doc comment): `PickerViewModel+Paste.swift` also logs through this, and
   // `private` is file-scoped in Swift. Still only ever used from within
@@ -414,6 +437,23 @@ public final class PickerViewModel: ObservableObject {
 
   private let clipStore: any ClipStore
   private let snippetStore: any SnippetStore
+  /// T-RT2: subscription to the composition root's `NotifyingClipStore
+  /// .changes` (passed in as `storeChanges:` — `nil` in every existing
+  /// test/preview call site, so this is fully additive/opt-in for anyone
+  /// not wired to it). Held only to keep the subscription alive for this
+  /// view model's lifetime — cancels itself automatically on `deinit` (see
+  /// `ClipStoreChangeSubscription`'s doc comment), same shape as
+  /// `ClipnestObservation.ObservationCancellable`. Reacts ONLY to changes
+  /// this view model did NOT already cause itself: `.clearedAll` (Settings'
+  /// "Clear All History…") and `.retentionApplied` (background retention).
+  /// `.inserted`/`.updated`/`.deleted` are deliberately ignored here — a
+  /// live capture already reaches this type via `ClipboardMonitor
+  /// .onCapture` -> `handleNewCapture()`, and this view model's own
+  /// `togglePin(_:)`/`delete(_:)` already re-query themselves right after
+  /// their own `clipStore` call — reacting to those same events a second
+  /// time here would just be a redundant, generation-counter-discarded
+  /// requery, not a correctness fix. See `handleExternalStoreChange(_:)`.
+  private var storeChangesSubscription: ClipStoreChangeSubscription?
   /// Not `private` (M-4 extraction — see `PickerViewModel+Paste.swift`'s top
   /// doc comment): `performPaste(_:frontmostApp:)` there reads `changeCount`
   /// off this. Still only ever used from within `PickerViewModel`/its
@@ -492,13 +532,22 @@ public final class PickerViewModel: ObservableObject {
     case selectNear(previousIndex: Int?)
   }
 
+  /// - Parameter storeChanges: T-RT2 — the SAME `NotifyingClipStore.changes`
+  ///   broadcaster wrapping `clipStore`, if the composition root wired one
+  ///   up (`AppEnvironment`/`LinuxAppEnvironment` always do; test/preview
+  ///   call sites that pass a bare `InMemoryClipStore` typically don't).
+  ///   `nil` (the default) makes this view model behave exactly as before
+  ///   this task — no subscription, no behavior change — so no existing
+  ///   call site needs to change unless it wants the fix. See
+  ///   `storeChangesSubscription`'s doc comment for what this reacts to.
   public init(
     clipStore: any ClipStore,
     snippetStore: any SnippetStore,
     pasteboard: any PasteboardWriting = PlatformDefaults.pasteboard,
     blobStore: BlobStore = BlobStore(baseDirectory: BlobStore.defaultBaseDirectory()),
     paster: Paster = Paster(),
-    frontmostAppTracker: FrontmostAppTracker = FrontmostAppTracker()
+    frontmostAppTracker: FrontmostAppTracker = FrontmostAppTracker(),
+    storeChanges: ClipStoreChangeBroadcaster? = nil
   ) {
     self.clipStore = clipStore
     self.snippetStore = snippetStore
@@ -506,6 +555,35 @@ public final class PickerViewModel: ObservableObject {
     self.blobStore = blobStore
     self.paster = paster
     self.frontmostAppTracker = frontmostAppTracker
+    storeChangesSubscription = storeChanges?.subscribe { [weak self] change in
+      Task { @MainActor in self?.handleExternalStoreChange(change) }
+    }
+  }
+
+  /// T-RT2: reacts to a `ClipStoreChange` this view model did not itself
+  /// cause — see `storeChangesSubscription`'s doc comment for exactly which
+  /// cases reach here and why the rest are ignored. Both cases re-query the
+  /// Rows pipeline (History/Pinned — the only pipeline `ClipStore` mutations
+  /// can affect; Snippets has its own separate `SnippetStore`), and both are
+  /// gated on `isVisible`, mirroring `handleNewCapture()`'s "nothing
+  /// re-queries a hidden picker" rule — a hidden picker gets a fresh
+  /// `willShow()` requery the next time it's opened regardless.
+  private func handleExternalStoreChange(_ change: ClipStoreChange) {
+    guard isVisible else { return }
+    switch change {
+    case .clearedAll:
+      // A hard invalidation — every item is gone, so there is no
+      // "current selection" worth preserving. Mirrors `willShow()`'s own
+      // policy for a fresh, from-scratch load.
+      scheduleRowsQuery(.hardReset, text: currentSearchText, debounced: false)
+    case .retentionApplied:
+      // Only ever trims OLD unpinned items, typically off the currently
+      // visible window — reconcile rather than hard-reset so an unrelated
+      // background pass never yanks the user's current selection.
+      scheduleRowsQuery(.softReconcile, text: currentSearchText, debounced: false)
+    case .inserted, .updated, .deleted:
+      break
+    }
   }
 
   /// Called by `PickerPanel.onWillShow`, right before the panel is ordered

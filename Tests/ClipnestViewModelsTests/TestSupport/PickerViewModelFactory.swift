@@ -20,7 +20,13 @@ func makeTestPickerViewModel(
   clipStore: any ClipStore = InMemoryClipStore(blobStore: makeTempBlobStore().blobStore),
   snippetStore: any SnippetStore = InMemorySnippetStore(),
   pasteboard: any PasteboardWriting = FakePasteboardWriting(),
-  blobStore: BlobStore = makeTempBlobStore().blobStore
+  blobStore: BlobStore = makeTempBlobStore().blobStore,
+  // T-RT2: `nil` by default (every existing call site's exact prior
+  // behavior — no subscription, no behavior change) — pass a real
+  // `NotifyingClipStore.changes` (built from the SAME `clipStore` passed
+  // above) to exercise the "an external mutation refreshes an open picker"
+  // path. See `PickerViewModelStoreChangeTests.swift`.
+  storeChanges: ClipStoreChangeBroadcaster? = nil
 ) -> PickerViewModel {
   PickerViewModel(
     clipStore: clipStore,
@@ -32,6 +38,7 @@ func makeTestPickerViewModel(
       eventSynthesizer: FakeEventSynthesizing(),
       isAccessibilityGranted: { false }
     ),
-    frontmostAppTracker: FrontmostAppTracker(provider: FakeFrontmostAppReferenceProviding())
+    frontmostAppTracker: FrontmostAppTracker(provider: FakeFrontmostAppReferenceProviding()),
+    storeChanges: storeChanges
   )
 }

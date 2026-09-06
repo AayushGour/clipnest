@@ -59,7 +59,12 @@ final class AppEnvironment {
   private static let logger = Logger(subsystem: ClipnestLog.subsystem, category: "AppEnvironment")
 
   let blobStore: BlobStore
-  let clipStore: SwiftDataClipStore
+  /// T-RT2: the real `SwiftDataClipStore`, wrapped in a `NotifyingClipStore`
+  /// — see that type's doc comment. Typed `any ClipStore` (not the concrete
+  /// `SwiftDataClipStore`) because every consumer in this file already only
+  /// ever needed the protocol; nothing here reaches for SwiftData-specific
+  /// API on this property.
+  let clipStore: any ClipStore
   let snippetStore: SwiftDataSnippetStore
   /// T-UX1: `@MainActor` state + orchestration for the Settings "Recognize
   /// Text in Existing Images" backfill — wraps an `OCRBackfillCoordinator`
@@ -112,6 +117,18 @@ final class AppEnvironment {
   /// coalescing window, so it lives here as a named constant rather than a
   /// bare literal at the call site.
   private static let retentionDebounceInterval: Duration = .milliseconds(750)
+
+  /// T-RT2: keeps this environment's subscription to `clipStore.changes`
+  /// alive for the app's lifetime — dropping it would cancel it (see
+  /// `ClipStoreChangeSubscription`'s doc comment). Never read after `init`;
+  /// it exists purely to be retained. `var`, not `let`, with no explicit
+  /// initializer (an Optional stored property defaults to `nil` — same
+  /// shape as `pendingRetentionTask` above): this is assigned partway
+  /// through `init`, AFTER `monitor.onCapture` already captures `self` in a
+  /// closure — Swift's definite-initialization check requires every stored
+  /// property to already count as initialized before the FIRST such
+  /// capture, which a `let` assigned later in `init` cannot satisfy.
+  private var clipStoreChangeSubscription: ClipStoreChangeSubscription?
 
   /// - Throws: whatever `SwiftDataClipStore`/`SwiftDataSnippetStore`'s
   ///   production `ModelContainer` construction throws (typed
@@ -169,7 +186,20 @@ final class AppEnvironment {
       await store.prepare()
       return store
     }.value
-    let (clipStore, snippetStore) = try await (clipStoreSetup, snippetStoreSetup)
+    let (rawClipStore, snippetStore) = try await (clipStoreSetup, snippetStoreSetup)
+
+    // T-RT2: wraps the real store so every mutation — this environment's
+    // own `pickerViewModel.delete(_:)`/`togglePin(_:)`, Settings'
+    // "Clear All History…" (`HistorySettingsView`, injected `clipStore`
+    // below), background retention (`enforceRetentionNow()`/
+    // `scheduleRetentionEnforcement()`) — is broadcast to every other
+    // observer of this SAME store instance, regardless of which of those
+    // call sites caused it. See `NotifyingClipStore`'s doc comment for why
+    // this lives here (a composition-root decorator) rather than on the
+    // `ClipStore` protocol itself. Every consumer below receives THIS
+    // wrapped value via the `clipStore` local — never `rawClipStore`
+    // directly.
+    let clipStore = NotifyingClipStore(wrapping: rawClipStore)
 
     self.blobStore = blobStore
     self.privacyFilter = privacyFilter
@@ -253,7 +283,12 @@ final class AppEnvironment {
       snippetStore: snippetStore,
       blobStore: blobStore,
       paster: paster,
-      frontmostAppTracker: frontmostAppTracker
+      frontmostAppTracker: frontmostAppTracker,
+      // T-RT2: lets an already-open picker re-query itself when SOMETHING
+      // ELSE mutates this store — Settings' "Clear All History…", or
+      // background retention — without either of those call sites needing
+      // to know `pickerViewModel` exists.
+      storeChanges: clipStore.changes
     )
     self.pickerViewModel = viewModel
 
@@ -402,6 +437,33 @@ final class AppEnvironment {
       // one full retention pass per capture. `scheduleRetentionEnforcement`
       // debounces this into (at most) one pass per burst.
       self?.scheduleRetentionEnforcement()
+    }
+
+    // T-RT2/T-HANG6: forwards every deletion/full-clear this store observes
+    // — regardless of which call site caused it (`pickerViewModel
+    // .delete(_:)`/`deleteHighlighted()` above, or `HistorySettingsView`'s
+    // "Clear All History…", both of which mutate this SAME injected
+    // `clipStore`) — into `clipboardMonitor`'s existing (T-HANG5)
+    // pending-OCR cancellation, so a still-scheduled recognition job never
+    // outlives the row it targets. `[weak monitor]` (the same local already
+    // used just above/below), not `[weak self]`: capturing `self` here
+    // would make Swift's definite-initialization check demand every stored
+    // property be assigned before this point — this subscription is
+    // deliberately wired only once `monitor` itself is fully usable,
+    // matching every other closure already wired against `monitor` in this
+    // initializer.
+    self.clipStoreChangeSubscription = clipStore.changes.subscribe { [weak monitor] change in
+      Task { @MainActor in
+        guard let monitor else { return }
+        switch change {
+        case .deleted(let id):
+          monitor.cancelPendingRecognition(for: id)
+        case .clearedAll:
+          monitor.cancelAllPendingRecognition()
+        case .inserted, .updated, .retentionApplied:
+          break
+        }
+      }
     }
 
     // Snippet-expansion clipboard fallback (`ClipboardSelectionReplacer`):
