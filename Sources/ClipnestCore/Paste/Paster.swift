@@ -317,10 +317,17 @@ public struct Paster: Sendable {
     /// deliberate default, not merely "not implemented yet."
     public static var isAccessibilityGranted: @Sendable () -> Bool { { false } }
 
-    /// No image decode/encode backend exists yet outside macOS — every
-    /// `.image` paste fails closed with `PasteError.invalidImageData` by
-    /// default. Never used in production; see this section's doc comment.
-    public static var imageNormalizer: any ImageNormalizing { NoOpImageNormalizer() }
+    /// Off Apple platforms an image is published byte-for-byte as captured,
+    /// with its media type recovered from the payload's own magic bytes.
+    ///
+    /// macOS re-encodes to TIFF because `NSPasteboard` consumers expect it.
+    /// Linux consumers expect `image/png`, and the capture path already
+    /// prefers PNG over TIFF (decision D42) — so passthrough IS the correct
+    /// Linux behaviour, not a stub. Re-encoding would also change the bytes,
+    /// and therefore the content hash, for no benefit.
+    public static var imageNormalizer: any ImageNormalizing {
+      PassthroughImageNormalizer()
+    }
   }
 
   /// Portable no-op `PasteboardWriting` — see the `#if !os(macOS)` section
@@ -333,9 +340,31 @@ public struct Paster: Sendable {
     func writeFileURL(_ url: URL) {}
   }
 
-  /// Portable no-op `ImageNormalizing` — see the `#if !os(macOS)` section
-  /// doc comment above.
-  private struct NoOpImageNormalizer: ImageNormalizing {
-    func normalizedForPaste(_ data: Data) -> (data: Data, mediaType: ClipMediaType)? { nil }
+  /// Publishes captured image bytes unchanged, typed by their magic bytes.
+  ///
+  /// A real implementation, not a stub: unlike macOS, Linux needs no
+  /// decode/re-encode step to put an image on the clipboard. Returning nil for
+  /// an unrecognised payload preserves `Paster`'s fail-closed contract — it
+  /// never publishes bytes whose type it could not establish.
+  private struct PassthroughImageNormalizer: ImageNormalizing {
+    func normalizedForPaste(_ data: Data) -> (data: Data, mediaType: ClipMediaType)? {
+      guard let mediaType = Self.mediaType(forMagicBytesOf: data) else { return nil }
+      return (data, mediaType)
+    }
+
+    /// Recovers the media type from the payload's own header, rather than
+    /// trusting a stored type: the bytes are what is actually published.
+    static func mediaType(forMagicBytesOf data: Data) -> ClipMediaType? {
+      let png: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+      let jpeg: [UInt8] = [0xFF, 0xD8, 0xFF]
+      let tiffLittleEndian: [UInt8] = [0x49, 0x49, 0x2A, 0x00]
+      let tiffBigEndian: [UInt8] = [0x4D, 0x4D, 0x00, 0x2A]
+      if data.starts(with: png) { return .png }
+      if data.starts(with: jpeg) { return ClipMediaType("image/jpeg") }
+      if data.starts(with: tiffLittleEndian) || data.starts(with: tiffBigEndian) {
+        return .tiff
+      }
+      return nil
+    }
   }
 #endif
