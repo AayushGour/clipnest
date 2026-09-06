@@ -5,14 +5,28 @@
 // no ONNX Runtime dependency — unit-testable on its own.
 public enum ImagePreprocessing {
 
-  /// PP-OCR's own detection preprocessing (`NormalizeImage` in PaddleOCR's
-  /// published det configs) scales pixels to `[0, 1]` then normalizes per
-  /// channel against these ImageNet mean/std statistics. UNVERIFIED against
-  /// this specific PP-OCRv5 export's actual preprocessing config (none
-  /// available in this environment) — these are the long-published,
-  /// widely-used PaddleOCR detection defaults, kept rather than invented.
-  public static let normalizationMean: (r: Float, g: Float, b: Float) = (0.485, 0.456, 0.406)
-  public static let normalizationStd: (r: Float, g: Float, b: Float) = (0.229, 0.224, 0.225)
+  /// PP-OCR's detection AND recognition preprocessing both scale pixels to
+  /// `[0, 1]` then normalize per channel against these mean/std values —
+  /// VERIFIED as of P8-B against a real PP-OCRv5 export's actual
+  /// preprocessing config (RapidOCR's `config.yaml` `Det`/`Rec` sections,
+  /// and `ch_ppocr_det/utils.py`'s/`ch_ppocr_rec/main.py`'s own
+  /// `resize_norm_img`/`normalize` implementations — see this task's
+  /// handoff notes, `.claude/logs/senior-dev.md` P8-B, for the exact
+  /// source). This CORRECTS an earlier, unverified guess that used
+  /// ImageNet's mean/std (`0.485/0.456/0.406`, `0.229/0.224/0.225`) —
+  /// plausible-looking (a very common convention for other vision models)
+  /// but wrong for PP-OCR specifically: PP-OCR's own preprocessing is the
+  /// much simpler `(pixel/255 - 0.5) / 0.5` (mapping `[0,255]` to
+  /// `[-1, 1]`), i.e. mean = std = 0.5 for every channel, identically for
+  /// both the detection and recognition models. Getting this wrong doesn't
+  /// break inference outright (DB detection on a plain, high-contrast test
+  /// image still produced roughly plausible boxes) but corrupts
+  /// recognition badly — this was caught by exactly that symptom: a real
+  /// end-to-end run recognized "Hello Clipnest" as garbage ("ClLDn0St")
+  /// before this fix, and correctly after it (see this task's handoff
+  /// notes for the full before/after).
+  public static let normalizationMean: (r: Float, g: Float, b: Float) = (0.5, 0.5, 0.5)
+  public static let normalizationStd: (r: Float, g: Float, b: Float) = (0.5, 0.5, 0.5)
 
   /// DB detection models are commonly exported requiring input dimensions
   /// that are multiples of this stride (the network's downsampling factor)

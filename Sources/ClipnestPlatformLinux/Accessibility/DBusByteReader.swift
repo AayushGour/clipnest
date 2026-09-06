@@ -76,6 +76,7 @@ struct DBusByteReader {
     case .string: return readLengthPrefixedString().map(DBusValue.string)
     case .objectPath: return readLengthPrefixedString().map(DBusValue.objectPath)
     case .signature: return readSignatureString().map(DBusValue.signature)
+    case .unixFD: return readUInt32().map(DBusValue.unixFD)
     case .variant:
       guard let innerSignature = readSignatureString(),
         let parsed = DBusSignatureParser.parse(innerSignature), parsed.count == 1

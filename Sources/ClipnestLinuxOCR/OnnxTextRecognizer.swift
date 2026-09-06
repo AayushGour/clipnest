@@ -62,12 +62,12 @@ public struct OnnxTextRecognizer: TextRecognizing {
   public func recognizeText(in imageData: Data, quality: TextRecognitionQuality) async -> String? {
     guard imageData.count <= Self.maxByteSize else { return nil }
 
-    // Degrades to `nil` gracefully whenever ONNX Runtime headers weren't
-    // available at build time (this task's own Docker verification runs
-    // this exact path) OR the `clipnest-ocr` package isn't installed on
-    // this machine (`clipnest` only `Recommends` it) — both are ordinary,
-    // expected "OCR unavailable" states, never a crash. See
-    // `OrtRuntimeAvailability.swift`'s doc comment.
+    // Degrades to `nil` gracefully whenever `libonnxruntime.so.1` isn't
+    // installed on this machine (`clipnest` only `Recommends`
+    // `clipnest-ocr`, which vendors it — see `OrtLibrary.swift`) — an
+    // ordinary, expected "OCR unavailable" state, checked at RUNTIME via
+    // `dlopen`, never a crash. See `OrtRuntimeAvailability.swift`'s doc
+    // comment.
     guard OrtRuntimeAvailability.isAvailable else { return nil }
     guard let modelPaths = modelLocator.locate() else { return nil }
 
@@ -93,12 +93,8 @@ public struct OnnxTextRecognizer: TextRecognizing {
       requestQueue.enqueue(
         maxDepth: tier.queueDepth,
         work: {
-          #if CLIPNEST_HAS_ONNXRUNTIME
-            let result = OCRPipeline.run(bytes: bytes, modelPaths: modelPaths, tier: tier)
-            continuation.resume(returning: result)
-          #else
-            continuation.resume(returning: nil)
-          #endif
+          let result = OCRPipeline.run(bytes: bytes, modelPaths: modelPaths, tier: tier)
+          continuation.resume(returning: result)
         },
         onDropped: {
           // Bounded-queue backpressure (see `OCRRequestQueue.swift`'s doc

@@ -5,17 +5,17 @@ import Foundation
 /// app ever sends — mirrors `ClipnestPlatformLinux.ATSPIRequests`'s split
 /// (message construction separate from the connection that sends it).
 ///
-/// Every UNIX-fd-carrying member the contract XML defines
-/// (`SetClipboardWatch`/`GetClipboardMimeTypes`/`ReadClipboard`/
-/// `SetClipboard`/`ClipboardChanged`) is DELIBERATELY absent here — see
-/// this task's decision log: `DBusValue` has no `UNIX_FD` case and
-/// `DBusConnection` sends/receives over a plain `read`/`write` byte
-/// stream, not `sendmsg`/`recvmsg` with `SCM_RIGHTS` ancillary data. Both
-/// live in `ClipnestPlatformLinux`, out of this task's file-ownership
-/// scope, and the task brief is explicit that this module must reuse the
-/// existing D-Bus implementation rather than write a second one — so
-/// those five members are flagged as a follow-up for whoever owns that
-/// module, not worked around here.
+/// The five clipboard-payload members (`SetClipboardWatch`/
+/// `GetClipboardMimeTypes`/`ReadClipboard`/`SetClipboard`/
+/// `ClipboardChanged`) were deliberately absent until task P8-C added
+/// `DBusValue.unixFD` and `DBusConnection`'s `sendmsg`/`recvmsg`+
+/// `SCM_RIGHTS` support in `ClipnestPlatformLinux` — see that task's
+/// decision log. `ReadClipboard`/`SetClipboard` are the two that actually
+/// carry a real file descriptor; this enum only ever builds/parses the
+/// WIRE shape (the `.unixFD` INDEX, never a real `Int32`) — resolving an
+/// index to a real, owned descriptor (or attaching one) is
+/// `DBusConnection`'s job via its `attachingFileDescriptors`/
+/// `fileDescriptors` parameters, called from `ShellHelperClient`.
 enum ShellHelperRequests {
   static func getCapabilities(serial: UInt32) -> DBusMessage {
     DBusMessage(
@@ -78,6 +78,43 @@ enum ShellHelperRequests {
       type: .methodCall, serial: serial, path: ShellHelperName.objectPath,
       interface: ShellHelperName.interface, member: ShellHelperMember.unplaceWindow,
       destination: ShellHelperName.busName, body: [.string(windowToken)])
+  }
+
+  static func setClipboardWatch(enable: Bool, includePrimary: Bool, serial: UInt32) -> DBusMessage {
+    DBusMessage(
+      type: .methodCall, serial: serial, path: ShellHelperName.objectPath,
+      interface: ShellHelperName.interface, member: ShellHelperMember.setClipboardWatch,
+      destination: ShellHelperName.busName, body: [.boolean(enable), .boolean(includePrimary)])
+  }
+
+  static func getClipboardMimeTypes(
+    selection: ShellHelperClipboardSelection, serial: UInt32
+  ) -> DBusMessage {
+    DBusMessage(
+      type: .methodCall, serial: serial, path: ShellHelperName.objectPath,
+      interface: ShellHelperName.interface, member: ShellHelperMember.getClipboardMimeTypes,
+      destination: ShellHelperName.busName, body: [.uint32(selection.rawValue)])
+  }
+
+  static func readClipboard(
+    selection: ShellHelperClipboardSelection, mimetype: String, serial: UInt32
+  ) -> DBusMessage {
+    DBusMessage(
+      type: .methodCall, serial: serial, path: ShellHelperName.objectPath,
+      interface: ShellHelperName.interface, member: ShellHelperMember.readClipboard,
+      destination: ShellHelperName.busName, body: [.uint32(selection.rawValue), .string(mimetype)])
+  }
+
+  /// `SetClipboard(mimetype, fd) -> serial`. The `fd` argument is always
+  /// wire index `0` — this call attaches exactly one real descriptor, and
+  /// `DBusConnection.call(_:attachingFileDescriptors:timeout:)` (the
+  /// caller in `ShellHelperClient`) is what actually attaches the real
+  /// fd index `0` resolves to.
+  static func setClipboard(mimetype: String, serial: UInt32) -> DBusMessage {
+    DBusMessage(
+      type: .methodCall, serial: serial, path: ShellHelperName.objectPath,
+      interface: ShellHelperName.interface, member: ShellHelperMember.setClipboard,
+      destination: ShellHelperName.busName, body: [.string(mimetype), .unixFD(0)])
   }
 }
 
@@ -164,5 +201,67 @@ enum ShellHelperResponses {
   ) -> ShowPickerOptions {
     ShowPickerOptions(
       pointer: (action.pointerX, action.pointerY), monitor: action.monitor, focusKeys: [])
+  }
+
+  /// `GetClipboardMimeTypes(selection) -> (mimetypes, serial)`. The reply's
+  /// `serial` is named `clipboardSerial` here (not `serial`, unlike every
+  /// other parser in this file) specifically to avoid reading as the
+  /// D-BUS MESSAGE serial every other builder/parser in this file means by
+  /// that word — this one is `ClipboardWatcher`'s own generation counter
+  /// (see `extension/dist/esm/core/clipboard.js`'s `this._serial`), a
+  /// same-named but unrelated concept.
+  static func parseGetClipboardMimeTypes(
+    _ message: DBusMessage
+  ) -> (mimeTypes: [String], clipboardSerial: UInt64)? {
+    guard message.type == .methodReturn, message.body.count == 2,
+      case .array(let items) = message.body[0], case .uint64(let clipboardSerial) = message.body[1]
+    else { return nil }
+    let mimeTypes = items.compactMap {
+      if case .string(let value) = $0 { return value }
+      return nil
+    }
+    return (mimeTypes, clipboardSerial)
+  }
+
+  /// `SetClipboard(mimetype, fd) -> serial` — see
+  /// `parseGetClipboardMimeTypes`'s doc comment for why this is
+  /// `clipboardSerial`, not `serial`.
+  static func parseSetClipboardReply(_ message: DBusMessage) -> UInt64? {
+    guard message.type == .methodReturn, case .uint64(let clipboardSerial)? = message.body.first
+    else { return nil }
+    return clipboardSerial
+  }
+
+  /// `ReadClipboard(selection, mimetype) -> fd` — validates only the
+  /// reply's SHAPE (a single `h` at body position 0). The real descriptor
+  /// never touches this pure enum: it travels back via
+  /// `DBusConnection.call(_:attachingFileDescriptors:timeout:)`'s own
+  /// `fileDescriptors` return value, which `ShellHelperClient` reads
+  /// directly — see that method's doc comment for the ownership contract.
+  static func isReadClipboardReplyShapeValid(_ message: DBusMessage) -> Bool {
+    guard message.type == .methodReturn, case .unixFD? = message.body.first else { return false }
+    return true
+  }
+
+  /// `ClipboardChanged(selection, serial, mimetypes, owner_is_us, source)`.
+  /// `source`'s `a{sv}` keys are surfaced the same shallow way
+  /// `parseShortcutActivated`'s `focus: a{sv}` is (decoding its VALUES
+  /// isn't a concern either signal parser owns) — this app has no current
+  /// need for `source`'s contents, only that the signal fired.
+  static func parseClipboardChanged(
+    _ message: DBusMessage
+  ) -> (
+    selection: UInt32, clipboardSerial: UInt64, mimeTypes: [String], ownerIsUs: Bool
+  )? {
+    guard message.type == .signal, message.member == ShellHelperMember.clipboardChanged,
+      message.body.count >= 4, case .uint32(let selection) = message.body[0],
+      case .uint64(let clipboardSerial) = message.body[1], case .array(let items) = message.body[2],
+      case .boolean(let ownerIsUs) = message.body[3]
+    else { return nil }
+    let mimeTypes = items.compactMap {
+      if case .string(let value) = $0 { return value }
+      return nil
+    }
+    return (selection, clipboardSerial, mimeTypes, ownerIsUs)
   }
 }

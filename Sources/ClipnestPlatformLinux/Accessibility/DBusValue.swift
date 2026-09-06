@@ -22,6 +22,19 @@ public indirect enum DBusValue: Equatable, Sendable {
   case array([DBusValue])
   case structure([DBusValue])
   case dictEntry(DBusValue, DBusValue)
+  /// `UNIX_FD` (type code `h`) — carries the WIRE INDEX into the message's
+  /// out-of-band file-descriptor array (`SCM_RIGHTS` ancillary data sent
+  /// alongside the message bytes over `sendmsg`/`recvmsg`), never the real
+  /// OS file descriptor itself. This is the D-Bus Specification's own
+  /// design ("`UNIX_FD` ... the actual file descriptors need to be
+  /// attached to the message using the sendmsg() ancillary data ... The
+  /// body will contain the index into this array"), and it's why this
+  /// case's payload is `UInt32`, matching `UINT32`'s exact wire encoding —
+  /// see `DBusByteWriter`/`DBusByteReader`, which marshal it identically
+  /// to `.uint32`. Resolving an index to a real, owned `Int32` descriptor
+  /// (and closing it) is `DBusConnection`'s job, not this pure value
+  /// type's — see `DBusFileDescriptorPassing`.
+  case unixFD(UInt32)
 }
 
 extension DBusValue {
@@ -45,6 +58,7 @@ extension DBusValue {
     case .objectPath: return "o"
     case .signature: return "g"
     case .variant: return "v"
+    case .unixFD: return "h"
     case .array(let items): return "a" + (items.first?.signatureCode ?? "y")
     case .structure(let items): return "(" + items.map(\.signatureCode).joined() + ")"
     case .dictEntry(let key, let value): return "{" + key.signatureCode + value.signatureCode + "}"
@@ -59,7 +73,7 @@ extension DBusValue {
     switch self {
     case .byte, .signature: return 1
     case .int16, .uint16: return 2
-    case .boolean, .int32, .uint32, .string, .objectPath, .array: return 4
+    case .boolean, .int32, .uint32, .string, .objectPath, .array, .unixFD: return 4
     case .int64, .uint64, .double, .structure, .dictEntry: return 8
     case .variant: return 1
     }

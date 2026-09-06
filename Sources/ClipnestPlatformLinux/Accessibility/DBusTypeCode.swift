@@ -22,6 +22,12 @@ enum DBusTypeCode {
   static let variant = UInt8(ascii: "v")
   static let dictEntryOpen = UInt8(ascii: "{")
   static let dictEntryClose = UInt8(ascii: "}")
+  /// `UNIX_FD` (D-Bus Specification's "Type System" table, code `h`) — on
+  /// the wire this is marshalled EXACTLY like a `UINT32` (see
+  /// `DBusValue.unixFD`'s doc comment: the body carries an INDEX, never the
+  /// real descriptor), so its type code exists only to round-trip through
+  /// `DBusSignatureParser`/`DBusValue.signatureCode` correctly.
+  static let unixFD = UInt8(ascii: "h")
 }
 
 /// A parsed D-Bus type signature — the shape decode needs to know BEFORE it
@@ -29,18 +35,20 @@ enum DBusTypeCode {
 /// a `DBusValue` already knows its own shape).
 indirect enum DBusTypeSignature: Equatable, Sendable {
   case byte, boolean, int16, uint16, int32, uint32, int64, uint64, double
-  case string, objectPath, signature, variant
+  case string, objectPath, signature, variant, unixFD
   case array(DBusTypeSignature)
   case structure([DBusTypeSignature])
   case dictEntry(DBusTypeSignature, DBusTypeSignature)
 
   /// Mirrors `DBusValue.alignment` exactly — see that property's doc
-  /// comment for the D-Bus alignment rules.
+  /// comment for the D-Bus alignment rules. `UNIX_FD` aligns like
+  /// `UINT32` (4) — the D-Bus Specification's alignment table gives it no
+  /// alignment of its own because it IS a `UINT32` on the wire.
   var alignment: Int {
     switch self {
     case .byte, .signature: return 1
     case .int16, .uint16: return 2
-    case .boolean, .int32, .uint32, .string, .objectPath, .array: return 4
+    case .boolean, .int32, .uint32, .string, .objectPath, .array, .unixFD: return 4
     case .int64, .uint64, .double, .structure, .dictEntry: return 8
     case .variant: return 1
     }
@@ -82,6 +90,7 @@ enum DBusSignatureParser {
     case DBusTypeCode.objectPath: return (.objectPath, rest)
     case DBusTypeCode.signature: return (.signature, rest)
     case DBusTypeCode.variant: return (.variant, rest)
+    case DBusTypeCode.unixFD: return (.unixFD, rest)
     case DBusTypeCode.array:
       // DICT_ENTRY (`{kv}`) is only a legal type when it's the DIRECT
       // element of an array (`a{kv}`) — the D-Bus Specification's type

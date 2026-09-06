@@ -107,7 +107,7 @@ struct OCRQuadrilateralTests {
     #expect(distance == 0)
   }
 
-  @Test("Expand moves each corner away from centroid by correct distance")
+  @Test("Expand moves each EDGE outward by the given distance (unit square)")
   func expandCorner() {
     // Unit square centered at (0.5, 0.5).
     let quad = Quadrilateral(
@@ -121,24 +121,51 @@ struct OCRQuadrilateralTests {
 
     let expanded = PolygonUnclip.expand(quad, distance: distance)
 
-    // topLeft (0, 0) relative to centroid (0.5, 0.5):
-    // direction: (-0.5, -0.5), length: sqrt(0.5) ≈ 0.707
-    // normalized: (-0.707, -0.707)
-    // expected: (0, 0) + (-0.707, -0.707) * 1.0 ≈ (-0.707, -0.707)
-    let expectedTopLeftX = 0.0 + (-0.5 / (0.5 * (2.0).squareRoot())) * distance
-    let expectedTopLeftY = 0.0 + (-0.5 / (0.5 * (2.0).squareRoot())) * distance
+    // P8-B FIX: `expand` now offsets each EDGE outward by `distance` and
+    // re-derives corners from adjacent offset edges' intersection — NOT
+    // the old (buggy) "push each corner away from centroid" behavior this
+    // test used to pin (see `PolygonUnclip.expand`'s doc comment for why
+    // that was wrong for realistic wide/short text-line boxes). For an
+    // axis-aligned square, each side simply moves outward by exactly
+    // `distance`, so every corner moves by exactly `distance` along BOTH
+    // axes: topLeft (0,0) -> (-1,-1), bottomRight (1,1) -> (2,2).
+    #expect(abs(expanded.topLeft.x - (-1.0)) < tolerance)
+    #expect(abs(expanded.topLeft.y - (-1.0)) < tolerance)
 
-    #expect(abs(expanded.topLeft.x - expectedTopLeftX) < tolerance)
-    #expect(abs(expanded.topLeft.y - expectedTopLeftY) < tolerance)
+    #expect(abs(expanded.bottomRight.x - 2.0) < tolerance)
+    #expect(abs(expanded.bottomRight.y - 2.0) < tolerance)
 
-    // Similarly for bottomRight (1, 1):
-    // direction: (0.5, 0.5), normalized: (0.707, 0.707)
-    // expected: (1, 1) + (0.707, 0.707) * 1.0 ≈ (1.707, 1.707)
-    let expectedBottomRightX = 1.0 + (0.5 / (0.5 * (2.0).squareRoot())) * distance
-    let expectedBottomRightY = 1.0 + (0.5 / (0.5 * (2.0).squareRoot())) * distance
+    #expect(abs(expanded.topRight.x - 2.0) < tolerance)
+    #expect(abs(expanded.topRight.y - (-1.0)) < tolerance)
 
-    #expect(abs(expanded.bottomRight.x - expectedBottomRightX) < tolerance)
-    #expect(abs(expanded.bottomRight.y - expectedBottomRightY) < tolerance)
+    #expect(abs(expanded.bottomLeft.x - (-1.0)) < tolerance)
+    #expect(abs(expanded.bottomLeft.y - 2.0) < tolerance)
+  }
+
+  @Test("Expand independently grows height on a wide, short rectangle (the real text-line shape)")
+  func expandWideRectangleGrowsHeightToo() {
+    // A wide, short rectangle — every real detected text-line box is this
+    // shape (much wider than tall). The OLD centroid-radial `expand`
+    // pushed corners almost entirely horizontally for a box this wide,
+    // leaving `height` badly under-expanded — exactly the real-world bug
+    // this task's own end-to-end verification measured (a detected
+    // "Hello" box at 17px tall vs. a reference 37px tall for the
+    // identical input). The per-edge offset must grow height by the SAME
+    // `distance` as width, independent of aspect ratio.
+    let quad = Quadrilateral(
+      topLeft: Point2D(x: -5, y: -1),
+      topRight: Point2D(x: 5, y: -1),
+      bottomRight: Point2D(x: 5, y: 1),
+      bottomLeft: Point2D(x: -5, y: 1)
+    )
+
+    let expanded = PolygonUnclip.expand(quad, distance: 1.0)
+
+    // Every side moves outward by exactly 1: width grows from 10 to 12,
+    // height grows from 2 to 4 — NOT a tiny fraction of 1 on the height
+    // axis, which is what the old radial-push bug produced.
+    #expect(abs((expanded.topRight.x - expanded.topLeft.x) - 12.0) < tolerance)
+    #expect(abs((expanded.bottomLeft.y - expanded.topLeft.y) - 4.0) < tolerance)
   }
 
   @Test("Expand with degenerate quad (corner at centroid) leaves that corner unmoved")

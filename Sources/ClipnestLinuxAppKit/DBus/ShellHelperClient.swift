@@ -3,6 +3,10 @@ import ClipnestPlatformLinux
 import Foundation
 import Synchronization
 
+#if canImport(Glibc)
+  import Glibc
+#endif
+
 /// Detects, negotiates with, and calls the optional GNOME Shell extension
 /// (`app.clipnest.ShellHelper`) — see `ShellHelperCapabilities`'s doc
 /// comment for the pure negotiation logic this wraps, and this task's
@@ -47,6 +51,18 @@ public final class ShellHelperClient: @unchecked Sendable {
     (
       _ action: String, _ options: ShowPickerOptions
     ) -> Void = { _, _ in }
+
+  /// Fired for every `ClipboardChanged` signal — see
+  /// `ShellHelperResponses.parseClipboardChanged`'s doc comment for why
+  /// `source`'s `a{sv}` contents aren't surfaced. `selection` is the raw
+  /// `MetaSelectionType` ordinal (`ShellHelperClipboardSelection`'s doc
+  /// comment) rather than the typed enum, since a future Mutter selection
+  /// type this app doesn't recognize should still be observable rather
+  /// than silently dropped by this signal.
+  public var onClipboardChanged:
+    (
+      _ selection: UInt32, _ clipboardSerial: UInt64, _ mimeTypes: [String], _ ownerIsUs: Bool
+    ) -> Void = { _, _, _, _ in }
 
   public init(
     callConnection: any DBusCalling, signalConnection: DBusConnection?,
@@ -117,6 +133,11 @@ public final class ShellHelperClient: @unchecked Sendable {
       if let action = ShellHelperResponses.parseShortcutActivated(message) {
         let options = ShellHelperResponses.showPickerOptions(forAction: action)
         onShortcutActivated(action.action, options)
+        continue
+      }
+      if let changed = ShellHelperResponses.parseClipboardChanged(message) {
+        onClipboardChanged(
+          changed.selection, changed.clipboardSerial, changed.mimeTypes, changed.ownerIsUs)
       }
     }
   }
@@ -146,4 +167,80 @@ public final class ShellHelperClient: @unchecked Sendable {
       timeout: timeout)
     return reply.flatMap(ShellHelperResponses.parseBooleanReply) ?? false
   }
+
+  // MARK: - Clipboard payload calls (task P8-C) — every real descriptor
+  // that crosses these methods is CALLER-OWNED (see each method's doc
+  // comment); none of them is ever silently leaked or double-closed.
+
+  /// `SetClipboardWatch(enable, include_primary)` — has no reply payload,
+  /// so success is just "the extension acknowledged the call at all."
+  @discardableResult
+  public func setClipboardWatch(enable: Bool, includePrimary: Bool) -> Bool {
+    guard currentCapabilities.supports(.clipboard) else { return false }
+    let reply = callConnection.call(
+      ShellHelperRequests.setClipboardWatch(
+        enable: enable, includePrimary: includePrimary, serial: 40),
+      timeout: timeout)
+    return reply?.type == .methodReturn
+  }
+
+  public func getClipboardMimeTypes(
+    selection: ShellHelperClipboardSelection
+  ) -> (mimeTypes: [String], clipboardSerial: UInt64)? {
+    guard currentCapabilities.supports(.clipboard) else { return nil }
+    let reply = callConnection.call(
+      ShellHelperRequests.getClipboardMimeTypes(selection: selection, serial: 41),
+      timeout: timeout)
+    return reply.flatMap(ShellHelperResponses.parseGetClipboardMimeTypes)
+  }
+
+  /// `ReadClipboard(selection, mimetype) -> fd`. On success, the returned
+  /// `Int32` is a REAL, now-open descriptor this call's caller now owns —
+  /// it must close it exactly once (typically after reading the payload
+  /// off it). Returns `nil` on any failure — capability not negotiated,
+  /// timeout, or a reply whose shape doesn't match (in which case any fd
+  /// that DID arrive is closed here rather than leaked, since nobody else
+  /// can claim it).
+  public func readClipboard(
+    selection: ShellHelperClipboardSelection, mimetype: String
+  ) -> Int32? {
+    guard currentCapabilities.supports(.clipboard) else { return nil }
+    guard
+      let (reply, fileDescriptors) = callConnection.call(
+        ShellHelperRequests.readClipboard(selection: selection, mimetype: mimetype, serial: 42),
+        attachingFileDescriptors: [], timeout: timeout)
+    else { return nil }
+    guard ShellHelperResponses.isReadClipboardReplyShapeValid(reply), let fd = fileDescriptors.first
+    else {
+      for fd in fileDescriptors { Self.closeLeakedFileDescriptor(fd) }
+      return nil
+    }
+    return fd
+  }
+
+  /// `SetClipboard(mimetype, fd) -> serial`. `fileDescriptor` is CALLER-
+  /// OWNED both before and after this call — this method attaches it to
+  /// the outgoing message but never closes it (mirrors
+  /// `DBusConnection.send(_:attachingFileDescriptors:)`'s own contract);
+  /// the caller closes it same as it would any fd it opened itself, once
+  /// it's done writing to/handing off the write end.
+  public func setClipboard(mimetype: String, fileDescriptor: Int32) -> UInt64? {
+    guard currentCapabilities.supports(.clipboard) else { return nil }
+    let result = callConnection.call(
+      ShellHelperRequests.setClipboard(mimetype: mimetype, serial: 43),
+      attachingFileDescriptors: [fileDescriptor], timeout: timeout)
+    guard let (reply, fileDescriptors) = result else { return nil }
+    // A conforming extension never attaches fds to THIS reply — close any
+    // that show up anyway rather than leak them.
+    for fd in fileDescriptors { Self.closeLeakedFileDescriptor(fd) }
+    return ShellHelperResponses.parseSetClipboardReply(reply)
+  }
+
+  #if canImport(Glibc)
+    private static func closeLeakedFileDescriptor(_ fd: Int32) {
+      Glibc.close(fd)
+    }
+  #else
+    private static func closeLeakedFileDescriptor(_ fd: Int32) {}
+  #endif
 }

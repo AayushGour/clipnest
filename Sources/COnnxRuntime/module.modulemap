@@ -1,5 +1,11 @@
+// No `link` directive — see `shim.h`'s top comment (D66 in
+// .claude/project-context.md): linking `onnxruntime` here made
+// `dpkg-shlibdeps` promote it to a hard `Depends:` the moment this module
+// compiled in at all, defeating `clipnest`'s "OCR is an optional
+// `Recommends:`" packaging shape. `libonnxruntime.so.1` is resolved at
+// RUNTIME instead, via `dlopen`/`dlsym` — see
+// `Sources/ClipnestLinuxOCR/Runtime/OrtLibrary.swift`.
 module COnnxRuntime [system] {
   header "shim.h"
-  link "onnxruntime"
   export *
 }

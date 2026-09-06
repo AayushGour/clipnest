@@ -11,6 +11,13 @@ enum DBusHeaderFieldCode {
   static let destination: UInt8 = 6
   static let sender: UInt8 = 7
   static let signature: UInt8 = 8
+  /// `UNIX_FDS` — a plain `UINT32` count of how many real file descriptors
+  /// travel with this message as `SCM_RIGHTS` ancillary data (see
+  /// `DBusValue.unixFD`'s doc comment). Required by the spec whenever the
+  /// body contains at least one `h`; `DBusConnection`/
+  /// `DBusFileDescriptorPassing` are what actually attach/detach the real
+  /// descriptors — this struct only carries the COUNT through encode/decode.
+  static let unixFDs: UInt8 = 9
 }
 
 enum DBusProtocol {
@@ -47,6 +54,15 @@ public struct DBusMessage: Equatable, Sendable {
   /// interpret the body bytes at all.
   public var signature: String?
   public var body: [DBusValue]
+  /// How many real file descriptors ride along with this message as
+  /// `SCM_RIGHTS` ancillary data — becomes the `UNIX_FDS` header field
+  /// when `> 0`. Defaults to `0` (no header field emitted, byte-for-byte
+  /// identical to every message this type produced before fd support
+  /// existed) so no existing call site needs to change. The actual
+  /// `Int32` descriptors themselves are NOT stored here — see
+  /// `DBusValue.unixFD`'s doc comment for why that's `DBusConnection`'s
+  /// job, not this pure value type's.
+  public var unixFileDescriptorCount: Int
 
   public init(
     type: MessageType,
@@ -58,7 +74,8 @@ public struct DBusMessage: Equatable, Sendable {
     replySerial: UInt32? = nil,
     destination: String? = nil,
     sender: String? = nil,
-    body: [DBusValue] = []
+    body: [DBusValue] = [],
+    unixFileDescriptorCount: Int = 0
   ) {
     self.type = type
     self.serial = serial
@@ -71,6 +88,7 @@ public struct DBusMessage: Equatable, Sendable {
     self.sender = sender
     self.signature = body.isEmpty ? nil : body.map(\.signatureCode).joined()
     self.body = body
+    self.unixFileDescriptorCount = unixFileDescriptorCount
   }
 
   public func encoded() -> [UInt8] {
@@ -111,6 +129,13 @@ public struct DBusMessage: Equatable, Sendable {
     if let bodySignature {
       headerFields.append(
         .structure([.byte(DBusHeaderFieldCode.signature), .variant(.signature(bodySignature))]))
+    }
+    if unixFileDescriptorCount > 0 {
+      headerFields.append(
+        .structure([
+          .byte(DBusHeaderFieldCode.unixFDs),
+          .variant(.uint32(UInt32(unixFileDescriptorCount))),
+        ]))
     }
 
     var writer = DBusByteWriter()
@@ -179,6 +204,8 @@ public struct DBusMessage: Equatable, Sendable {
         if case .string(let value) = value { message.sender = value }
       case DBusHeaderFieldCode.signature:
         if case .signature(let value) = value { message.signature = value }
+      case DBusHeaderFieldCode.unixFDs:
+        if case .uint32(let value) = value { message.unixFileDescriptorCount = Int(value) }
       default: break
       }
     }

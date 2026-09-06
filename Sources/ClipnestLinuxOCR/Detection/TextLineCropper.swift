@@ -14,17 +14,19 @@ public enum TextLineCropper {
   /// vary this (only detection input size and batch size scale with tier).
   public static let recognitionInputHeight = 48
 
-  /// v1 SIMPLIFICATION (matches `PolygonUnclip.expand`'s disclosed scoping
-  /// decision — see that file's doc comment for the full rationale): crops
-  /// the AXIS-ALIGNED bounding box of `quad` rather than perspective-warping
-  /// the quad itself onto a rectangle. Good enough for this product's
-  /// primary OCR use case — desktop screenshots/UI captures, which are
-  /// essentially never rotated — and avoids a full projective-warp +
-  /// bilinear-resample implementation this task doesn't have the budget to
-  /// verify without real skewed-text fixtures. A KNOWN, DISCLOSED
-  /// limitation, not an oversight: rotated/photographed text will crop
-  /// worse than a true perspective warp would. Revisit if that proves to
-  /// matter in practice.
+  /// v1 SIMPLIFICATION: crops the AXIS-ALIGNED bounding box of `quad`
+  /// rather than perspective-warping the quad itself onto a rectangle
+  /// (unlike `PolygonUnclip.expand`, this one is NOT a bug — as of P8-B
+  /// that file's edge-offset expansion is geometrically correct for a
+  /// convex quad; this crop's remaining looseness is the deliberate "no
+  /// perspective warp" scoping decision below). Good enough for this
+  /// product's primary OCR use case — desktop screenshots/UI captures,
+  /// which are essentially never rotated — and avoids a full
+  /// projective-warp + bilinear-resample implementation this task doesn't
+  /// have the budget to verify without real skewed-text fixtures. A
+  /// KNOWN, DISCLOSED limitation, not an oversight: rotated/photographed
+  /// text will crop worse than a true perspective warp would. Revisit if
+  /// that proves to matter in practice.
   ///
   /// Clamps to the image bounds — a detection box's unclip expansion (see
   /// `PolygonUnclip.expand`) can legitimately push corners slightly outside

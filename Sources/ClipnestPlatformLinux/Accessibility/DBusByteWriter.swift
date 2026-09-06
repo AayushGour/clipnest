@@ -107,6 +107,7 @@ struct DBusByteWriter {
     case .variant(let inner):
       writeSignatureString(inner.signatureCode)
       write(inner)
+    case .unixFD(let index): writeUInt32(index)
     case .array(let items):
       var elementBuffer = DBusByteWriter()
       for item in items { elementBuffer.write(item) }

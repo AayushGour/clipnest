@@ -33,4 +33,26 @@ enum DBusAuthHandshake {
     let trimmed = serverLine.trimmingCharacters(in: .whitespacesAndNewlines)
     return trimmed == "OK" || trimmed.hasPrefix("OK ")
   }
+
+  /// Sent after `AUTH` succeeds but before `BEGIN`, on a UNIX-domain-socket
+  /// transport, to ask the server to allow `SCM_RIGHTS` file-descriptor
+  /// passing on this connection (D-Bus Specification, "Authentication" —
+  /// the `NEGOTIATE_UNIX_FD`/`AGREE_UNIX_FD` exchange). Without this, a
+  /// connection is never fd-capable: the daemon silently refuses to relay
+  /// any message carrying a `UNIX_FDS` header field over it, even though
+  /// the bytes themselves went through fine — a message can look
+  /// perfectly well-formed on the wire and still be dropped for exactly
+  /// this reason. Every real D-Bus client library sends this
+  /// unconditionally for every connection it opens over a UNIX socket
+  /// (never lazily, only on a connection's first fd-carrying call), and
+  /// `DBusConnection.performExternalAuth()` does the same.
+  static let negotiateUnixFDLine = "NEGOTIATE_UNIX_FD\r\n"
+
+  /// The server's line on agreeing to fd passing is `AGREE_UNIX_FD\r\n`; a
+  /// server that doesn't support it replies `ERROR\r\n` instead (never a
+  /// silent drop at the SASL layer — the daemon still speaks the line
+  /// protocol correctly either way).
+  static func isUnixFDAgreed(serverLine: String) -> Bool {
+    serverLine.trimmingCharacters(in: .whitespacesAndNewlines) == "AGREE_UNIX_FD"
+  }
 }

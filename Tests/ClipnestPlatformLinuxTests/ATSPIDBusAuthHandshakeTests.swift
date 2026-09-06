@@ -26,4 +26,20 @@ struct DBusAuthHandshakeTests {
   func rejectsRejectedResponse() {
     #expect(!DBusAuthHandshake.isAuthAccepted(serverLine: "REJECTED EXTERNAL DBUS_COOKIE_SHA1\r\n"))
   }
+
+  @Test("negotiateUnixFDLine is the exact SASL command the spec defines")
+  func negotiateUnixFDLineIsExact() {
+    #expect(DBusAuthHandshake.negotiateUnixFDLine == "NEGOTIATE_UNIX_FD\r\n")
+  }
+
+  @Test("recognizes AGREE_UNIX_FD, tolerating surrounding whitespace/newlines")
+  func recognizesAgreeUnixFD() {
+    #expect(DBusAuthHandshake.isUnixFDAgreed(serverLine: "AGREE_UNIX_FD\r\n"))
+    #expect(DBusAuthHandshake.isUnixFDAgreed(serverLine: "AGREE_UNIX_FD"))
+  }
+
+  @Test("rejects an ERROR response to NEGOTIATE_UNIX_FD (a daemon that doesn't support fd passing)")
+  func rejectsErrorResponseToNegotiate() {
+    #expect(!DBusAuthHandshake.isUnixFDAgreed(serverLine: "ERROR \"Unknown command\"\r\n"))
+  }
 }

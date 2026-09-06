@@ -20,6 +20,30 @@ enum ShellHelperMember {
   static let placeWindow = "PlaceWindow"
   static let unplaceWindow = "UnplaceWindow"
   static let shortcutActivated = "ShortcutActivated"
+  // The five clipboard-payload members (task P8-C) — see
+  // `ShellHelperRequests`/`ShellHelperResponses`' doc comments for why
+  // these were absent until `DBusValue.unixFD`/`DBusConnection`'s
+  // `sendmsg`/`recvmsg`+`SCM_RIGHTS` support existed.
+  static let setClipboardWatch = "SetClipboardWatch"
+  static let getClipboardMimeTypes = "GetClipboardMimeTypes"
+  static let readClipboard = "ReadClipboard"
+  static let setClipboard = "SetClipboard"
+  static let clipboardChanged = "ClipboardChanged"
+}
+
+/// `GetClipboardMimeTypes`/`ReadClipboard`/`ClipboardChanged`'s
+/// `selection: u` argument. This is the raw ordinal of Mutter's OWN
+/// `MetaSelectionType` C enum (`src/core/meta-selection.h`) — GJS's D-Bus
+/// export of the extension's methods passes it through unchanged, and
+/// `extension/dist/esm/core/clipboard.js` compares it directly against
+/// `Meta.SelectionType.SELECTION_CLIPBOARD`/`SELECTION_PRIMARY`. Verified
+/// against Mutter's own header rather than guessed: `NONE=0, PRIMARY=1,
+/// SECONDARY=2, CLIPBOARD=3, DND=4`. This app only ever asks for the two
+/// X11-selection-shaped cases — `SECONDARY`/`DND` have no corresponding
+/// concept this app tracks.
+public enum ShellHelperClipboardSelection: UInt32, Equatable, Sendable {
+  case primary = 1
+  case clipboard = 3
 }
 
 enum ShellHelperProperty {

@@ -29,10 +29,27 @@ import Synchronization
 public final class DBusConnection: @unchecked Sendable {
   private let fileDescriptor: Int32
   private let state = Mutex<State>(State())
+  /// Whether the daemon agreed to `NEGOTIATE_UNIX_FD` during the SASL
+  /// handshake (see `DBusAuthHandshake.negotiateUnixFDLine`'s doc
+  /// comment) — informational only; this module still ATTEMPTS
+  /// fd-carrying sends/receives regardless (every real target it connects
+  /// to is a modern dbus-daemon over a UNIX socket, which always agrees).
+  /// Not behind `state`'s `Mutex`: it's written exactly once, entirely
+  /// inside `performExternalAuth()`, which always completes before
+  /// `connect(address:timeout:)` returns the connection to any caller —
+  /// so by the time any other thread could observe this instance at all,
+  /// the write already happened-before that observation.
+  public private(set) var supportsFileDescriptorPassing = false
 
   private struct State {
     var nextSerial: UInt32 = 1
     var receiveBuffer: [UInt8] = []
+    /// Real, owned file descriptors received via `SCM_RIGHTS` but not yet
+    /// claimed by a fully-decoded message — see
+    /// `tryDecodeBufferedMessage()`'s doc comment for the FIFO ordering
+    /// invariant this depends on, and this type's "Received fds must be
+    /// owned and closed" contract for who closes them.
+    var pendingFileDescriptors: [Int32] = []
   }
 
   private init(fileDescriptor: Int32) {
@@ -41,6 +58,15 @@ public final class DBusConnection: @unchecked Sendable {
 
   deinit {
     #if canImport(Glibc)
+      // Defensive only — every fd this connection ever buffers is meant to
+      // be claimed by `tryDecodeBufferedMessage()` the moment its owning
+      // message finishes decoding (see `pendingFileDescriptors`'s doc
+      // comment). If the connection is torn down mid-read with some still
+      // unclaimed (e.g. a reply arrived with its fds but the caller timed
+      // out a moment earlier), closing them here is what keeps a dropped
+      // connection from leaking real descriptors for the rest of the
+      // process's life.
+      for fd in state.withLock({ $0.pendingFileDescriptors }) { Glibc.close(fd) }
       Glibc.close(fileDescriptor)
     #endif
   }
@@ -152,6 +178,20 @@ public final class DBusConnection: @unchecked Sendable {
       guard let responseLine = readLine(timeout: .seconds(1)) else { return false }
       guard DBusAuthHandshake.isAuthAccepted(serverLine: responseLine) else { return false }
 
+      // See `DBusAuthHandshake.negotiateUnixFDLine`'s doc comment: sent
+      // unconditionally, for every connection, not just ones a caller
+      // happens to know in advance will carry an `h` argument — skipping
+      // this is exactly what silently breaks fd-carrying messages later
+      // (the bytes go out fine; the daemon just never relays the
+      // attached descriptors). A daemon that refuses (replies `ERROR`
+      // rather than `AGREE_UNIX_FD`) doesn't fail the WHOLE connection —
+      // ordinary, non-fd traffic must keep working either way.
+      guard writeRaw(Array(DBusAuthHandshake.negotiateUnixFDLine.utf8)) else { return false }
+      if let negotiationReply = readLine(timeout: .seconds(1)) {
+        supportsFileDescriptorPassing = DBusAuthHandshake.isUnixFDAgreed(
+          serverLine: negotiationReply)
+      }
+
       return writeRaw(Array(DBusAuthHandshake.beginLine.utf8))
     }
 
@@ -174,11 +214,9 @@ public final class DBusConnection: @unchecked Sendable {
       return String(decoding: collected, as: UTF8.self)
     }
 
-    private func writeRaw(_ bytes: [UInt8]) -> Bool {
-      bytes.withUnsafeBytes { rawBuffer in
-        guard let baseAddress = rawBuffer.baseAddress else { return false }
-        return Glibc.write(fileDescriptor, baseAddress, rawBuffer.count) == rawBuffer.count
-      }
+    private func writeRaw(_ bytes: [UInt8], attachingFileDescriptors: [Int32] = []) -> Bool {
+      DBusFileDescriptorPassing.send(
+        socket: fileDescriptor, bytes: bytes, fileDescriptors: attachingFileDescriptors)
     }
   #endif
 
@@ -192,19 +230,66 @@ public final class DBusConnection: @unchecked Sendable {
     #endif
   }
 
+  /// Sends `message` with `attachingFileDescriptors` riding along as
+  /// `SCM_RIGHTS` ancillary data on the same `sendmsg` call (see
+  /// `DBusFileDescriptorPassing.send`'s doc comment for why they must
+  /// share one syscall). `message.unixFileDescriptorCount` is always
+  /// overridden to `attachingFileDescriptors.count` before encoding —
+  /// the array actually being attached is the one source of truth for
+  /// the `UNIX_FDS` header field, so a caller can never send a `.unixFD`
+  /// body value whose index is out of range of what's really attached, or
+  /// forget to set the count at all.
+  @discardableResult
+  public func send(_ message: DBusMessage, attachingFileDescriptors: [Int32]) -> Bool {
+    #if canImport(Glibc)
+      var outgoing = message
+      outgoing.unixFileDescriptorCount = attachingFileDescriptors.count
+      return writeRaw(outgoing.encoded(), attachingFileDescriptors: attachingFileDescriptors)
+    #else
+      return false
+    #endif
+  }
+
   /// Blocks (up to `timeout`) until one complete `DBusMessage` has been
   /// read off the socket, or returns `nil` on timeout/error.
+  ///
+  /// If the message carries attached file descriptors
+  /// (`unixFileDescriptorCount > 0`), they are received correctly (never
+  /// truncated — see `DBusFileDescriptorPassing`) but then immediately
+  /// CLOSED, since this overload has no way to hand them to a caller that
+  /// didn't ask for them. Every call site in this app that can
+  /// legitimately receive an fd-carrying message (`ShellHelperClient`'s
+  /// payload methods) uses `receiveOneMessageWithFileDescriptors(timeout:)`
+  /// instead; this defensive close exists purely so an ordinary,
+  /// non-fd-aware caller can never silently leak one.
   public func receiveOneMessage(timeout: Duration) -> DBusMessage? {
+    guard let (message, fileDescriptors) = receiveOneMessageWithFileDescriptors(timeout: timeout)
+    else { return nil }
+    closeFileDescriptors(fileDescriptors)
+    return message
+  }
+
+  /// Same contract as `receiveOneMessage(timeout:)`, but also returns any
+  /// real file descriptors the message carried. Every returned descriptor
+  /// is a REAL, now-open fd in this process from this call onward — the
+  /// CALLER owns it and must close it exactly once (reading it, e.g. via
+  /// `ReadClipboard`'s payload, then closing; or closing outright if it
+  /// turns out not to be needed).
+  public func receiveOneMessageWithFileDescriptors(
+    timeout: Duration
+  ) -> (message: DBusMessage, fileDescriptors: [Int32])? {
     #if canImport(Glibc)
       let deadline = ContinuousClock.now + timeout
       while ContinuousClock.now < deadline {
         if let decoded = tryDecodeBufferedMessage() { return decoded }
-        var chunk = [UInt8](repeating: 0, count: 4096)
-        let readCount = chunk.withUnsafeMutableBytes { buffer in
-          Glibc.read(fileDescriptor, buffer.baseAddress, buffer.count)
+        guard
+          let (bytes, fileDescriptors) = DBusFileDescriptorPassing.receive(
+            socket: fileDescriptor, maxBytes: DBusConnectionDefaults.readChunkByteCount)
+        else { continue }
+        state.withLock {
+          $0.receiveBuffer.append(contentsOf: bytes)
+          $0.pendingFileDescriptors.append(contentsOf: fileDescriptors)
         }
-        guard readCount > 0 else { continue }
-        state.withLock { $0.receiveBuffer.append(contentsOf: chunk.prefix(readCount)) }
       }
       return tryDecodeBufferedMessage()
     #else
@@ -212,19 +297,51 @@ public final class DBusConnection: @unchecked Sendable {
     #endif
   }
 
-  private func tryDecodeBufferedMessage() -> DBusMessage? {
+  /// Decodes the oldest complete message sitting in `receiveBuffer` (if
+  /// any) and, if it carries attached fds, claims that many off the FRONT
+  /// of `pendingFileDescriptors`.
+  ///
+  /// **Why FIFO-by-position is correct or here, not just convenient:**
+  /// `SCM_RIGHTS` ancillary data is associated by the kernel with whichever
+  /// bytes a specific `sendmsg`/`recvmsg` call carried (`unix(7)`), NOT
+  /// with "message N" as this module's own framing understands it. But
+  /// every message this app ever sends with attached fds is written by
+  /// EXACTLY ONE `sendmsg` call (see `DBusConnection.send(_:
+  /// attachingFileDescriptors:)`), and messages on one connection are
+  /// always fully decoded in the same order their bytes arrived (this type
+  /// never reorders or replays `receiveBuffer`). So the Nth message to
+  /// finish decoding is always the Nth message whose fds were appended to
+  /// `pendingFileDescriptors` — claiming from the front, in order, is
+  /// exactly right for this module's own strictly-sequential
+  /// send/receive usage. This would NOT hold for a connection that
+  /// pipelined multiple in-flight requests concurrently; this module never
+  /// does that (see `DBusConnection`'s own top-level doc comment on using
+  /// two separate connections instead of multiplexing one).
+  private func tryDecodeBufferedMessage() -> (message: DBusMessage, fileDescriptors: [Int32])? {
     state.withLock { state in
       guard let (message, consumed) = DBusMessage.decode(state.receiveBuffer) else { return nil }
       state.receiveBuffer.removeFirst(consumed)
-      return message
+      let claimedCount = min(message.unixFileDescriptorCount, state.pendingFileDescriptors.count)
+      let fileDescriptors = Array(state.pendingFileDescriptors.prefix(claimedCount))
+      state.pendingFileDescriptors.removeFirst(claimedCount)
+      return (message, fileDescriptors)
     }
   }
+
+  #if canImport(Glibc)
+    private func closeFileDescriptors(_ fileDescriptors: [Int32]) {
+      for fd in fileDescriptors { Glibc.close(fd) }
+    }
+  #else
+    private func closeFileDescriptors(_ fileDescriptors: [Int32]) {}
+  #endif
 
   /// Sends `message` and blocks (up to `timeout`, TOTAL — not per read) for
   /// its matching `METHOD_RETURN`/`ERROR` reply (matched by
   /// `replySerial == message.serial`). Any other message received in the
   /// meantime (there should be none on a connection dedicated to calls —
-  /// see this type's doc comment) is discarded.
+  /// see this type's doc comment) is discarded — and if it happened to
+  /// carry fds, they are closed rather than leaked.
   public func call(_ message: DBusMessage, timeout: Duration) -> DBusMessage? {
     guard send(message) else { return nil }
     let deadline = ContinuousClock.now + timeout
@@ -235,6 +352,35 @@ public final class DBusConnection: @unchecked Sendable {
     }
     return nil
   }
+
+  /// Same contract as `call(_:timeout:)`, but for a request that attaches
+  /// real file descriptors (`attachingFileDescriptors` — index `i`'s real
+  /// fd is whatever `.unixFD(UInt32(i))` in `message`'s body should
+  /// resolve to) and/or expects a reply that carries some back. Every fd
+  /// in the returned tuple's `fileDescriptors` is CALLER-OWNED — see
+  /// `receiveOneMessageWithFileDescriptors(timeout:)`'s contract.
+  public func call(
+    _ message: DBusMessage, attachingFileDescriptors: [Int32], timeout: Duration
+  ) -> (message: DBusMessage, fileDescriptors: [Int32])? {
+    guard send(message, attachingFileDescriptors: attachingFileDescriptors) else { return nil }
+    let deadline = ContinuousClock.now + timeout
+    while ContinuousClock.now < deadline {
+      let remaining = deadline - ContinuousClock.now
+      guard let (reply, fileDescriptors) = receiveOneMessageWithFileDescriptors(timeout: remaining)
+      else { return nil }
+      if reply.replySerial == message.serial { return (reply, fileDescriptors) }
+      closeFileDescriptors(fileDescriptors)
+    }
+    return nil
+  }
+}
+
+/// `4096`, factored out because `receiveOneMessageWithFileDescriptors`
+/// needs the exact same chunk size the original plain-`read` loop always
+/// used — kept in one place per coding-standards.md's "no magic numbers
+/// used more than once" rule.
+enum DBusConnectionDefaults {
+  static let readChunkByteCount = 4096
 }
 
 extension DBusConnection: ATSPIObjectCalling {}
