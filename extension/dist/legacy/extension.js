@@ -13,10 +13,14 @@ let service = null;
 function init() { /* nothing: all setup happens in enable() */ }
 
 function enable() {
-  const clipboard = new ClipboardWatcher(deps, () => {});
+  // See `entry-esm.js`'s identical comment: `service` is assigned before
+  // `service.enable()` runs, so by the time mutter can actually fire either
+  // callback, `service` is always set.
+  const clipboard = new ClipboardWatcher(
+    deps, (...a) => service.notifyClipboardChanged(...a));
   const input = new InputSynthesizer(deps);
   const placement = new Placement(deps);
-  const keybindings = new Keybindings(deps, () => {});
+  const keybindings = new Keybindings(deps, (a) => service.notifyShortcutActivated(a));
   service = new ShellHelperService(deps, IFACE_XML,
     { clipboard, input, placement, keybindings });
   service.enable();

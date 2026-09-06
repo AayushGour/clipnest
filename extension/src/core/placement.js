@@ -5,6 +5,19 @@
 // cannot position its own window or query the global pointer, and GNOME has no
 // layer-shell — so without this, the picker opens centred on the pointer's
 // monitor instead of at the cursor, and cannot sit above a fullscreen window.
+
+// Window identity contract with the app side (T-RT3): every Clipnest toplevel
+// sets WM_CLASS to this (the app calls `g_set_prgname` before `gtk_init()`,
+// giving every window a real, non-empty WM_CLASS on both X11 and Wayland —
+// previously "", ""), and each role gets one fixed, human/screen-reader
+// readable title, never a per-invocation UUID. `PlaceWindow`/`UnplaceWindow`'s
+// `window_token` D-Bus argument is one of this map's keys (a stable role
+// string, e.g. `'picker'`), not a title.
+const OUR_WM_CLASS = 'clipnest';
+const ROLE_TITLES = Object.freeze({ picker: 'Clipnest' });
+const TITLE_ROLES = Object.freeze(
+  Object.fromEntries(Object.entries(ROLE_TITLES).map(([role, title]) => [title, role])));
+
 var Placement = class Placement {
   constructor(deps) {
     this._d = deps;
@@ -35,21 +48,51 @@ var Placement = class Placement {
     this._pending.clear();
   }
 
-  _ourWindows() {
+  _allWindows() {
     return this._d.global.get_window_actors()
       .map(a => a.meta_window)
-      .filter(w => w && w.get_gtk_application_id() === 'app.clipnest.Clipnest');
+      .filter(w => w != null);
   }
 
+  /// Windows are now identified by WM_CLASS rather than
+  /// `get_gtk_application_id()`: the latter only ever worked on native
+  /// Wayland windows (GTK4 sends it over the Wayland-only gtk_shell1
+  /// protocol, which mutter has nothing to forward on X11), while WM_CLASS
+  /// is real on both backends now that the app sets `g_set_prgname` before
+  /// `gtk_init()` — see the module header comment.
+  _ourWindows() {
+    return this._allWindows().filter(w => w.get_wm_class() === OUR_WM_CLASS);
+  }
+
+  /// Resolves `FocusAndSendKeyChord`'s `window_serial` argument — Mutter's
+  /// own `get_stable_sequence()`, a per-process-lifetime unique id ANY
+  /// window has (not just this app's own), which is what makes
+  /// `FocusAndSendKeyChord` usable against the app the user is pasting
+  /// INTO rather than only Clipnest's own windows (contrast `_findByToken`,
+  /// which is `PlaceWindow`'s own-window-only lookup). `serial` is coerced
+  /// with `Number()` because GJS's `t` (uint64) unpacking can hand back a
+  /// BigInt depending on version, while `get_stable_sequence()` always
+  /// returns a plain Number.
+  findWindowBySerial(serial) {
+    const target = Number(serial);
+    return this._allWindows().find(w => w.get_stable_sequence() === target) || null;
+  }
+
+  /// `token` is a role string (see `ROLE_TITLES`), not a title — the
+  /// picker's user-visible title is the fixed string `'Clipnest'` (an app
+  /// with a title that happens to also be Alt-Tab/screen-reader announced
+  /// sanely), so this resolves the role to its known title before matching.
+  /// An unrecognized role (not in `ROLE_TITLES`) never matches anything.
   _findByToken(token) {
-    // The token is the window title, a per-invocation UUID the app sets on its
-    // own window. get_gtk_application_id() works on native Wayland windows
-    // because GTK4 sends gtk_shell1.set_dbus_properties, which mutter forwards.
-    return this._ourWindows().find(w => w.get_title() === token) || null;
+    const title = ROLE_TITLES[token];
+    if (!title) return null;
+    return this._ourWindows().find(w => w.get_title() === title) || null;
   }
 
   _applyPending(win) {
-    const token = win.get_title();
+    if (win.get_wm_class() !== OUR_WM_CLASS) return;
+    const token = TITLE_ROLES[win.get_title()];
+    if (!token) return;
     const req = this._pending.get(token);
     if (!req) return;
     this._pending.delete(token);
@@ -103,6 +146,9 @@ var Placement = class Placement {
     if (win) {
       info['wm-class'] = win.get_wm_class() || '';
       info['pid'] = win.get_pid();
+      // The id `FocusAndSendKeyChord`'s `window_serial` argument expects —
+      // see `findWindowBySerial`'s doc comment.
+      info['window-serial'] = win.get_stable_sequence();
       info['client-type'] =
         win.get_client_type() === this._d.Meta.WindowClientType.WAYLAND ? 'wayland' : 'x11';
       const sandboxed = win.get_sandboxed_app_id();

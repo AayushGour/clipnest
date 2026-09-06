@@ -71,4 +71,73 @@ struct AppShellHelperClientTests {
     // have sent anything, since the capability check short-circuits first.
     #expect(fake.sentMessages.count == 1)
   }
+
+  // MARK: - probeLiveDispatch (P10-C: closes the hotkey capability trap)
+
+  @Test("probeLiveDispatch returns true only on a real, correctly-shaped GetPointer reply")
+  func probeLiveDispatchTrueOnValidReply() {
+    let fake = FakeDBusCalling(scriptedReplies: [
+      fakeMethodReturn(body: [.boolean(true)]),
+      fakeMethodReturn(body: [.variant(.array([.string("hotkeys")]))]),
+      fakeMethodReturn(body: [.int32(1), .int32(2), .int32(0)]),
+    ])
+    let client = ShellHelperClient(callConnection: fake, signalConnection: nil)
+    _ = client.refreshCapabilities()
+
+    #expect(client.probeLiveDispatch())
+    #expect(fake.sentMessages.last?.member == "GetPointer")
+  }
+
+  @Test(
+    "probeLiveDispatch returns false when the extension advertises hotkeys but dispatches nothing (the P10-C stub-service bug)"
+  )
+  func probeLiveDispatchFalseWhenExtensionAdvertisesButDoesNotDispatch() {
+    // NameHasOwner true, Capabilities claims "hotkeys" — but the scripted
+    // GetPointer reply is absent, mirroring a service that exports no
+    // methods at all (a real call to it would time out / UnknownMethod;
+    // `DBusCalling.call` returning nil is `ShellHelperClient`'s own
+    // documented no-reply contract, matching a real timeout here).
+    let fake = FakeDBusCalling(scriptedReplies: [
+      fakeMethodReturn(body: [.boolean(true)]),
+      fakeMethodReturn(body: [.variant(.array([.string("hotkeys")]))]),
+    ])
+    let client = ShellHelperClient(callConnection: fake, signalConnection: nil)
+    _ = client.refreshCapabilities()
+
+    #expect(!client.probeLiveDispatch())
+  }
+
+  @Test(
+    "probeLiveDispatch short-circuits to false without sending anything when no extension is present"
+  )
+  func probeLiveDispatchShortCircuitsWithoutOwner() {
+    let fake = FakeDBusCalling(scriptedReplies: [fakeMethodReturn(body: [.boolean(false)])])
+    let client = ShellHelperClient(callConnection: fake, signalConnection: nil)
+    _ = client.refreshCapabilities()
+
+    #expect(!client.probeLiveDispatch())
+    // Only the initial NameHasOwner call — the `isPresent` guard must skip
+    // the GetPointer round trip entirely.
+    #expect(fake.sentMessages.count == 1)
+  }
+
+  @Test(
+    "probeLiveDispatch ignores currentCapabilities.supports(.pointer) — it calls GetPointer directly"
+  )
+  func probeLiveDispatchBypassesThePointerCapabilityGate() {
+    // Deliberately advertises "hotkeys" WITHOUT "pointer" — the public
+    // `getPointer()` method would refuse to call at all here (it gates on
+    // `.supports(.pointer)`), but `probeLiveDispatch()` must not: trusting
+    // any self-reported capability string is exactly the bug being fixed.
+    let fake = FakeDBusCalling(scriptedReplies: [
+      fakeMethodReturn(body: [.boolean(true)]),
+      fakeMethodReturn(body: [.variant(.array([.string("hotkeys")]))]),
+      fakeMethodReturn(body: [.int32(5), .int32(6), .int32(1)]),
+    ])
+    let client = ShellHelperClient(callConnection: fake, signalConnection: nil)
+    _ = client.refreshCapabilities()
+
+    #expect(client.getPointer() == nil, "getPointer() itself still gates on .pointer")
+    #expect(client.probeLiveDispatch(), "but probeLiveDispatch() bypasses that gate on purpose")
+  }
 }

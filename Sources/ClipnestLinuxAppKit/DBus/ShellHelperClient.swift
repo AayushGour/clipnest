@@ -159,6 +159,22 @@ public final class ShellHelperClient: @unchecked Sendable {
     return reply.flatMap(ShellHelperResponses.parseGetPointer)
   }
 
+  /// The live-dispatch half of `HotkeyBackendResolver`'s capability-trap
+  /// fix — see that type's doc comment on `.shellExtensionKeybinding`.
+  /// Deliberately bypasses `currentCapabilities.supports(.pointer)`
+  /// (unlike `getPointer()` above): the whole point is to NOT trust a
+  /// self-reported capability string, so this sends `GetPointer` directly
+  /// and requires a real, correctly-shaped reply. The only capability
+  /// state this DOES trust is `isPresent` (`NameHasOwner`'s answer) — a
+  /// bus-daemon-verified fact about whether ANY process owns the name, not
+  /// a claim the extension's own JS makes about itself — purely to skip a
+  /// pointless round trip when there is provably no extension to call.
+  public func probeLiveDispatch() -> Bool {
+    guard currentCapabilities.isPresent else { return false }
+    let reply = callConnection.call(ShellHelperRequests.getPointer(serial: 34), timeout: timeout)
+    return reply.flatMap(ShellHelperResponses.parseGetPointer) != nil
+  }
+
   public func placeWindow(windowToken: String, x: Int32, y: Int32, flags: UInt32) -> Bool {
     guard currentCapabilities.supports(.placement) else { return false }
     let reply = callConnection.call(

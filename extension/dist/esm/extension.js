@@ -9,15 +9,21 @@ import { IFACE_XML } from './core/iface.js';
 
 export default class ClipnestExtension extends Extension {
   enable() {
-    const clipboard = new ClipboardWatcher(deps, (...a) => this._onClipboard(...a));
+    // `service` is assigned below, before `service.enable()` runs — by the
+    // time mutter can actually FIRE either callback (a real clipboard
+    // change, a real shortcut activation), `service` is always set. This is
+    // what lets `ClipboardWatcher`/`Keybindings` be constructed before the
+    // service that owns emitting their D-Bus signals exists yet.
+    let service;
+    const clipboard = new ClipboardWatcher(
+      deps, (...a) => service.notifyClipboardChanged(...a));
     const input = new InputSynthesizer(deps);
     const placement = new Placement(deps);
-    const keybindings = new Keybindings(deps, (a) => this._onShortcut(a));
-    this._service = new ShellHelperService(deps, IFACE_XML,
+    const keybindings = new Keybindings(deps, (a) => service.notifyShortcutActivated(a));
+    service = new ShellHelperService(deps, IFACE_XML,
       { clipboard, input, placement, keybindings });
-    this._service.enable();
+    this._service = service;
+    service.enable();
   }
   disable() { this._service?.disable(); this._service = null; }
-  _onClipboard() { /* forwarded by the service */ }
-  _onShortcut() { /* forwarded by the service */ }
 }

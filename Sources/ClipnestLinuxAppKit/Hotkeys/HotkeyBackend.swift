@@ -8,6 +8,20 @@ public enum HotkeyBackend: Equatable, Sendable {
   /// `ShortcutActivated` signal) — works on both X11 and Wayland sessions,
   /// and is the only tier that hands `ShowPicker` pointer/monitor/focus
   /// info in the same event with no extra round trip.
+  ///
+  /// Selecting this tier requires TWO independent facts, not one — see
+  /// `HotkeyBackendResolver.resolve`'s doc comment: the audit that opened
+  /// this task found a stub `ShellHelperService` whose `Capabilities`
+  /// property genuinely advertised `"hotkeys"` (grabbing the mutter
+  /// keybinding is a real, independent side effect of enabling that one
+  /// capability) while the object exported NO methods at all — so every
+  /// D-Bus call, including the one this tier depends on
+  /// (`ShortcutActivated`'s delivery has no separate call, but the same
+  /// broken method table means nothing else works either), silently failed
+  /// with `UnknownMethod`. Trusting `Capabilities` alone in that state
+  /// swallows the global hotkey with no fallback — installing the
+  /// "recommended" extension made the app strictly worse than not
+  /// installing it at all.
   case shellExtensionKeybinding
   /// `XGrabKey` — X11-only. **BLOCKED in this build**: see
   /// `HotkeyBackendResolver`'s doc comment — `ClipnestLinuxApp` has no
@@ -41,13 +55,26 @@ public enum HotkeyBackend: Equatable, Sendable {
 /// reachable on this machine. Mirrors
 /// `ClipnestPlatformLinux.LinuxEventSynthesizerSelection.choose`'s exact
 /// shape and reasoning for the paste-backend priority chain.
+///
+/// `shellExtensionKeybindingAvailable` (the self-reported `Capabilities`
+/// string) is deliberately never trusted alone. A caller must ALSO supply
+/// `shellExtensionLiveDispatchConfirmed` — the result of a real D-Bus call
+/// that got a real, correctly-shaped reply (see
+/// `ShellHelperClient.probeLiveDispatch()`) — and both must be true before
+/// this tier is selected. This is the fix for the capability trap this
+/// task's audit found: a `ShellHelperService` that advertises `"hotkeys"`
+/// but dispatches no method at all must fall through to a lower tier, not
+/// silently claim the hotkey and then never fire it.
 public enum HotkeyBackendResolver {
   public static func resolve(
     shellExtensionKeybindingAvailable: Bool,
+    shellExtensionLiveDispatchConfirmed: Bool,
     xGrabKeyAvailable: Bool,
     globalShortcutsPortalAvailable: Bool
   ) -> HotkeyBackend {
-    if shellExtensionKeybindingAvailable { return .shellExtensionKeybinding }
+    if shellExtensionKeybindingAvailable && shellExtensionLiveDispatchConfirmed {
+      return .shellExtensionKeybinding
+    }
     if xGrabKeyAvailable { return .xGrabKey }
     if globalShortcutsPortalAvailable { return .globalShortcutsPortal }
     return .gsettingsFloor
