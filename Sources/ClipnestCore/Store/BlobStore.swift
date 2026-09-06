@@ -43,16 +43,17 @@ public struct BlobStore: Sendable {
 
   /// POSIX mode (owner read/write/execute only) applied to the blob
   /// directory — and any intermediate directories `write(_:)` has to create
-  /// along the way — on non-Apple platforms. Clipboard contents are
-  /// inherently sensitive (coding-standards.md's Privacy/security musts);
-  /// on a shared multi-user Linux box the plain `createDirectory` default
-  /// (driven by the process umask — verified empirically as 0755 on macOS
-  /// today under the standard 022 umask, an existing gap this task
-  /// deliberately does NOT change on macOS; worth its own follow-up
-  /// decision) would let every other local user list blob filenames
-  /// (content hashes) and read blob bytes. macOS's `write(_:)` branch below
-  /// never references this constant.
-  private static let nonAppleBlobDirectoryPosixPermissions = 0o700
+  /// along the way — on EVERY platform. Clipboard contents are inherently
+  /// sensitive (coding-standards.md's Privacy/security musts): the plain
+  /// `createDirectory` default is driven by the process umask, measured as
+  /// 0755 on macOS under the standard 022 umask, which lets every other
+  /// local account on a shared machine list blob filenames (content
+  /// hashes) and read blob bytes.
+  ///
+  /// T-SEC2: this was originally applied on non-Apple platforms only,
+  /// leaving `~/Library/Application Support/Clipnest/blobs/` world-readable
+  /// on every Mac. It now applies unconditionally.
+  private static let blobDirectoryPosixPermissions = 0o700
 
   /// T-PF8 (P0 safety fix): name of the environment variable that, when set
   /// to a non-empty value, overrides the directory `defaultBaseDirectory()`
@@ -260,11 +261,20 @@ public struct BlobStore: Sendable {
   /// Writes `data` to a content-addressed path and returns the resulting
   /// relative `blobPath` (rooted at `"blobs/"`) to store on a `ClipItem`.
   ///
-  /// Linux port: on non-Apple platforms the directory-creation call below
-  /// passes `nonAppleBlobDirectoryPosixPermissions` (0700) so the blob
-  /// directory — and any intermediate directories created along with it —
-  /// are never world- or group-readable. The macOS branch is unchanged:
-  /// same call, same (umask-driven) default mode as before this task.
+  /// The directory-creation step below passes
+  /// `blobDirectoryPosixPermissions` (0700) so the blob directory — and any
+  /// intermediate directories created along with it — are never world- or
+  /// group-readable, on every platform.
+  ///
+  /// The explicit `setAttributes` after it is NOT redundant, and is the
+  /// half that protects existing users: `createDirectory`'s `attributes:`
+  /// is documented as applying only when the directory is actually
+  /// created, so it is a no-op for anyone whose blob directory already
+  /// exists — which is every current macOS user, all of whom have one at
+  /// 0755 today (T-SEC2). Re-asserting the mode on each write tightens
+  /// those installs on the next capture instead of protecting only fresh
+  /// ones. A same-owner `chmod` is a cheap metadata-only change that moves
+  /// no file contents, so it needs no one-time migration flag.
   public func write(_ data: Data) throws -> String {
     let blobPath = "\(Self.blobsDirectoryName)/\(Self.contentHash(of: data))"
     let destination = fileURL(forBlobPath: blobPath)
@@ -274,13 +284,12 @@ public struct BlobStore: Sendable {
     }
 
     do {
-      #if os(macOS)
-        try fileManager.createDirectory(at: blobsDirectory, withIntermediateDirectories: true)
-      #else
-        try fileManager.createDirectory(
-          at: blobsDirectory, withIntermediateDirectories: true,
-          attributes: [.posixPermissions: Self.nonAppleBlobDirectoryPosixPermissions])
-      #endif
+      try fileManager.createDirectory(
+        at: blobsDirectory, withIntermediateDirectories: true,
+        attributes: [.posixPermissions: Self.blobDirectoryPosixPermissions])
+      try fileManager.setAttributes(
+        [.posixPermissions: Self.blobDirectoryPosixPermissions],
+        ofItemAtPath: blobsDirectory.path)
       try data.write(to: destination, options: .atomic)
     } catch {
       throw BlobStoreError.ioFailure(underlying: String(describing: error))
