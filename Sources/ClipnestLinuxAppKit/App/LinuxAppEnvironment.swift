@@ -320,8 +320,12 @@ final class LinuxAppEnvironment {
       // fully dismissed the picker (hid it AND cancelled the view model's
       // in-flight queries) instead of just losing window-manager
       // prominence, unlike macOS's side-by-side non-dismissing design.
-      // Cleared at the very start of `onClose`, before
-      // `refocusAfterEditorClose()` runs.
+      // Cleared inside `refocusAfterEditorClose()` itself, deferred to the
+      // next main-loop idle iteration — see that method's doc comment for
+      // a second, more severe real bug found in this exact handoff (a
+      // synchronous close-then-present X11 grab race, 225%+ CPU) and why
+      // clearing this flag early, before that deferred step runs, would
+      // reopen the window `isEditorSessionActive` exists to close.
       pickerWindow?.setEditorSessionActive(true)
       snippetEditorWindow.show(
         mode: mode,
@@ -334,7 +338,6 @@ final class LinuxAppEnvironment {
           }
         },
         onClose: { [weak pickerWindow] in
-          pickerWindow?.setEditorSessionActive(false)
           pickerWindow?.refocusAfterEditorClose()
         })
     }

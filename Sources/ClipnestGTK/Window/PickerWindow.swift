@@ -395,11 +395,50 @@ public final class PickerWindow: @unchecked Sendable {
   /// back — `viewModel.refocusSearchField()` alone only bumps `focusToken`,
   /// which `PickerWindow+Reconcile.swift`'s `gtk_widget_grab_focus
   /// (searchEntry)` only re-asserts focus *within* this window, not across
-  /// the window manager. A no-op when this window isn't currently visible
-  /// (mirrors `AppEnvironment`'s own `guard panel.isVisible` for the
-  /// identical call) — e.g. the picker was dismissed for some other reason
-  /// while the editor was still open.
+  /// the window manager.
+  ///
+  /// FOURTH real bug found by this task's own runtime verification, same
+  /// root-cause family as `isContextMenuOpen`'s (X11 grab/focus contention
+  /// under Xvfb+Openbox) but a different trigger: calling
+  /// `gtk_window_present(window)` HERE — synchronously, inside
+  /// `SnippetEditorWindow`'s own `close-request` handler, itself invoked
+  /// synchronously from `gtk_window_close` (see `SnippetEditorWindow
+  /// .handleSaveClicked()`/`.handleCancelClicked()`) — asks the window
+  /// manager to activate this window in the SAME call stack that is still
+  /// asking it to close/hide a DIFFERENT one, before that close has
+  /// actually been processed. Measured: two `clipnest` threads each pegged
+  /// (~110% apiece, ~225% total) after a single, unhurried Save — no rapid
+  /// clicking needed this time, confirming the hazard is the SYNCHRONOUS
+  /// close-then-present handoff itself, not click cadence. Fixed by
+  /// deferring the present/refocus (and clearing `isEditorSessionActive`)
+  /// to the next GLib main-loop idle iteration via `g_idle_add_full` — the
+  /// same deferral primitive `PickerWindow+Reconcile.swift`'s
+  /// `scheduleCoalescedRefresh()` already uses for an unrelated reason,
+  /// giving the window manager a real chance to finish the editor's close
+  /// before this window asks to be presented. A no-op when this window
+  /// isn't currently visible (mirrors `AppEnvironment`'s own `guard panel
+  /// .isVisible` for the identical call) — e.g. the picker was dismissed
+  /// for some other reason while the editor was still open.
   public func refocusAfterEditorClose() {
+    g_idle_add_full(
+      G_PRIORITY_DEFAULT_IDLE,
+      refocusAfterEditorCloseIdleTrampoline,
+      retainedTrampolineContext(self),
+      releaseTrampolineContextSingleArg)
+  }
+
+  /// The actual work `refocusAfterEditorClose()` defers — see that method's
+  /// doc comment. Also where `isEditorSessionActive` is cleared (moved out
+  /// of the composition root's separate `setEditorSessionActive(_:)` call —
+  /// see that method's doc comment for why clearing it early, before this
+  /// deferred step runs, would reopen the exact `notify::is-active` window
+  /// this flag exists to close).
+  // `fileprivate`, not `private`: the idle trampoline below is a top-level
+  // (non-member) function in this same file, and Swift's `private` only
+  // reaches an enclosing declaration's own extensions, not top-level code —
+  // `fileprivate` is the one that actually grants file-wide access.
+  fileprivate func performRefocusAfterEditorClose() {
+    isEditorSessionActive = false
     guard gtk_widget_get_visible(window) != 0 else { return }
     gtk_window_present(window)
     MainActor.assumeIsolated {
@@ -411,10 +450,22 @@ public final class PickerWindow: @unchecked Sendable {
   /// `isEditorSessionActive`'s doc comment for the real bug this exists to
   /// fix. Called by the composition root (`LinuxAppEnvironment
   /// .presentSnippetEditor`) with `true` right before every
-  /// `SnippetEditorWindow.show(...)` call and `false` at the very start of
-  /// that call's `onClose` — public because `SnippetEditorWindow`/
-  /// `LinuxAppEnvironment` live in different modules from this type.
+  /// `SnippetEditorWindow.show(...)` call — public because
+  /// `SnippetEditorWindow`/`LinuxAppEnvironment` live in different modules
+  /// from this type. The `false` half is no longer a separate call the
+  /// composition root makes — see `performRefocusAfterEditorClose()`.
   public func setEditorSessionActive(_ active: Bool) {
     isEditorSessionActive = active
   }
 }
+
+/// `GSourceFunc` (`gboolean (*)(gpointer)`) for `refocusAfterEditorClose()`'s
+/// deferred idle callback — `0` (`G_SOURCE_REMOVE`), matching
+/// `PickerWindow+Reconcile.swift`'s `idleRefreshTrampoline`'s identical
+/// one-shot shape, since this should never repeat.
+private let refocusAfterEditorCloseIdleTrampoline:
+  @convention(c) (UnsafeMutableRawPointer?) -> Int32 = { data in
+    guard let window = unretainedContext(data, as: PickerWindow.self) else { return 0 }
+    window.performRefocusAfterEditorClose()
+    return 0
+  }

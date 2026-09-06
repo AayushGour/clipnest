@@ -180,12 +180,27 @@ extension PickerWindow {
     return box
   }
 
-  /// One context-menu row — a flat, left-aligned label button. `action`
-  /// runs, THEN the popover explicitly pops down: `contextMenuPopover`'s
-  /// `autohide` (default `TRUE`, see `buildContextMenuPopover()`'s doc
-  /// comment) only dismisses on an OUTSIDE click/Escape, not on a click
-  /// landing on one of its own child buttons, so this is the one place
-  /// that has to close it after an in-menu selection.
+  /// One context-menu row — a flat, left-aligned label button.
+  ///
+  /// FIFTH real bug found by this task's own runtime verification, same
+  /// X11-grab/activation-contention family as `isContextMenuOpen`'s and
+  /// `refocusAfterEditorClose()`'s: this used to run `action()` THEN
+  /// `dismissContextMenu()`, both synchronously inside the "clicked"
+  /// handler. For "Save as Snippet"/"Edit," `action()` itself calls
+  /// `presentSnippetEditor(...)`, which presents a brand-new, real,
+  /// activating `SnippetEditorWindow` — so a single click was asking the
+  /// window manager to (a) release this popover's grab AND (b) activate a
+  /// completely different top-level window, in that same call stack.
+  /// Measured 203-235% CPU (2 threads pegged, same signature as the other
+  /// two bugs) reproduced specifically through THIS path — plain row
+  /// buttons (which never touch the popover at all) never showed it, only
+  /// "Save as Snippet"/"Edit" reached via a right-click first. Fixed by
+  /// reversing the order and inserting the same `g_idle_add_full` deferral
+  /// `refocusAfterEditorClose()` already uses: pop the menu down FIRST,
+  /// synchronously, then defer `action()` itself to the next main-loop
+  /// idle iteration — so by the time anything tries to present a new
+  /// window, the popover's grab has had a full main-loop turn to actually
+  /// release at the X11 level, not just at the Swift call-stack level.
   private func makeContextMenuButton(
     label: String, isDestructive: Bool, action: @escaping () -> Void
   ) -> OpaquePointer {
@@ -197,8 +212,12 @@ extension PickerWindow {
     gtkConnect(
       button, signal: "clicked",
       context: ClosureContext<Void> { [weak self] in
-        action()
         self?.dismissContextMenu()
+        g_idle_add_full(
+          G_PRIORITY_DEFAULT_IDLE,
+          contextMenuActionIdleTrampoline,
+          retainedTrampolineContext(ClosureContext<Void>(action)),
+          releaseTrampolineContextSingleArg)
       },
       callback: unsafeBitCast(contextMenuButtonClickedTrampoline, to: GCallback.self))
     return button
@@ -207,6 +226,15 @@ extension PickerWindow {
   private func dismissContextMenu() {
     gtk_popover_popdown(contextMenuPopover)
   }
+}
+
+/// `GSourceFunc` for `makeContextMenuButton(label:isDestructive:action:)`'s
+/// deferred action — see that method's doc comment for the bug this fixes.
+private let contextMenuActionIdleTrampoline: @convention(c) (UnsafeMutableRawPointer?) -> Int32 = {
+  data in
+  guard let context = unretainedContext(data, as: ClosureContext<Void>.self) else { return 0 }
+  context.perform(())
+  return 0
 }
 
 /// `GtkGestureClick::pressed` — `void (*)(GtkGestureClick*, gint n_press,
