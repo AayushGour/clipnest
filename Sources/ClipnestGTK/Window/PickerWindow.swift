@@ -117,6 +117,14 @@ public final class PickerWindow: @unchecked Sendable {
   // MARK: - Widgets (built by `buildLayout()`, `PickerWindow+Layout.swift`)
 
   let window: OpaquePointer
+
+  /// The picker's underlying `GtkWindow`, exposed so a dialog opened FROM the
+  /// picker can declare itself transient-for it. Required because the picker
+  /// sets `_NET_WM_WINDOW_TYPE_UTILITY` on itself, and window managers stack
+  /// utility windows above ordinary toplevels — a dialog that does not name
+  /// the picker as its parent renders behind it. See
+  /// `SnippetEditorWindow.show(mode:transientParent:onSave:onClose:)`.
+  public var transientParentWindow: OpaquePointer { window }
   let searchEntry: OpaquePointer
   let tabsBox: OpaquePointer
   let chipsBox: OpaquePointer

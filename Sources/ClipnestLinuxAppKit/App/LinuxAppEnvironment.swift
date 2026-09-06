@@ -329,6 +329,11 @@ final class LinuxAppEnvironment {
       pickerWindow?.setEditorSessionActive(true)
       snippetEditorWindow.show(
         mode: mode,
+        // Stacks the editor above the picker. Without it the editor opens
+        // BEHIND the picker (which is a _NET_WM_WINDOW_TYPE_UTILITY window,
+        // and WMs keep those above ordinary toplevels), so clicking "+"
+        // looked like it did nothing.
+        transientParent: pickerWindow?.transientParentWindow,
         onSave: { title, body, keyword in
           switch mode {
           case .create, .createFromClip:

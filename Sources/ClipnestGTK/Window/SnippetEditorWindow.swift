@@ -123,8 +123,21 @@ public final class SnippetEditorWindow: @unchecked Sendable {
   ///     it passed in.
   ///   - onClose: called exactly once, whenever this window closes for any
   ///     reason. See this file's top "Close path" doc comment.
+  ///   - transientParent: the picker's `GtkWindow`, so the window manager
+  ///     stacks this editor ABOVE it and centres it there.
+  ///
+  ///     Not optional politeness — without it this window renders BEHIND the
+  ///     picker and a user who clicks "+" sees nothing happen. `PickerWindow`
+  ///     sets `_NET_WM_WINDOW_TYPE_UTILITY` on itself (so mutter honours our
+  ///     placement instead of applying its own heuristics), and a utility
+  ///     window is kept above ordinary toplevels. This editor is an ordinary
+  ///     toplevel, so it was correctly stacked underneath. Declaring it
+  ///     transient-for the picker is what tells the WM these two belong
+  ///     together; `gtk_window_set_modal` then matches macOS, where the
+  ///     snippet form is a sheet over the picker rather than a peer window.
   public func show(
     mode: SnippetFormMode,
+    transientParent: OpaquePointer?,
     onSave: @escaping (_ title: String, _ body: String, _ keyword: String?) -> Void,
     onClose: @escaping () -> Void
   ) {
@@ -135,6 +148,10 @@ public final class SnippetEditorWindow: @unchecked Sendable {
     gtk_label_set_markup(headingLabel, "<b>\(PangoMarkup.escape(title))</b>")
     populateFields(for: mode)
     updateSaveEnabled()
+    if let transientParent {
+      gtk_window_set_transient_for(window, transientParent)
+      gtk_window_set_modal(window, 1)
+    }
     gtk_widget_set_visible(window, 1)
     gtk_window_present(window)
     gtk_widget_grab_focus(tagEntry)
