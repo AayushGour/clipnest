@@ -24,27 +24,30 @@ struct DBusMenuItem: Equatable {
 enum DBusMenuLayoutBuilder {
   static let revision: UInt32 = 1
 
-  /// KNOWN WIRE-MARSHALLING GAP, flagged rather than silently shipped:
-  /// `DBusValue.array([]).signatureCode` degrades to `"ay"` (byte array)
-  /// for a genuinely empty array — see that property's doc comment in
-  /// `ClipnestPlatformLinux/Accessibility/DBusValue.swift` — because
-  /// nothing about an empty `[DBusValue]` can tell it what element type
-  /// was intended. The root item's `properties: a{sv}` and every leaf's
-  /// `children: av` are both empty here, so a real `com.canonical.dbusmenu`
-  /// client marshalling this reply over an actual wire would see `"ay"`
-  /// where `"a{sv}"`/`"av"` was meant. Fixing it requires either a
-  /// `DBusValue` case that carries its element type even when empty, or a
-  /// signature override parameter on `DBusMessage`'s body — both changes
-  /// belong to `ClipnestPlatformLinux`, out of this task's file-ownership
-  /// scope (see `ShellHelperRequests`'s doc comment for the identical
-  /// "flagged for that module's owner" call on the UNIX-fd gap). This
-  /// class's own unit tests assert the DBusValue STRUCTURE (case shape),
-  /// which is unaffected; only real-bus byte marshalling is impacted, and
-  /// there is no real bus in this project's CI to catch it either way —
-  /// tracked as a decision for `project-context.md`.
+  /// **FIXED (was a KNOWN WIRE-MARSHALLING GAP, confirmed connection-fatal
+  /// against a real bus — see `debian/README.source`'s "Known gap #4").**
+  /// `DBusValue.array([]).signatureCode` used to degrade to `"ay"` (byte
+  /// array) for a genuinely empty array, because nothing about an empty
+  /// `[DBusValue]` can tell it what element type was intended. The root
+  /// item's `properties: a{sv}` and every leaf's `children: av` are both
+  /// ALWAYS empty here (this app's menu is deliberately one level deep),
+  /// so a real `com.canonical.dbusmenu` client marshalling `GetLayout`'s
+  /// reply over the actual wire saw `"ay"` where `"a{sv}"`/`"av"` was
+  /// meant — and disconnected mid-reply
+  /// (`LIBDBUSMENU-GLIB-WARNING: Getting layout failed: Operation was
+  /// cancelled`, reproduced with `dbus-send` and real `gnome-panel`).
+  /// Fixed by `DBusValue.emptyArray(elementSignature:)`/`.array(
+  /// _:elementSignature:)` (`ClipnestPlatformLinux/Accessibility/
+  /// DBusValue.swift`) — every empty array below now carries its true
+  /// element signature explicitly instead of relying on inference from a
+  /// (nonexistent) first element.
 
   static func layout(items: [DBusMenuItem]) -> DBusValue {
-    .structure([.int32(DBusMenuItemID.root), .array([]), .array(items.map(childVariant))])
+    .structure([
+      .int32(DBusMenuItemID.root),
+      .emptyArray(elementSignature: DBusElementSignature.stringVariantDictEntry),
+      .array(items.map(childVariant), elementSignature: DBusElementSignature.variant),
+    ])
   }
 
   /// `GetLayout`'s full two-value reply body: `(revision, root)`.
@@ -53,8 +56,16 @@ enum DBusMenuLayoutBuilder {
   }
 
   private static func childVariant(_ item: DBusMenuItem) -> DBusValue {
+    // `properties` is provably non-empty: `matching: []` means "return
+    // everything" (`propertyEntries`'s own doc comment), and every item
+    // has a `label`. `children` is ALWAYS empty — this app's menu never
+    // nests past one level — so it needs the explicit `av` signature.
     let properties = propertyEntries(for: item, matching: [])
-    return .variant(.structure([.int32(item.id), .array(properties), .array([])]))
+    return .variant(
+      .structure([
+        .int32(item.id), .array(properties),
+        .emptyArray(elementSignature: DBusElementSignature.variant),
+      ]))
   }
 
   /// `GetGroupProperties(ids, propertyNames) -> a(ia{sv})`'s full reply
@@ -70,23 +81,28 @@ enum DBusMenuLayoutBuilder {
   /// see `DBusMenuMember.getGroupProperties`'s doc comment) call BOTH for
   /// the same items and expect consistent answers.
   ///
-  /// Shares the SAME known wire-marshalling gap `layout(items:)`'s doc
-  /// comment above flags for an empty `array([])`: if `ids` selects zero
-  /// items, this degrades to the empty-array case (`"ay"` instead of
-  /// `"a(ia{sv})"`) for the identical, already-documented reason — every
-  /// real caller this app has been verified against always selects at
-  /// least the items `GetLayout` just returned, so this is unreachable in
-  /// practice, not silently swept under the rug.
+  /// Both this reply's outer `a(ia{sv})` array AND each item's own
+  /// `a{sv}` properties array CAN be genuinely empty here — `ids` naming
+  /// only stale/unknown IDs makes `selected` empty, and `propertyNames`
+  /// naming only some other property this menu doesn't have makes a
+  /// given item's own properties empty (see `propertyEntries(for:
+  /// matching:)`) — so both go through `.array(_:elementSignature:)`
+  /// rather than the plain, inference-based `.array(_:)` that used to
+  /// silently mis-type an empty result the same way `layout(items:)`'s
+  /// doc comment above describes.
   static func getGroupPropertiesReply(
     items: [DBusMenuItem], ids: [Int32], propertyNames: [String]
   ) -> [DBusValue] {
     let selected = ids.isEmpty ? items : items.filter { ids.contains($0.id) }
     let entries = selected.map { item in
       DBusValue.structure([
-        .int32(item.id), .array(propertyEntries(for: item, matching: propertyNames)),
+        .int32(item.id),
+        .array(
+          propertyEntries(for: item, matching: propertyNames),
+          elementSignature: DBusElementSignature.stringVariantDictEntry),
       ])
     }
-    return [.array(entries)]
+    return [.array(entries, elementSignature: DBusElementSignature.menuGroupPropertiesEntry)]
   }
 
   /// `label`'s `a{sv}` dict entries for one item — this app's menu has

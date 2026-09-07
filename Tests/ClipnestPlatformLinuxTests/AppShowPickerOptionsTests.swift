@@ -53,4 +53,15 @@ struct AppShowPickerOptionsTests {
     let roundTripped = ShowPickerOptions.parse(original.encoded())
     #expect(Set(roundTripped.focusKeys) == Set(["app-id", "title"]))
   }
+
+  @Test("encoded() of .empty types its (genuinely empty) a{sv} correctly, and still round-trips")
+  func emptyOptionsEncodeToATypedEmptyDict() {
+    let encoded = ShowPickerOptions.empty.encoded()
+    // Same wire-marshalling bug class `DBusValue.emptyArray`'s doc
+    // comment fixes for `GetLayout`: an empty options dict must not
+    // degrade to `ay`.
+    #expect(encoded == .emptyArray(elementSignature: DBusElementSignature.stringVariantDictEntry))
+    #expect(encoded.signatureCode == "a{sv}")
+    #expect(ShowPickerOptions.parse(encoded) == .empty)
+  }
 }

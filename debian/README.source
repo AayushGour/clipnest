@@ -213,32 +213,101 @@ end-to-end: a real `dbus-send` call against the real, now-`Hello`-fixed
 `ownConnection` returns the correct 3-item menu (`Open Clipnest`/
 `Settings…`/`Quit Clipnest`) with correct labels.
 
-**New gap found by this same verification, NOT fixed here (pre-existing,
-independent of the `Hello`/identity work above, out of this task's assigned
-scope) — `GetLayout` is CONNECTION-FATAL against a real client.** A real
-client's `com.canonical.dbusmenu.GetLayout` call (confirmed with both
+**UPDATE (2026-09-07, senior-dev): `GetLayout`'s connection-fatal disconnect
+is FIXED, re-verified against a real bus, and the tray icon now genuinely
+renders — this is the P0 that closes out this gap.** The prior write-up
+below (kept for the record) correctly identified the empty-array signature
+bug as the root cause of the disconnect; fixing it and proving it end to end
+also surfaced a SECOND, independent wire bug in the same write path, fixed
+alongside it:
+
+1. **The empty-array signature bug** (as diagnosed below):
+   `DBusValue.array([]).signatureCode` degraded EVERY genuinely empty array
+   to `"ay"`, because nothing about an empty `[DBusValue]` can tell it what
+   element type was intended. `GetLayout`'s root `properties: a{sv}` and
+   every leaf's `children: av` are always empty (this app's menu is
+   deliberately one level deep), so the reply's declared signature claimed
+   `"ay"` where a real `com.canonical.dbusmenu` client expected `"av"`/
+   `"a{sv}"`. **Fixed:** a new `DBusValue.emptyArray(elementSignature:)` case
+   carries its true element type explicitly instead of relying on inference
+   from a (nonexistent) first element — see that case's doc comment in
+   `Sources/ClipnestPlatformLinux/Accessibility/DBusValue.swift`. Every
+   empty-array construction site that could actually be reached at runtime
+   was audited and fixed: `DBusMenuLayoutBuilder.layout(items:)`'s root
+   `properties`/`children` and each leaf's `children`,
+   `getGroupPropertiesReply`'s outer `a(ia{sv})` array and each item's own
+   `a{sv}` properties (both genuinely reachable when `ids`/`propertyNames`
+   select nothing), and `SingleInstanceDecision`'s `Activate`/`Open`
+   `platform_data: a{sv}` argument.
+2. **A second, independent bug, found while proving fix #1 with a real,
+   non-empty byte-level `GetLayout` round trip** (the unit tests fix #1
+   alone needed only checked `DBusValue` SHAPE, per this file's own prior
+   note that "no real bus in CI" could catch a byte-level issue — going
+   further than that and actually encoding+decoding a realistic, non-empty
+   reply caught this): `DBusByteWriter` marshalled an `ARRAY`'s elements
+   into an ISOLATED sub-buffer (starting at local offset 0), then spliced it
+   in after aligning only the SPLICE POINT to the array's element type's own
+   declared alignment. That is correct for `STRUCT`/`DICT_ENTRY` element
+   types (whose alignment, 8, is the D-Bus maximum, so it can't hide a
+   bigger requirement) but wrong for `VARIANT` (declared alignment 1) —
+   `GetLayout`'s `av` children array wraps a `STRUCT`, and the struct's real
+   8-byte alignment requirement (relative to the MESSAGE START, not to
+   wherever the variant starts) was computed against a LOCAL offset that
+   didn't reliably correspond to the true global one, silently shifting
+   every field after it whenever the splice point wasn't already 8-aligned
+   by coincidence. Confirmed via a real 3-item `GetLayout` reply failing to
+   decode at all. **Fixed:** array elements are now written directly into
+   the same running buffer (no isolated sub-buffer), backpatching the
+   `UINT32` length prefix once the true byte count is known — see
+   `DBusByteWriter`'s own doc comment in the same file.
+
+`Properties.GetAll`/`GetGroupProperties` never reproduced either bug for the
+reason already noted below (a real, populated menu's arrays are never
+empty, and — for bug 2 — `GetGroupProperties`'s reply never nests a struct
+inside a variant the way `GetLayout`'s children do).
+
+**Re-verified end to end, real bus, real `.deb`** (`packaging/linux/vnc
+/Dockerfile`, same Ubuntu-Flashback `indicator-application-service` +
+`gnome-panel` stack this section's original verification used): `dbus-send
+com.canonical.dbusmenu.GetLayout` against the real running `clipnest`
+returns a clean `METHOD_RETURN` (twice in a row — the connection stays
+alive), `gnome-panel`'s own log (`/tmp/panel.log`) is free of
+`LIBDBUSMENU-GLIB-WARNING` throughout the whole session, and — the thing
+nobody had ever actually seen — the tray icon renders in the real panel.
+Clicking it opens the real `com.canonical.dbusmenu` menu with all 3 items
+correctly labeled ("Open Clipnest"/"Settings…"/"Quit Clipnest"); "Open
+Clipnest" opens the real picker populated with the session's actual
+clipboard history; "Settings…" opens the real Settings window
+(General/History/Apps/Shortcuts tabs); "Quit Clipnest" cleanly exits the
+process (verified last, per instruction, after the other two). Unit
+coverage: `Tests/ClipnestPlatformLinuxTests/DBusEmptyArrayMarshallingTests
+.swift` (new — signature/alignment/wire-byte coverage for empty `av`/
+`a{sv}`/`ay`, plus a full `GetLayout` byte-level round trip) and a new case
+in `ATSPIDBusMarshallingRoundTripTests.swift` pinning the array-of-variants-
+wrapping-structs regression. Linux `swift build`+`swift test`: **1106/1106**
+(1092 baseline + 14 new). macOS `swift test`: **605/605, 51 suites**, exact
+baseline, untouched (`DBusValue`/`DBusByteWriter` are Linux-only).
+
+---
+
+**Original write-up (2026-09), kept for the record — root cause below was
+correct; see the UPDATE above for the fix.**
+
+A real client's `com.canonical.dbusmenu.GetLayout` call (confirmed with both
 `gnome-panel`'s real `IndicatorAppletComplete` widget and, isolated and
-reproduced on demand, plain `dbus-send`) reliably disconnects `ownConnection`
-mid-reply — `dbus-monitor` shows `NoReply: "Message recipient disconnected
-from message bus without replying"` every time, and `gnome-panel`'s own log
-independently confirms it: `LIBDBUSMENU-GLIB-WARNING: Getting layout failed:
-Operation was cancelled`. `Properties.GetAll` and `GetGroupProperties`
-against the exact same connection do NOT reproduce this — it is specific to
-`GetLayout`'s reply. Root cause: the wire-marshalling gap
-`DBusMenuLayoutBuilder.layout(items:)`'s own doc comment already flagged
-(`DBusValue.array([]).signatureCode` degrading an EMPTY array to `"ay"`
-instead of the semantically-correct `"a{sv}"`/`"av"` — `GetLayout`'s root
-item always has empty `properties`/leaf `children`, `GetGroupProperties`'s
-reply never does for a real, populated menu, which is exactly why one
-reproduces this and the other doesn't) — previously flagged as a
-theoretical marshalling nit with "no real bus in CI to catch it either
-way"; now CONFIRMED to actually kill the connection against a real
-`dbus-daemon`, and very likely why the tray icon's pixels never visibly
-appear in `gnome-panel`'s widget even once registration is proven live and
-correct (the widget's own menu-building step calls `GetLayout`, and the
-connection answering it dies mid-flight). Belongs to `ClipnestPlatformLinux`
-(`DBusValue`/`DBusMessage`), same file-ownership boundary this file's own
-doc comment already drew — flagged for that owner, not patched here.
+reproduced on demand, plain `dbus-send`) reliably disconnected
+`ownConnection` mid-reply — `dbus-monitor` showed `NoReply: "Message
+recipient disconnected from message bus without replying"` every time, and
+`gnome-panel`'s own log independently confirmed it: `LIBDBUSMENU-GLIB
+-WARNING: Getting layout failed: Operation was cancelled`. `Properties
+.GetAll` and `GetGroupProperties` against the exact same connection did NOT
+reproduce this — it was specific to `GetLayout`'s reply. Root cause: the
+wire-marshalling gap `DBusMenuLayoutBuilder.layout(items:)`'s own doc
+comment already flagged (`DBusValue.array([]).signatureCode` degrading an
+EMPTY array to `"ay"` instead of the semantically-correct `"a{sv}"`/`"av"`
+— `GetLayout`'s root item always has empty `properties`/leaf `children`,
+`GetGroupProperties`'s reply never does for a real, populated menu, which is
+exactly why one reproduced this and the other didn't).
 
 A second, smaller gap found the same way: `StatusNotifierRequest.decode`'s
 `org.freedesktop.DBus.Properties` case never checks `message.path`, so a

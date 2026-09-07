@@ -4,22 +4,37 @@ import Foundation
 /// the only byte order any of this module's targets run), one running
 /// byte buffer at a time.
 ///
-/// **Alignment self-similarity (the design this whole encoder leans on):**
-/// D-Bus requires every value aligned to its type's natural boundary,
-/// relative to the START OF THE MESSAGE. `ARRAY`/`STRUCT`/`DICT_ENTRY`
-/// bodies are encoded into a FRESH, separate `DBusByteWriter` starting at
-/// local offset 0, then spliced into the enclosing buffer immediately
-/// after the enclosing buffer aligns itself to the container's element
-/// alignment. Because alignment padding only ever depends on
-/// `offset % boundary`, and the splice point is made congruent to 0 modulo
-/// that boundary before the splice, the padding computed inside the
-/// isolated sub-buffer (starting from local 0) is byte-identical to what
-/// encoding in-place at the real offset would have produced. This holds
-/// recursively at every nesting depth. (An earlier draft of `DBusMessage
-/// .encoded()` spliced a header-fields sub-buffer WITHOUT first aligning
-/// the enclosing writer to the array's alignment — this doc comment
-/// exists so that mistake is never reintroduced: always align, then
-/// splice, never the other order.)
+/// **Every value is written IN PLACE, directly into this same running
+/// buffer — never into an isolated, throwaway sub-buffer.** `STRUCT`/
+/// `DICT_ENTRY` always worked this way (`align(to: 8); write each field`,
+/// straight into `self`). `ARRAY` briefly did NOT: an earlier version
+/// built each array's elements into a FRESH `DBusByteWriter` starting at
+/// local offset 0, aligned only the SPLICE POINT to the array's element
+/// TYPE's own declared alignment, then appended the finished sub-buffer.
+/// That is byte-identical to in-place writing only when the element
+/// type's OWN alignment is also the ceiling of whatever it can contain —
+/// true for `STRUCT`/`DICT_ENTRY` (always 8, the D-Bus maximum) and every
+/// scalar (nothing nested inside), but **false for `VARIANT`**: its own
+/// alignment is 1 (it can start on any byte), but the VALUE it wraps
+/// still aligns to ITS type's real boundary, relative to the MESSAGE
+/// START — not to wherever the variant happens to start. An array of
+/// variants (`av`) wrapping anything 8-aligned (a `STRUCT`, exactly what
+/// `com.canonical.dbusmenu`'s `GetLayout` reply nests a `VARIANT` around)
+/// only aligned its splice point to 1, so the struct's internal 8-byte
+/// alignment was computed against the WRONG (local, not true-global)
+/// residue whenever the splice point itself didn't happen to land on an
+/// 8-aligned offset — silently shifting every field after it. Found via
+/// this fix's own end-to-end `GetLayout` byte-marshalling test (see
+/// `DBusEmptyArrayMarshallingTests
+/// .getLayoutReplySignatureMatchesTheDbusmenuContract`): the FIRST
+/// realistic (non-empty) reply this module ever byte-round-tripped, and
+/// `DBusMessage.decode` failed outright on it. Fixed by writing array
+/// elements straight into `self` too (backpatching the `UINT32` length
+/// prefix afterward, once the true byte count is known — see the
+/// `.array` case below) — every alignment call anywhere in this file now
+/// always operates on the one real, absolute, running offset, so no
+/// "local vs. global" mismatch can exist at any nesting depth, for any
+/// combination of container types.
 struct DBusByteWriter {
   private(set) var bytes: [UInt8] = []
 
@@ -30,6 +45,18 @@ struct DBusByteWriter {
 
   mutating func appendRaw(_ raw: [UInt8]) {
     bytes.append(contentsOf: raw)
+  }
+
+  /// Overwrites 4 already-appended bytes with `value`'s little-endian
+  /// encoding — used only to backpatch an `ARRAY`'s length-prefix field
+  /// once its true byte length is known (see `write(_:)`'s `.array`
+  /// case): the length must be written before the elements it describes,
+  /// but elements are now written straight into this SAME running
+  /// buffer, so the count isn't known until after they're written.
+  private mutating func patchUInt32(_ value: UInt32, at index: Int) {
+    for shift in stride(from: 0, to: 32, by: 8) {
+      bytes[index + shift / 8] = UInt8((value >> shift) & 0xFF)
+    }
   }
 
   mutating func writeByte(_ value: UInt8) {
@@ -109,11 +136,29 @@ struct DBusByteWriter {
       write(inner)
     case .unixFD(let index): writeUInt32(index)
     case .array(let items):
-      var elementBuffer = DBusByteWriter()
-      for item in items { elementBuffer.write(item) }
-      writeUInt32(UInt32(elementBuffer.bytes.count))
+      // The length prefix must be written BEFORE the elements it
+      // describes, but can only be computed correctly AFTER writing them
+      // (elements go straight into `self`, not an isolated sub-buffer —
+      // see this type's own doc comment for why) — so reserve 4 bytes as
+      // a placeholder, remember where they landed, and backpatch once the
+      // true byte length is known.
+      align(to: 4)
+      let lengthFieldIndex = bytes.count
+      writeUInt32(0)
       align(to: items.first?.alignment ?? DBusDefaults.emptyArrayElementAlignment)
-      appendRaw(elementBuffer.bytes)
+      let elementsStartIndex = bytes.count
+      for item in items { write(item) }
+      patchUInt32(UInt32(bytes.count - elementsStartIndex), at: lengthFieldIndex)
+    case .emptyArray(let elementSignature):
+      // Zero elements, so there is nothing to append after the length —
+      // but the ALIGNMENT padding for the (empty) element stream still
+      // has to be correct, because it shifts where whatever comes AFTER
+      // this array lands in the enclosing buffer. Unlike `.array(_:)`,
+      // there's no first element to ask, so the element type comes from
+      // the signature string this case carries instead — see
+      // `DBusTypeSignature.alignment(ofElementSignature:)`.
+      writeUInt32(0)
+      align(to: DBusTypeSignature.alignment(ofElementSignature: elementSignature))
     case .structure(let items):
       align(to: 8)
       for item in items { write(item) }
@@ -125,12 +170,20 @@ struct DBusByteWriter {
   }
 }
 
-/// Fallback used only when encoding a genuinely empty `.array([])` — this
-/// module never actually sends one (every array it builds, e.g.
-/// `RegisterEvent`'s `as`, has at least one element), but the encoder
-/// still needs SOME alignment to apply for the (empty) element stream
-/// rather than crash on `items.first` being `nil`. `4` matches `ARRAY`'s
-/// own alignment, the most common element alignment in practice.
+/// Defensive fallback alignment — `4`, matching `ARRAY`'s own alignment,
+/// the most common element alignment in practice. Two call sites can
+/// reach this:
+/// 1. Encoding a genuinely empty `.array([])` (see that case's own doc
+///    comment on `DBusValue`): this module never actually sends a `.array`
+///    that BOTH is empty AND needs a non-byte element type — those go
+///    through `.emptyArray(elementSignature:)` instead (see its doc
+///    comment for the connection-fatal bug that fixed) — but `.array([])`
+///    itself remains legal (it means "empty array of BYTES", `ay`), and
+///    the encoder still needs SOME alignment for that empty element
+///    stream rather than crash on `items.first` being `nil`.
+/// 2. `DBusTypeSignature.alignment(ofElementSignature:)` being given a
+///    signature fragment that fails to parse — should never happen for a
+///    valid caller, but a safe fallback beats a crash on malformed input.
 enum DBusDefaults {
   static let emptyArrayElementAlignment = 4
 }

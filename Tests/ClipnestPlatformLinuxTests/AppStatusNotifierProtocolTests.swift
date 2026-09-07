@@ -158,6 +158,13 @@ struct AppDBusMenuLayoutBuilderTests {
     }
     #expect(rootID == 0)
     #expect(children.count == 2)
+    // Regression guard for the P0 this fixes: the root's `properties`
+    // field is ALWAYS empty (the root itself has no dbusmenu properties),
+    // and MUST be typed `a{sv}`, not degrade to `ay` — see
+    // `DBusValue.emptyArray`'s doc comment for the connection-fatal bug
+    // this was.
+    #expect(root[1] == .emptyArray(elementSignature: DBusElementSignature.stringVariantDictEntry))
+    #expect(root[1].signatureCode == "a{sv}")
 
     guard case .variant(.structure(let firstChild)) = children[0], firstChild.count == 3,
       case .int32(let firstID) = firstChild[0], case .array(let firstProperties) = firstChild[1]
@@ -173,6 +180,23 @@ struct AppDBusMenuLayoutBuilderTests {
     }
     #expect(key == "label")
     #expect(label == "Open Clipnest")
+    // Regression guard: every leaf's own `children` is ALWAYS empty (this
+    // app's menu is deliberately one level deep) and MUST be typed `av`,
+    // not degrade to `ay` — the literal defect that disconnected real
+    // `com.canonical.dbusmenu` clients mid-`GetLayout`.
+    #expect(firstChild[2] == .emptyArray(elementSignature: DBusElementSignature.variant))
+    #expect(firstChild[2].signatureCode == "av")
+  }
+
+  @Test("getLayoutReply with zero menu items still types the root's empty children array as av")
+  func layoutWithNoItemsTypesChildrenAsAv() {
+    let reply = DBusMenuLayoutBuilder.getLayoutReply(items: [])
+    guard reply.count == 2, case .structure(let root) = reply[1], root.count == 3 else {
+      Issue.record("expected (revision, (id, properties, children))")
+      return
+    }
+    #expect(root[2] == .emptyArray(elementSignature: DBusElementSignature.variant))
+    #expect(root[2].signatureCode == "av")
   }
 
   private static let threeItems = [
@@ -213,12 +237,25 @@ struct AppDBusMenuLayoutBuilderTests {
     let reply = DBusMenuLayoutBuilder.getGroupPropertiesReply(
       items: Self.threeItems, ids: [1], propertyNames: ["icon-name"])
     guard reply.count == 1, case .array(let entries) = reply[0], entries.count == 1,
-      case .structure(let entry) = entries[0], entry.count == 2,
-      case .array(let properties) = entry[1]
+      case .structure(let entry) = entries[0], entry.count == 2
     else {
       Issue.record("expected exactly one (id, properties) entry")
       return
     }
-    #expect(properties.isEmpty)
+    // A filtered-to-nothing properties dict is genuinely empty, and MUST
+    // be typed `a{sv}`, not degrade to `ay` — the same defect class
+    // `DBusValue.emptyArray`'s doc comment fixes for `GetLayout`.
+    #expect(entry[1] == .emptyArray(elementSignature: DBusElementSignature.stringVariantDictEntry))
+    #expect(entry[1].signatureCode == "a{sv}")
+  }
+
+  @Test("getGroupPropertiesReply with ids matching nothing types the outer array as a(ia{sv})")
+  func getGroupPropertiesReplyWithNoMatchingIdsReturnsTypedEmptyArray() {
+    let reply = DBusMenuLayoutBuilder.getGroupPropertiesReply(
+      items: Self.threeItems, ids: [999], propertyNames: [])
+    #expect(reply.count == 1)
+    #expect(
+      reply[0] == .emptyArray(elementSignature: DBusElementSignature.menuGroupPropertiesEntry))
+    #expect(reply[0].signatureCode == "a(ia{sv})")
   }
 }

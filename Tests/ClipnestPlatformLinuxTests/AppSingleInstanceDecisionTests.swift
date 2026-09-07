@@ -84,6 +84,14 @@ struct AppSingleInstanceTests {
       return
     }
     #expect(uris == [.string("--toggle-picker")])
+    // Regression guard: `Open`'s trailing `platform_data: a{sv}` is
+    // always empty and MUST be typed as such, not degrade to `ay` — the
+    // same wire-marshalling bug class `DBusValue.emptyArray`'s doc
+    // comment fixes for `GetLayout`.
+    #expect(
+      fake.sentMessages[0].body[1]
+        == .emptyArray(elementSignature: DBusElementSignature.stringVariantDictEntry))
+    #expect(fake.sentMessages[0].body[1].signatureCode == "a{sv}")
   }
 
   @Test("forwardArguments sends bare Activate when there is no argv to forward")
@@ -93,5 +101,11 @@ struct AppSingleInstanceTests {
 
     #expect(fake.sentMessages.count == 1)
     #expect(fake.sentMessages[0].member == "Activate")
+    // Regression guard: `Activate`'s sole `platform_data: a{sv}` argument
+    // is always empty and MUST be typed as such, not degrade to `ay`.
+    #expect(
+      fake.sentMessages[0].body[0]
+        == .emptyArray(elementSignature: DBusElementSignature.stringVariantDictEntry))
+    #expect(fake.sentMessages[0].body[0].signatureCode == "a{sv}")
   }
 }

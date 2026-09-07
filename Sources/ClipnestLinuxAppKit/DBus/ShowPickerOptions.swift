@@ -96,6 +96,10 @@ public struct ShowPickerOptions: Equatable, Sendable {
       }
       entries.append(.dictEntry(.string(ShowPickerOptionKey.focus), .variant(.array(focusEntries))))
     }
-    return .array(entries)
+    // `.empty.encoded()` produces a genuinely empty `entries` (no
+    // pointer/monitor/focus) — `elementSignature:` keeps that case typed
+    // as `a{sv}` rather than degrading to `ay`, the same wire-marshalling
+    // bug class `DBusValue.emptyArray`'s doc comment fixes for `GetLayout`.
+    return .array(entries, elementSignature: DBusElementSignature.stringVariantDictEntry)
   }
 }

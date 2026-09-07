@@ -87,6 +87,34 @@ struct DBusMarshallingRoundTripTests {
     #expect(result == value)
   }
 
+  @Test(
+    "an array of variants, each wrapping a struct, round-trips — VARIANT's own alignment (1) must not leak into what it wraps"
+  )
+  func arrayOfVariantsWrappingStructsRoundTrips() {
+    // Exactly `com.canonical.dbusmenu`'s `av` children shape (a VARIANT
+    // wrapping an `(i, a{sv}, av)` STRUCT). VARIANT's OWN alignment is 1,
+    // but the STRUCT it wraps still needs a real 8-byte alignment
+    // relative to the MESSAGE START — not to wherever the variant itself
+    // happens to start. A prior `DBusByteWriter` design built each
+    // array's elements into an ISOLATED sub-buffer (local offset 0) and
+    // only aligned the SPLICE POINT to the array's ELEMENT TYPE's own
+    // alignment (1, for `VARIANT`) — insufficient once splicing at local
+    // offset 0 didn't happen to land on a true 8-aligned message offset,
+    // silently shifting every field after the struct's alignment padding.
+    // Found via this exact shape failing to round-trip while fixing
+    // `DBusValue.emptyArray` for the real `GetLayout` P0 — see
+    // `DBusByteWriter`'s own doc comment for the fix (write in place,
+    // backpatch the length, no isolated sub-buffer for `.array` anymore).
+    let value = DBusValue.array([
+      .variant(.structure([.int32(1), .int64(2)])),
+      .variant(.structure([.int32(3), .int64(4)])),
+    ])
+    var writer = DBusByteWriter()
+    writer.write(value)
+    var reader = DBusByteReader(bytes: writer.bytes)
+    #expect(reader.read(.array(.variant)) == value)
+  }
+
   @Test("mixed alignment sequence: byte then int32 then struct forces real padding")
   func mixedAlignmentSequenceRoundTrips() {
     // BYTE at offset 0 (align 1), then a STRUCT (align 8) — the struct's

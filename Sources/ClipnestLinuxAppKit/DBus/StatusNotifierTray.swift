@@ -55,24 +55,47 @@ import Foundation
 /// `com.canonical.dbusmenu.GetGroupProperties` call also succeeds, returning
 /// the correct 3-item menu with correct labels end to end over a real bus.
 ///
-/// **New finding from this same verification, NOT fixed here (pre-existing,
-/// outside this task's scope — see `debian/README.source`'s "Known gap #4"
-/// for the full write-up):** a real client's `com.canonical.dbusmenu
-/// .GetLayout` call reliably and immediately disconnects `ownConnection`
-/// (`dbus-monitor`/`dbus-send` both show `NoReply: "Message recipient
-/// disconnected from message bus without replying"`, confirmed
-/// reproducible on demand) — root cause is the wire-marshalling gap
-/// `DBusMenuLayoutBuilder.layout(items:)`'s own doc comment already
-/// flagged (an empty `properties: a{sv}`/`children: av` degrading to `"ay"`
-/// via `DBusValue.array([]).signatureCode`), now confirmed to be
-/// CONNECTION-FATAL against a real client, not just a theoretical
-/// marshalling nit. This is very likely why the tray icon's pixels never
-/// actually appear in `gnome-panel`'s `IndicatorAppletComplete` widget in
-/// this harness even once registration is proven live and correct: the
-/// widget's own menu-building step calls `GetLayout` and the connection
-/// answering it dies mid-flight. Belongs to `ClipnestPlatformLinux`
-/// (`DBusValue`/`DBusMessage`), same file-ownership boundary
-/// `DBusMenuLayoutBuilder.swift`'s own doc comment already draws.
+/// **`GetLayout`'s connection-fatal disconnect is FIXED and the tray icon
+/// now genuinely renders (2026-09) — see `debian/README.source`'s "Known
+/// gap #4" for the full write-up.** Two real bugs, both in
+/// `ClipnestPlatformLinux`'s wire layer, combined to kill `ownConnection`
+/// mid-`GetLayout`:
+/// 1. `DBusValue.array([]).signatureCode` degraded EVERY genuinely empty
+///    array to `"ay"` — `GetLayout`'s root `properties: a{sv}` and every
+///    leaf's `children: av` are always empty (this app's menu is
+///    deliberately one level deep), so the reply's declared signature
+///    claimed `"ay"` where a real `com.canonical.dbusmenu` client
+///    expected `"av"`/`"a{sv}"`. Fixed by a dedicated
+///    `DBusValue.emptyArray(elementSignature:)` case that carries its
+///    true element type explicitly — see that case's own doc comment.
+/// 2. Found while proving fix #1 with a real, non-empty byte-level
+///    `GetLayout` round trip (not just a `DBusValue`-shape check):
+///    `DBusByteWriter` marshalled an array's elements into an ISOLATED
+///    sub-buffer and aligned only the SPLICE POINT to the array's
+///    element type's own alignment — correct for `STRUCT`/`DICT_ENTRY`
+///    (whose alignment, 8, is the D-Bus ceiling) but wrong for `VARIANT`
+///    (declared alignment 1, yet `GetLayout`'s `av` children wrap a
+///    `STRUCT`), so the wrapped struct's 8-byte alignment was computed
+///    against a LOCAL offset that didn't reliably match the true global
+///    one — silently shifting every field after it whenever the splice
+///    point wasn't already 8-aligned by coincidence. Fixed by writing
+///    array elements directly into the running buffer (backpatching the
+///    length prefix afterward) instead of an isolated one — see
+///    `DBusByteWriter`'s own doc comment.
+///
+/// **Re-verified end to end against a real bus** (`packaging/linux/vnc
+/// /Dockerfile`-built `.deb`, the same Ubuntu-Flashback `indicator
+/// -application-service` + `gnome-panel` stack): `dbus-send
+/// com.canonical.dbusmenu.GetLayout` against the real running `clipnest`
+/// returns a clean `METHOD_RETURN` (repeatable — the connection stays
+/// alive across multiple calls), `gnome-panel`'s own log is free of
+/// `LIBDBUSMENU-GLIB-WARNING`, and — the thing nobody had ever actually
+/// seen — **the tray icon itself renders in the real panel.** Clicking it
+/// opens the real `com.canonical.dbusmenu` context menu with all 3 items
+/// correctly labeled; "Open Clipnest" opens the real picker (populated
+/// with the session's actual clipboard history) and "Settings…" opens
+/// the real Settings window, both proven live against the real running
+/// process; "Quit Clipnest" cleanly exits it.
 public final class StatusNotifierTray: @unchecked Sendable {
   private static let logger = ClipnestLogger(
     subsystem: ClipnestLog.subsystem, category: "StatusNotifierTray")

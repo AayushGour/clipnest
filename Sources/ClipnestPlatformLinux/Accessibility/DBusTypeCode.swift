@@ -53,6 +53,50 @@ indirect enum DBusTypeSignature: Equatable, Sendable {
     case .variant: return 1
     }
   }
+
+  /// Alignment for a single element type given only as a signature
+  /// FRAGMENT string (e.g. `"v"`, `"{sv}"`, `"(ia{sv})"`) — needed because
+  /// `DBusValue.emptyArray(elementSignature:)` carries its element type
+  /// that way (a `String`, not a `DBusTypeSignature`; see that case's doc
+  /// comment for why), so `DBusByteWriter` has no decoded `DBusValue`/
+  /// `DBusTypeSignature` to ask `.alignment` of when it needs to pad a
+  /// genuinely empty array correctly. Reuses `DBusSignatureParser` (by
+  /// wrapping the fragment as `"a" + signature`, so a dict-entry fragment
+  /// like `"{sv}"` — only legal as an array's direct element per the
+  /// D-Bus grammar — parses the same way a real `a{sv}` would) rather
+  /// than hand-rolling a second type-code-to-alignment table that could
+  /// drift from this enum's own `alignment` property above.
+  static func alignment(ofElementSignature signature: String) -> Int {
+    guard let parsed = DBusSignatureParser.parse("a" + signature), parsed.count == 1,
+      case .array(let element) = parsed[0]
+    else { return DBusDefaults.emptyArrayElementAlignment }
+    return element.alignment
+  }
+}
+
+/// Common multi-character D-Bus signature FRAGMENTS needed as literal
+/// strings — e.g. to build `DBusValue.emptyArray(elementSignature:)`
+/// values, where the fragment can't be read off an actual `DBusValue`
+/// because there isn't one (the array is empty by construction). Kept
+/// alongside `DBusTypeCode`'s single-character codes for the same reason:
+/// one place, not scattered inline literals (coding-standards.md's "no
+/// magic strings" rule). `public`: every real user is `ClipnestLinuxAppKit`
+/// (`DBusMenuLayoutBuilder`, `SingleInstanceDecision`, `ShowPickerOptions`),
+/// a separate module from this one.
+public enum DBusElementSignature {
+  /// `STRING => VARIANT` dict entry — the element type of every `a{sv}`
+  /// this app builds: `org.freedesktop.Application.Activate`/`.Open`'s
+  /// `platform_data`, `com.canonical.dbusmenu`'s per-item `properties`,
+  /// and `ShowPickerOptions.encoded()`'s own `a{sv}` options dict.
+  public static let stringVariantDictEntry = "{sv}"
+  /// A bare `VARIANT` — the element type of `com.canonical.dbusmenu`'s
+  /// `children: av` (every child is itself a `VARIANT`-wrapped
+  /// `(i, a{sv}, av)` structure).
+  public static let variant = "v"
+  /// `(INT32, a{sv})` — the element type of `GetGroupProperties`'s
+  /// `-> a(ia{sv})` reply (see `DBusMenuMember.getGroupProperties`'s doc
+  /// comment for why real hosts call this).
+  public static let menuGroupPropertiesEntry = "(ia{sv})"
 }
 
 /// Parses a D-Bus signature string (e.g. `"(ii)"`, `"a{sv}"`, `"siiva{sv}"`)

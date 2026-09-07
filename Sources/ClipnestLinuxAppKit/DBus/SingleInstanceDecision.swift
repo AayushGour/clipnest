@@ -80,6 +80,13 @@ enum SingleInstance {
   /// actually acts on it, matching every desktop app's "second launch is a
   /// no-op besides waking the first" convention.
   static func forwardArguments(_ arguments: [String], on connection: any DBusCalling) {
+    // `Activate`/`Open`'s trailing `platform_data: a{sv}` is always empty
+    // (this app never sends any) — it MUST still be `.emptyArray(
+    // elementSignature: "{sv}")`, not the plain `.array([])`, which
+    // degrades to `"ay"` and is the same wire-marshalling bug
+    // `DBusValue.emptyArray`'s own doc comment fixes for `GetLayout`.
+    let emptyPlatformData = DBusValue.emptyArray(
+      elementSignature: DBusElementSignature.stringVariantDictEntry)
     let message: DBusMessage
     if arguments.isEmpty {
       message = DBusMessage(
@@ -87,7 +94,7 @@ enum SingleInstance {
         path: ClipnestControlName.objectPath,
         interface: FreedesktopApplicationName.interface,
         member: FreedesktopApplicationMember.activate,
-        destination: ClipnestControlName.busName, body: [.array([])])
+        destination: ClipnestControlName.busName, body: [emptyPlatformData])
     } else {
       message = DBusMessage(
         type: .methodCall, serial: connection.allocateSerialOrFallback(),
@@ -95,7 +102,7 @@ enum SingleInstance {
         interface: FreedesktopApplicationName.interface,
         member: FreedesktopApplicationMember.open,
         destination: ClipnestControlName.busName,
-        body: [.array(arguments.map(DBusValue.string)), .array([])])
+        body: [.array(arguments.map(DBusValue.string)), emptyPlatformData])
     }
     _ = connection.call(message, timeout: .milliseconds(500))
   }
