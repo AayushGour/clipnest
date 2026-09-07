@@ -416,7 +416,23 @@ final class LinuxAppEnvironment {
       },
       requestUInputGrant: { completion in
         GrantInputHelperClient.requestGrant(completion: completion)
-      })
+      },
+      // T-LXUPD: the Linux self-update seam — `LinuxAppUpdater` (this
+      // module, new file) does the real `apt-cache policy` / `curl` /
+      // `pkexec apt-get install` work `SettingsWindow+General.swift`
+      // (`ClipnestGTK`) cannot reach directly. No default value on either
+      // closure (see `SettingsWindow.detectUpdateProvenance`'s doc
+      // comment) — both required here, same as `uinputPermissionStatusProvider`/
+      // `requestUInputGrant` above. `installedVersionText`/`aptUpgradeCommand`
+      // are plain, precomputed values (nothing to inject as a closure).
+      installedVersionText: Self.installedVersion,
+      detectUpdateProvenance: {
+        await LinuxAppUpdater.detectProvenance()
+      },
+      performLinuxAppUpdate: { onStep in
+        await LinuxAppUpdater.performUpdate(installedVersion: Self.installedVersion, onStep: onStep)
+      },
+      aptUpgradeCommand: LinuxAppUpdater.aptUpgradeCommand())
 
     // Keyboard-parity pass (routed follow-up): `PickerViewModel.openSettings`
     // (used by `openSettingsFromPicker()`, now reachable via the picker's own
@@ -428,6 +444,23 @@ final class LinuxAppEnvironment {
     // entry already calls (`LinuxAppLifecycle.swift`), mirroring
     // `AppEnvironment`'s macOS equivalent one line up the stack.
     viewModel.openSettings = { [weak self] in self?.openSettings() }
+
+    // T-LXUPD: closes another instance of the exact silent-seam-default trap
+    // coding-standards.md documents (`presentSnippetEditor`/`openSettings`
+    // above) — `PickerViewModel.appVersion`/`requestAppUpdate` both default
+    // to a no-op/empty value and were never set anywhere on Linux. No
+    // picker-footer UI consumes them yet (`PickerWindow*.swift` is out of
+    // this task's owned-files scope this session — another agent owns it),
+    // but wiring them now means the moment picker-footer parity lands there,
+    // this "just works" instead of silently no-op'ing a third time.
+    // `requestAppUpdate` opens Settings' General tab — the real
+    // install/apt-command surface this task adds (`SettingsWindow
+    // +General.swift`) — rather than performing the update directly from
+    // here, since there is no picker-side confirmation/progress UI to drive
+    // yet. Placed after `self.settingsWindow` is constructed (definite
+    // initialization: `openSettings()` reads it).
+    viewModel.appVersion = Self.installedVersion
+    viewModel.requestAppUpdate = { [weak self] in self?.openSettings() }
 
     monitor.onCapture = { [weak self, weak viewModel] _ in
       viewModel?.handleNewCapture()

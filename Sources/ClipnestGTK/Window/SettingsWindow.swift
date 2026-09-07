@@ -111,6 +111,44 @@ public final class SettingsWindow: @unchecked Sendable {
   /// defaulted, same reasoning as `uinputPermissionStatusProvider` above.
   let requestUInputGrant: (_ completion: @escaping @Sendable (UInputGrantOutcome) -> Void) -> Void
 
+  /// T-LXUPD: current installed version text, shown in the General tab
+  /// (`UpdateSettingsPresentation.versionLine`) — the Linux analogue of
+  /// macOS's `AppUpdater.currentVersion` (`CFBundleShortVersionString`).
+  /// This binary ships no bundle/plist to read that from at runtime, so the
+  /// composition root (`LinuxAppEnvironment.installedVersion`) resolves it
+  /// once and passes it in as a plain value — same reasoning
+  /// `isTextRecognitionAvailable` above already documents for a one-shot,
+  /// resolved-at-launch fact.
+  let installedVersionText: String
+
+  /// T-LXUPD: detects whether Clipnest is managed by apt/a PPA or was
+  /// installed from a raw `.deb` — see `LinuxUpdateProvenance`'s doc
+  /// comment. Crosses the `ClipnestGTK` -> `ClipnestLinuxAppKit` module
+  /// boundary as an injected closure (the real implementation,
+  /// `LinuxAppUpdater.detectProvenance()`, does a real `apt-cache policy`
+  /// process spawn this module cannot reach directly) — same pattern as
+  /// `uinputPermissionStatusProvider` above. Deliberately NOT given a
+  /// default value — see `reinstallToggleHotkeyFloor`'s doc comment for why
+  /// a defaulted seam is a build-time-invisible way to ship a dead feature.
+  let detectUpdateProvenance: () async -> LinuxUpdateProvenance
+
+  /// T-LXUPD: runs the actual checksum-verified download + `pkexec
+  /// apt-get install` (`LinuxAppUpdater.performUpdate`, `ClipnestLinuxAppKit`)
+  /// — only ever invoked by `SettingsWindow+General.swift` after its own
+  /// explicit "Install Update…" confirmation dialog, never automatically.
+  /// `onStep` may be called from any thread; the real call site hops back
+  /// to the GTK thread itself before touching any widget. Also deliberately
+  /// not defaulted, same reasoning as `requestUInputGrant` above.
+  let performLinuxAppUpdate:
+    (_ onStep: @escaping @Sendable (LinuxUpdateStep) -> Void) async -> LinuxUpdateOutcome
+
+  /// T-LXUPD: the exact apt command shown (selectable, for copy-paste) when
+  /// `detectUpdateProvenance` reports `.packageManaged`
+  /// (`LinuxAppUpdater.aptUpgradeCommand()`). A plain, precomputed `String`
+  /// rather than a closure — unlike the two collaborators above, it never
+  /// changes at runtime.
+  let aptUpgradeCommand: String
+
   let window: OpaquePointer
   let notebook: OpaquePointer
 
@@ -155,6 +193,16 @@ public final class SettingsWindow: @unchecked Sendable {
   var permissionsResultLabel: OpaquePointer?
   var permissionsGrantButton: OpaquePointer?
 
+  /// General tab's update section (`SettingsWindow+General.swift`, T-LXUPD)
+  /// — every widget `refreshUpdateAvailabilityUI()`/`startInstallUpdate()`
+  /// need to update. All `nil` until `buildGeneralTab()` runs (during
+  /// `init`), same contract as every other tab's widget refs above.
+  var updateVersionLabel: OpaquePointer?
+  var updateExplanationLabel: OpaquePointer?
+  var updateAptCommandLabel: OpaquePointer?
+  var updateInstallButton: OpaquePointer?
+  var updateStatusLabel: OpaquePointer?
+
   public init(
     settings: SettingsStore,
     updateChecker: UpdateChecker,
@@ -166,7 +214,13 @@ public final class SettingsWindow: @unchecked Sendable {
     reinstallToggleHotkeyFloor: @escaping (_ accelerator: String) -> Void,
     uinputPermissionStatusProvider: @escaping () -> UInputPermissionStatus,
     requestUInputGrant: @escaping (_ completion: @escaping @Sendable (UInputGrantOutcome) -> Void)
-      -> Void
+      -> Void,
+    installedVersionText: String,
+    detectUpdateProvenance: @escaping () async -> LinuxUpdateProvenance,
+    performLinuxAppUpdate: @escaping (
+      _ onStep: @escaping @Sendable (LinuxUpdateStep) -> Void
+    ) async -> LinuxUpdateOutcome,
+    aptUpgradeCommand: String
   ) {
     self.settings = settings
     self.updateChecker = updateChecker
@@ -178,6 +232,10 @@ public final class SettingsWindow: @unchecked Sendable {
     self.reinstallToggleHotkeyFloor = reinstallToggleHotkeyFloor
     self.uinputPermissionStatusProvider = uinputPermissionStatusProvider
     self.requestUInputGrant = requestUInputGrant
+    self.installedVersionText = installedVersionText
+    self.detectUpdateProvenance = detectUpdateProvenance
+    self.performLinuxAppUpdate = performLinuxAppUpdate
+    self.aptUpgradeCommand = aptUpgradeCommand
     window = gtk_window_new()
     notebook = gtk_notebook_new()
 
@@ -208,6 +266,11 @@ public final class SettingsWindow: @unchecked Sendable {
     // button.
     MainActor.assumeIsolated {
       refreshPermissionsStatus()
+      // T-LXUPD: same re-read-every-show cadence as
+      // `refreshPermissionsStatus()` above — see
+      // `SettingsWindow+General.swift`'s `refreshUpdateAvailabilityUI()`
+      // doc comment for why that's the right cadence for this state too.
+      refreshUpdateAvailabilityUI()
     }
     gtk_widget_set_visible(window, 1)
     gtk_window_present(window)

@@ -35,13 +35,19 @@ public enum LinuxShortcutDescriptions {
   // Delete is `KeyEventMapping`'s canonical binding (Ctrl+Delete still
   // works too, kept as an alias — see that file's `Keyval.delete` doc
   // comment), so this entry now leads with the same chord the footer
-  // advertises. The description also states the search-box-empty
-  // condition explicitly: `PickerWindow+Keyboard.swift`'s
-  // `isTypingInSearchField` (the P0 data-loss fix landed alongside this
-  // one) routes Delete to the search field instead of the list whenever
-  // the search box has focus AND non-empty text — omitting that here
+  // advertises. The description also states the exception explicitly (Delete
+  // sometimes edits the search box instead of the list) — omitting that here
   // would repeat the same kind of misleading-but-technically-true wording
   // that caused the original contradiction.
+  //
+  // T-KBPARITY3: the exception's exact condition changed from "the search
+  // box has focus AND non-empty text" to "the search entry has focus AND
+  // pressing Delete would actually edit it" (a selection, or a character
+  // after the caret) — see `PickerWindow+Keyboard.swift`'s
+  // `shouldPropagateToSearchEntry`/`searchEntryDeleteWouldHaveEffect` for the
+  // full decision. Worded below as "would edit the search box instead" so
+  // this entry doesn't need re-wording again for the next refinement of
+  // exactly when that is true.
   // Keyboard-parity pass (routed follow-up): four entries added
   // (`Ctrl+S`/`Ctrl+N`/`Ctrl+Shift+E`/`Ctrl+,`) — each already had a working
   // `PickerViewModel` method reachable only by mouse (a row's hover
@@ -64,7 +70,7 @@ public enum LinuxShortcutDescriptions {
     Entry(
       combo: "Delete",
       description:
-        "Delete the highlighted item (when the search box is empty; also works via Ctrl+Delete)"
+        "Delete the highlighted item (unless it would edit the search box instead; also works via Ctrl+Delete)"
     ),
     Entry(combo: "Ctrl+N", description: "New snippet (Snippets tab)"),
     Entry(combo: "Ctrl+Shift+E", description: "Edit the highlighted snippet (Snippets tab)"),

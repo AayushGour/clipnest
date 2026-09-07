@@ -79,6 +79,14 @@ public enum PickerKeyAction: Equatable, Sendable {
   /// Ctrl-chords a plain text field never consumes, and `commit`/`dismiss`
   /// (Return/Escape) are picker-level actions the search entry has no competing
   /// meaning for.
+  ///
+  /// T-KBPARITY3: this flag only says WHICH actions can ever be entry-owned;
+  /// for `.delete` specifically, whether the entry owns THIS keypress also
+  /// depends on live caret/selection state, not just "is this action
+  /// `.delete`" — see `PickerWindow+Keyboard.swift`'s
+  /// `shouldPropagateToSearchEntry`/`searchEntryDeleteWouldHaveEffect` for
+  /// that finer-grained decision (and why GTK's own event bubbling can't make
+  /// it for us).
   var isTextEditingKeyWhenTypingInSearch: Bool {
     if case .delete = self { return true }
     return false

@@ -81,8 +81,49 @@ the human-readable list also shown in Settings → Shortcuts):
 | Escape | Dismiss (via `onDismiss`) |
 | Ctrl+F | Focus the search field |
 | Ctrl+P | Toggle pin |
-| Delete (Ctrl+Delete also accepted) | Delete highlighted item — only when the search box is empty; otherwise the key edits the search text (see `PickerWindow+Keyboard.swift`'s `isTypingInSearchField`) |
+| Delete (Ctrl+Delete also accepted) | Delete highlighted item, EXCEPT when the search field has focus and pressing Delete would actually edit its content (a selection, or a character after the caret) — then the key edits the search text instead, same as macOS. See below. |
 | Ctrl+1 / 2 / 3 | Switch to History / Pinned / Snippets |
+| Ctrl+S | Save highlighted item as a new snippet (History/Pinned) |
+| Ctrl+N | New blank snippet (Snippets tab only) |
+| Ctrl+Shift+E | Edit the highlighted snippet (Snippets tab only) |
+| Ctrl+, | Open Settings (dismisses the picker first) |
+
+### Delete-vs-search-field parity with macOS (T-KBPARITY3)
+
+macOS's `PickerView.swift` attaches its key handler (`.onKeyPress`) to the
+*outer container*, so the focused `TextField` gets first refusal on every
+keystroke — only what it does NOT consume bubbles up to the picker. A
+`TextField` consumes Delete only when it would actually do something
+(forward-delete a character, or remove a selection); a no-op Delete (caret
+already at the end of the text) is not consumed and bubbles up, so the
+picker deletes the highlighted item instead.
+
+GTK4's `GtkEventControllerKey` is attached to the window at
+`GTK_PHASE_CAPTURE` (not `GTK_PHASE_BUBBLE`) so the picker's own chords work
+regardless of focus — see `PickerWindow+Keyboard.swift`'s top doc comment.
+This was verified (own throwaway GTK4 probe under Xvfb, Ubuntu 22.04's real
+`libgtk-4-dev`) to be the ONLY option for Delete too: `GtkText`'s Delete key
+binding always reports the keypress as handled — even as a no-op, ringing
+`gtk_widget_error_bell` — so a `GTK_PHASE_BUBBLE` controller on the window
+never sees a Delete keypress at all while the search entry has focus, in any
+state. GTK's own event propagation genuinely cannot reproduce macOS's bubble
+semantics for this key.
+
+Instead, `PickerWindow.shouldPropagateToSearchEntry(action:
+focusIsInSearchEntry:searchEntryEditWouldHaveEffect:)` (pure, unit-tested)
+and `searchEntryDeleteWouldHaveEffect(_:)` (the live-GTK read: is there an
+active selection, or a character after the caret) decide, AT the
+capture-phase interception point, whether the entry would have consumed
+Delete — reproducing the same observable outcome as macOS's bubbling,
+scenario for scenario:
+
+| Scenario | macOS | Linux |
+|---|---|---|
+| Caret mid-text, Delete | `TextField` forward-deletes a character; picker never sees it | `GtkText` forward-deletes a character; picker never sees it |
+| Caret at the END of non-empty text, Delete (nothing to forward-delete) | Not consumed; bubbles to the picker, which deletes the highlighted item | Not propagated to the entry; the picker deletes the highlighted item |
+| Search field empty, Delete | Same as above (an empty field is "caret at the end") | Same as above |
+| An active selection in the search field, Delete | `TextField` deletes the selection; picker never sees it | `GtkText` deletes the selection; picker never sees it |
+| Focus outside the search field (e.g. a row button), Delete | N/A on macOS today (the search field is always focused) | Picker always deletes the highlighted item, regardless of caret/selection |
 
 ## Row actions and the right-click context menu
 
@@ -279,6 +320,39 @@ public final class SettingsWindow: @unchecked Sendable {
   reason `launchAtLoginProvider`/`reinstallToggleHotkeyFloor` are injected.
   The pure "what to show" decisions (`PermissionsTabPresentation`, same
   file) are unit-tested directly, independent of any live GTK widget tree.
+- The General tab's update section (`SettingsWindow+General.swift`,
+  T-LXUPD) is the Linux analogue of macOS's version-label/`AppUpdater`
+  flow — see `LinuxAppUpdater` in
+  [`docs/API-ClipnestLinuxAppKit.md`](API-ClipnestLinuxAppKit.md#linuxappupdater)
+  for the real download/verify/install implementation this tab drives.
+  Below "Automatically check for updates" it shows the installed version, a
+  "Check for Updates Now" button (calls the same `updateChecker.checkNow()`
+  the background 24h timer uses — no second implementation), and, only
+  once `updateChecker.isUpdateAvailable` is true, one of three states
+  decided by `detectUpdateProvenance()` (injected, resolves to
+  `LinuxUpdateProvenance`):
+  - `.packageManaged(origin:)` — apt/a PPA owns the install. Shows the real
+    origin and a selectable (copy-pasteable), non-editable label with the
+    exact command to run (`aptUpgradeCommand`, a plain precomputed
+    `String`) — no "Install Update…" button, so the app never fights the
+    package manager for a package it doesn't own.
+  - `.standaloneDebInstall` — installed from a raw `.deb`, no repository
+    serving it. Shows "Install Update…", gated behind
+    `showConfirmationDialog(...)` (the same mandatory-confirmation shape
+    `SettingsWindow+History.swift`'s "Clear All History…" uses) before
+    `performLinuxAppUpdate(onStep:)` ever runs — this app never
+    downloads/installs anything without that explicit click plus polkit's
+    own authentication dialog inside `performLinuxAppUpdate` itself.
+  - `.undetermined(reason:)` — detection failed or didn't parse; shows the
+    real reason and a pointer to the public releases page. Deliberately
+    NOT treated as `.standaloneDebInstall` (fail-safe, not fail-open).
+
+  `installedVersionText`/`detectUpdateProvenance`/`performLinuxAppUpdate`/
+  `aptUpgradeCommand` are all required `SettingsWindow.init` parameters, no
+  defaults — same "a defaulted seam ships a silently-dead feature" reasoning
+  as `uinputPermissionStatusProvider`/`requestUInputGrant` above. The pure
+  copy/gating decisions (`UpdateSettingsPresentation`,
+  `SettingsWindow+General.swift`) are unit-tested directly.
 
 ## Actor isolation
 

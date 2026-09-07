@@ -26,7 +26,8 @@ Depends: ${shlibs:Depends},
          pkexec,
          polkitd,
          udev,
-         kmod
+         kmod,
+         curl
 Recommends: clipnest-ocr
 Description: clipboard history, snippets, and on-device OCR
  Clipnest watches the clipboard, keeps a searchable history, lets you save

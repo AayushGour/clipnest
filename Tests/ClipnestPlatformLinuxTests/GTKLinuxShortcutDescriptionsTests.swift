@@ -28,16 +28,22 @@ struct GTKLinuxShortcutDescriptionsTests {
   // picker footer (`ShortcutHints.swift`) advertised bare "Delete" for the
   // same action — a black-box-found contradiction between two in-app
   // surfaces. Pins the reconciled wording: the canonical chord matches the
-  // footer's, and the description states the search-box-empty condition
-  // (the P0 data-loss fix landed in the same session) rather than only the
-  // modifier.
-  @Test("Delete entry matches the footer's canonical chord and states the search-box condition")
+  // footer's, and the description states the exception (Delete sometimes
+  // edits the search box instead of the list) rather than only the modifier.
+  //
+  // T-KBPARITY3: the wording used to name the exact old condition
+  // ("search box is empty"), which stopped being accurate once
+  // `shouldPropagateToSearchEntry` started deciding on caret/selection state
+  // instead — pinning the exact condition here would have made this test
+  // (not just the string) go stale again at the next refinement. Pins the
+  // now-condition-agnostic phrasing instead.
+  @Test("Delete entry matches the footer's canonical chord and states the exception")
   func deleteEntryIsAccurate() {
     let delete = LinuxShortcutDescriptions.all.first {
       $0.description.contains("Delete the highlighted item")
     }
     #expect(delete?.combo == "Delete")
-    #expect(delete?.description.contains("search box is empty") == true)
+    #expect(delete?.description.contains("edit the search box") == true)
     #expect(delete?.description.contains("Ctrl+Delete") == true)
   }
 
