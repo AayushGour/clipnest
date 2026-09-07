@@ -28,6 +28,20 @@ public enum LinuxShortcutDescriptions {
     public let description: String
   }
 
+  // T-BB6 fix: this used to say "Ctrl+Delete  Delete the highlighted item"
+  // while the picker's own footer (`ShortcutHints.swift`'s Linux
+  // `platformDefault`) says "Delete delete" — two in-app surfaces
+  // disagreeing about the same shortcut, found by black-box testing. Bare
+  // Delete is `KeyEventMapping`'s canonical binding (Ctrl+Delete still
+  // works too, kept as an alias — see that file's `Keyval.delete` doc
+  // comment), so this entry now leads with the same chord the footer
+  // advertises. The description also states the search-box-empty
+  // condition explicitly: `PickerWindow+Keyboard.swift`'s
+  // `isTypingInSearchField` (the P0 data-loss fix landed alongside this
+  // one) routes Delete to the search field instead of the list whenever
+  // the search box has focus AND non-empty text — omitting that here
+  // would repeat the same kind of misleading-but-technically-true wording
+  // that caused the original contradiction.
   public static let all: [Entry] = [
     Entry(combo: "↑ / ↓", description: "Move selection"),
     Entry(combo: "Enter", description: "Paste the highlighted item"),
@@ -35,7 +49,11 @@ public enum LinuxShortcutDescriptions {
     Entry(combo: "Escape", description: "Close the picker"),
     Entry(combo: "Ctrl+F", description: "Focus the search field"),
     Entry(combo: "Ctrl+P", description: "Pin or unpin the highlighted item"),
-    Entry(combo: "Ctrl+Delete", description: "Delete the highlighted item"),
+    Entry(
+      combo: "Delete",
+      description:
+        "Delete the highlighted item (when the search box is empty; also works via Ctrl+Delete)"
+    ),
     Entry(combo: "Ctrl+1 / 2 / 3", description: "Switch to History / Pinned / Snippets"),
   ]
 }

@@ -14,22 +14,33 @@ reusable text snippets, and (with the optional
 package installed) recognizes text in copied images entirely on-device \-
 no network access is ever used for this or anything else Clipnest does.
 .PP
-Clipnest is normally started automatically over D-Bus activation (see
+Clipnest is normally started one of two ways: automatically over D-Bus
+activation (see
 .I /usr/share/dbus-1/services/app.clipnest.Clipnest.service
 and
-.IR /usr/share/applications/app.clipnest.Clipnest.desktop )
-the first time something calls it \- e.g. its own autostart entry, or a
-global shortcut. Running
+.IR /usr/share/applications/app.clipnest.Clipnest.desktop ),
+the first time something calls it \- e.g. a global shortcut, or
+\fBclipnest\-ctl\fR(1)'s \fBopen\-settings\fR/\fBping\fR \- or, if "Launch
+at login" is enabled in Clipnest's own Settings, directly at session
+start via an XDG autostart entry (which runs the plain executable with no
+options). Running
 .B clipnest
 directly is only needed for debugging.
 .SH OPTIONS
 .TP
 .B \-\-gapplication-service
-Run as the background D-Bus service instance rather than opening a window
-immediately. This is how autostart and D-Bus activation both invoke it.
+Accepted for compatibility with GLib's GApplication D-Bus-activation
+convention \- this is the flag
+.I app.clipnest.Clipnest.service
+invokes clipnest with. clipnest already runs as a resident background
+instance with no window shown at startup regardless of this flag, so
+passing it has no additional effect today.
 .TP
 .B \-\-version
 Print the installed version and exit.
+.TP
+.B \-\-help
+Show usage and exit.
 .SH CLIPNEST-CTL
 .B clipnest-ctl
 is a thin command-line wrapper around the running instance's D-Bus
@@ -40,6 +51,19 @@ Open or close the clipboard-history picker.
 .TP
 .B clipnest-ctl expand-snippet
 Expand the current selection as a snippet keyword.
+.TP
+.B clipnest-ctl open-settings
+Open Clipnest's Settings window.
+.TP
+.B clipnest-ctl ping
+Check that Clipnest is running and responding.
+.TP
+.B clipnest-ctl version
+Print the installed version and exit.
+.PP
+See
+.BR clipnest-ctl (1)
+for the full command reference.
 .SH FILES
 .TP
 .I ~/.config/clipnest/settings.json
@@ -51,9 +75,14 @@ if
 .B $XDG_CONFIG_HOME
 is unset).
 .TP
-.I ~/.local/share/clipnest/
+.I ~/.local/share/Clipnest/
 Per-user clipboard history database and blob storage (large payloads \-
-images, rich text \- content-addressed by hash).
+images, rich text \- content-addressed by hash). XDG Base Directory
+Specification location (falls back to
+.I ~/.local/share
+if
+.B $XDG_DATA_HOME
+is unset).
 .TP
 .I ~/.config/autostart/clipnest.desktop
 Present only if you have enabled "Launch at login" in Clipnest's own
@@ -80,7 +109,7 @@ user who has used Clipnest:
 .PP
 .RS
 .nf
-rm -rf ~/.config/clipnest ~/.local/share/clipnest
+rm -rf ~/.config/clipnest ~/.local/share/Clipnest
 .fi
 .RE
 .PP

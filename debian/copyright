@@ -16,6 +16,25 @@ Comment:
  for exact provenance, checksums, and why it is vendored rather than an apt
  build-dependency. Ships in the clipnest-ocr binary package.
 
+Files: packaging/linux/vendor/ppocr-models/*
+Copyright: 2020 PaddlePaddle Authors
+ 2021 RapidOCR Authors
+License: Apache-2.0
+Comment:
+ Vendored PP-OCRv5 mobile detection/recognition/text-line-orientation ONNX
+ models plus character dictionary, used unmodified from RapidOCR's official
+ ModelScope-hosted ONNX conversion of Baidu's PaddleOCR PP-OCRv5, pinned at
+ RapidOCR release tag v3.9.2 — see
+ packaging/linux/vendor/ppocr-models/SOURCE.md for exact provenance and
+ per-file SHA-256. The model weights and training code are Apache-2.0
+ licensed by the PaddlePaddle Authors (github.com/PaddlePaddle/PaddleOCR);
+ the ONNX export/conversion and ModelScope hosting is done by RapidOCR,
+ also Apache-2.0 (github.com/RapidAI/RapidOCR). Ships in the
+ clipnest-ocr-data binary package. Full Apache-2.0 text is Debian's own
+ common license at /usr/share/common-licenses/Apache-2.0 — not duplicated
+ here, per Debian copyright-format convention for common licenses (lintian
+ flags a duplicated copy as copyright-file-contains-full-apache-2-license).
+
 License: MIT
  Permission is hereby granted, free of charge, to any person obtaining a copy
  of this software and associated documentation files (the "Software"), to deal
@@ -34,3 +53,4 @@ License: MIT
  LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
  OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  THE SOFTWARE.
+

@@ -3,14 +3,55 @@ import Foundation
 import Glibc
 
 /// **UNVERIFIABLE WITHOUT A LIVE X SERVER — see this task's report.** The
-/// one file in this module that actually calls Xlib/XFixes. Every other
-/// file under `Clipboard/` is pure logic, unit-tested with a fake
-/// conformance of `X11SelectionConnecting`/`X11WindowIdentityQuerying`; this
-/// file is that seam's real, production implementation, and is
-/// deliberately kept small and isolated so as little logic as possible
-/// lives somewhere no CI runner can exercise it (there is no X server in
-/// CI or in a container). Compiled and lint-checked on every Linux CI run;
-/// never executed by any test.
+/// one file in this module that calls Xlib/XFixes on Clipnest's OWN,
+/// dedicated `Display*` connection. Every other file under `Clipboard/` is
+/// pure logic, unit-tested with a fake conformance of
+/// `X11SelectionConnecting`/`X11WindowIdentityQuerying`; this file is that
+/// seam's real, production implementation, and is deliberately kept small
+/// and isolated so as little logic as possible lives somewhere no CI
+/// runner can exercise it (there is no X server in CI or in a container).
+/// Compiled and lint-checked on every Linux CI run; never executed by any
+/// test.
+///
+/// **This is NOT the only code in the process watching the CLIPBOARD
+/// selection.** GTK4's own X11 backend (`gdk/x11/gdkclipboard-x11.c`)
+/// unconditionally opens a SEPARATE, independent XFixes-based watch on
+/// both `CLIPBOARD` and `PRIMARY` the moment `_gdk_x11_display_open` runs
+/// — i.e. the instant `ClipnestGTKApplication.initializeGTK()` calls
+/// `gtk_init()`, before any Clipnest code (this file included) gets
+/// control, and with no supported GDK/GTK API, `GDK_DEBUG`/`GDK_DISABLE`
+/// flag, or environment toggle to opt out of it — confirmed by reading
+/// the actual Ubuntu 22.04 `gtk4` source (`gdk/x11/gdkdisplay-x11.c`,
+/// `_gdk_x11_display_open`: `display->clipboard = gdk_x11_clipboard_new
+/// (display, "CLIPBOARD")` runs unconditionally for every X11 display).
+/// GTK's tracker fully duplicates the ownership-change/TARGETS-negotiation
+/// work this file already does, entirely on its own, for reasons that
+/// have nothing to do with whether Clipnest ever calls a GDK clipboard
+/// API (GTK needs it for e.g. `GtkText`'s built-in "Paste" sensitivity).
+/// That independent tracker is where the P0 `SIGSEGV` this class's git
+/// history references actually happens: GTK 4.6.x's own
+/// `gdk_x11_clipboard_request_targets_got_stream` calls the NULL-unsafe
+/// `g_str_equal(type, "ATOM")` instead of the NULL-safe `g_strcmp0`
+/// (confirmed fixed upstream by that exact substitution in later GTK)
+/// against a `type` that CAN legitimately be `NULL` — whenever ANY
+/// external process's ICCCM selection-reply property doesn't land where
+/// GDK expects it (reproduced 100% with a raw python-xlib TARGETS owner
+/// that writes its reply onto its OWN window instead of the requestor's —
+/// no malice required, just a common ICCCM implementation slip in
+/// whatever process happens to own `CLIPBOARD`). There are zero
+/// Clipnest/Swift frames in that crash's stack because the fault is
+/// entirely inside GTK/GLib's own async `GTask` completion, dispatched
+/// from the GLib main loop — unreachable from and unfixable by any code
+/// in this module or in `ClipnestGTKApplication.swift`'s GTK
+/// initialization; the real fix is a GTK4 runtime-dependency version
+/// bump (Ubuntu 22.04's own archives top out at the affected 4.6.9, so
+/// this needs a backport/PPA — a packaging-level decision, tracked
+/// separately, not a code change this module can make). `X11State
+/// .readProperty`'s `actualType != Self.zero` guard exists so that THIS
+/// file's own, independently-implemented equivalent of the same ICCCM
+/// read cannot hit the analogous fault (it can't SIGSEGV in Swift either
+/// way, but without the guard it silently misreported "property doesn't
+/// exist" as "empty payload").
 ///
 /// **Concurrency model:** one dedicated background `Thread` (`eventThread`)
 /// owns the `Display*` connection for its entire lifetime and is the ONLY

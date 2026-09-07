@@ -232,6 +232,26 @@ struct AppClipnestControlServiceDispatchTests {
     #expect(toggled == 0)
   }
 
+  // T-BB2: `--version`/`--help` can't actually reach `Open` in practice —
+  // `LinuxAppLifecycle.run(arguments:)` intercepts and exits on both before
+  // a launch ever reaches `SingleInstance.forwardArguments` — but
+  // `LinuxAppCLICommand`'s switch in `ClipnestControlDispatcher.handle`
+  // must stay exhaustive now that those two cases exist. Pins that they
+  // degrade the same way an unrecognized flag always has: bring the picker
+  // up, exactly like a bare `Activate`.
+  @Test(
+    "Open([--version]) and Open([--help]) degrade to onTogglePicker, same as an unrecognized flag")
+  func openWithVersionOrHelpFlagDegradesToTogglePicker() {
+    let dispatcher = ClipnestControlDispatcher(capabilities: [])
+    var toggled = 0
+    dispatcher.onTogglePicker = { toggled += 1 }
+
+    let message = call(interface: "org.freedesktop.Application", member: "Open")
+    _ = dispatcher.handle(.open(["--version"]), message: message)
+    _ = dispatcher.handle(.open(["--help"]), message: message)
+    #expect(toggled == 2)
+  }
+
   @Test("getCapabilities replies with exactly the injected capabilities list")
   func getCapabilitiesRepliesWithInjectedList() {
     let dispatcher = ClipnestControlDispatcher(capabilities: ["picker", "settings"])

@@ -23,15 +23,12 @@ WORKDIR /src
 COPY . /src
 # Native source format tars the whole tree; keep the build dir clean of host junk.
 RUN rm -rf .build ClipnestApp/DerivedData build release-cert
-# OCR is compiled out in this image (no -DCLIPNEST_HAS_ONNXRUNTIME, see D66),
-# so the PP-OCRv5 models are inert here. debian/rules correctly refuses to
-# package without them, which is the right default -- so place zero-byte
-# stand-ins INSIDE the container only. The repo keeps no fake models, and the
-# clipnest-ocr-data package produced by this image is deliberately empty and
-# must never be published.
-RUN mkdir -p packaging/linux/vendor/ppocr-models \
-    && for f in det.onnx rec.onnx cls.onnx dict.txt; do \
-         : > "packaging/linux/vendor/ppocr-models/$f"; done
+# T-OCR9/T-OCR10 (real PP-OCRv5 weights now vendored, see
+# packaging/linux/vendor/ppocr-models/SOURCE.md): the real model files are
+# already committed to the source tree and flow through `COPY . /src` above
+# like any other tracked file -- no zero-byte stand-ins needed (or wanted)
+# anymore. `debian/rules` builds a genuinely working `clipnest-ocr-data`
+# from them, so this image now exercises real, on-device OCR.
 # NO pipe here: `cmd | tail` returns tail's exit status, which masked a
 # real build failure and produced an empty stage.
 RUN set -o pipefail; dpkg-buildpackage -us -uc -b -d 2>&1 | tail -40
@@ -47,9 +44,16 @@ RUN apt-get update -qq && apt-get install -y -qq \
       xclip x11-utils xdotool wmctrl imagemagick \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /out/*.deb /tmp/
-# Install our packages; apt resolves the runtime deps dpkg-shlibdeps derived.
+# Install ALL THREE packages -- clipnest, clipnest-ocr, and
+# clipnest-ocr-data -- not just the base `clipnest_*.deb` this glob used to
+# match alone. clipnest only Recommends clipnest-ocr (never Depends, so a
+# real end user can skip the ~22MB of vendored weights with
+# --no-install-recommends), so this VNC test image has to opt in explicitly
+# to actually exercise real OCR, which is the whole point of vendoring real
+# weights (T-OCR9/T-OCR10). apt resolves the runtime deps dpkg-shlibdeps
+# derived for each.
 RUN apt-get update -qq \
-    && apt-get install -y -qq /tmp/clipnest_*.deb 2>&1 | tail -20 \
+    && apt-get install -y -qq /tmp/clipnest*.deb 2>&1 | tail -20 \
     && rm -rf /var/lib/apt/lists/* /tmp/*.deb
 COPY packaging/linux/vnc/start.sh /usr/local/bin/start.sh
 RUN chmod +x /usr/local/bin/start.sh

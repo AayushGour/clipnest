@@ -1,18 +1,24 @@
 #!/usr/bin/make -f
 # debian/rules for clipnest / clipnest-ocr / clipnest-ocr-data.
 #
-# See debian/README.source for the two real, verified constraints that
-# shape this file:
-#   1. No apt-installable Swift toolchain exists on jammy/noble — this
-#      Build-Depends on `swift (>= 6.0)` for correctness, but a real build
-#      needs a toolchain pre-installed in the build environment (the
-#      swift:6.0-jammy/6.0-noble Docker images .github/workflows/ci.yml and
-#      release-linux.yml use, NOT a Launchpad PPA chroot as-is today).
-#   2. `clipnest` is built WITHOUT -DCLIPNEST_HAS_ONNXRUNTIME for now — see
-#      the "Known gap" section of debian/README.source for exactly why
-#      (short version: Sources/COnnxRuntime hard-links libonnxruntime.so.1,
-#      which would force clipnest-ocr from a Recommends into a de-facto
-#      hard Depends the moment OCR is actually compiled in).
+# See debian/README.source for the real, verified constraint that shapes
+# this file:
+#   No apt-installable Swift toolchain exists on jammy/noble — this
+#   Build-Depends on `swift (>= 6.0)` for correctness, but a real build
+#   needs a toolchain pre-installed in the build environment (the
+#   swift:6.0-jammy/6.0-noble Docker images .github/workflows/ci.yml and
+#   release-linux.yml use, NOT a Launchpad PPA chroot as-is today).
+#
+# (A second constraint used to live here: `clipnest` built WITHOUT
+# -DCLIPNEST_HAS_ONNXRUNTIME because Sources/COnnxRuntime hard-linked
+# libonnxruntime.so.1, which would have forced clipnest-ocr from a
+# Recommends into a de-facto hard Depends. That flag is now dead — no
+# `#if CLIPNEST_HAS_ONNXRUNTIME` remains anywhere in Sources/**.
+# `Sources/COnnxRuntime/shim.h` is a self-contained header that never links
+# the real library, and `OrtLibrary.swift` resolves it at RUNTIME via
+# `dlopen`/`dlsym` instead — see debian/README.source's "Known gap #2" for
+# the full, verified writeup. `clipnest` is built the same way either way;
+# there is no compile-time OCR flag to pass here.)
 
 MODEL_DIR := packaging/linux/vendor/ppocr-models
 REQUIRED_MODELS := det.onnx rec.onnx cls.onnx dict.txt

@@ -52,7 +52,13 @@ final class ClipnestControlDispatcher {
       // isn't a recognized CLI flag degrades to the same thing a bare
       // `Activate` does: bring the picker up.
       switch LinuxAppCLI.parse(paths) {
-      case .togglePicker, .none: onTogglePicker()
+      // `.version`/`.help` can't actually arrive here in practice —
+      // `LinuxAppLifecycle.run(arguments:)` intercepts and `exit(0)`s on
+      // both before a launch ever reaches `SingleInstance.forwardArguments`
+      // (T-BB2 fix) — but `LinuxAppCLICommand`'s switch must stay
+      // exhaustive, so they degrade the same way an unrecognized flag
+      // already does: bring the picker up.
+      case .togglePicker, .version, .help, .none: onTogglePicker()
       case .expandSnippet: onExpandSnippet()
       }
       return ClipnestControlReplies.empty(replyingTo: message)

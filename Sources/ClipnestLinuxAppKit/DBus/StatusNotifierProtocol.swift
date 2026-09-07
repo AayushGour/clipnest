@@ -50,12 +50,29 @@ enum StatusNotifierRequest: Equatable {
   /// `GetGroupProperties(ids, propertyNames)` — see `DBusMenuMember
   /// .getGroupProperties`'s doc comment for why real hosts call this.
   case menuGetGroupProperties(ids: [Int32], propertyNames: [String])
+  /// `org.freedesktop.DBus.Introspectable.Introspect()` — carries
+  /// `message.path` so the reply can describe the actual object being
+  /// introspected (`StatusNotifierReplies.introspect(path:replyingTo:)`
+  /// dispatches on it). See `StatusNotifierIntrospection`'s doc comment
+  /// for the T-WB2 hang this fixes: every real tray object must answer
+  /// this, never silently drop it.
+  case introspect(path: String?)
+  /// An interface/member this tray doesn't implement at all — maps to
+  /// `org.freedesktop.DBus.Error.UnknownMethod`
+  /// (`StatusNotifierReplies.unknownMethod(replyingTo:)`), mirroring
+  /// `ClipnestControlRequest.unknown`'s own contract exactly. **Must
+  /// never map to a silent (`nil`) reply** — a D-Bus method call with no
+  /// reply and no error is indistinguishable from a hung process to the
+  /// caller (T-WB2).
   case unknown
 
   static func decode(_ message: DBusMessage) -> StatusNotifierRequest? {
     guard message.type == .methodCall else { return nil }
 
     switch message.interface {
+    case FreedesktopIntrospectableName.interface:
+      guard message.member == FreedesktopIntrospectableMember.introspect else { return .unknown }
+      return .introspect(path: message.path)
     case StatusNotifierItemName.interface:
       switch message.member {
       case StatusNotifierItemMember.activate: return .activate
@@ -162,6 +179,28 @@ enum StatusNotifierReplies {
       type: .methodReturn, serial: 0, replySerial: message.serial, destination: message.sender,
       body: DBusMenuLayoutBuilder.getGroupPropertiesReply(
         items: items, ids: ids, propertyNames: propertyNames))
+  }
+
+  /// `Introspect()`'s reply — see `StatusNotifierIntrospection`'s doc
+  /// comment for why every exported object path must answer this (T-WB2).
+  static func introspect(path: String?, replyingTo message: DBusMessage) -> DBusMessage {
+    DBusMessage(
+      type: .methodReturn, serial: 0, replySerial: message.serial, destination: message.sender,
+      body: [.string(StatusNotifierIntrospection.xml(forPath: path))])
+  }
+
+  /// `org.freedesktop.DBus.Error.UnknownMethod` — the proper D-Bus error
+  /// reply for a genuinely unimplemented interface/member, mirroring
+  /// `ClipnestControlReplies.unknownMethod(replyingTo:)` exactly (same
+  /// error name, same message shape). **Never `nil`** — see
+  /// `StatusNotifierRequest.unknown`'s doc comment for why a silent drop
+  /// is a D-Bus Specification violation (T-WB2).
+  static func unknownMethod(replyingTo message: DBusMessage) -> DBusMessage {
+    DBusMessage(
+      type: .error, serial: 0, errorName: StatusNotifierErrorName.unknownMethod,
+      replySerial: message.serial, destination: message.sender,
+      body: [.string("No such member '\(message.member ?? "?")' on '\(message.interface ?? "?")'")]
+    )
   }
 
   private static let allPropertyNames = [

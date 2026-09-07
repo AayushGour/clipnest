@@ -81,7 +81,7 @@ the human-readable list also shown in Settings → Shortcuts):
 | Escape | Dismiss (via `onDismiss`) |
 | Ctrl+F | Focus the search field |
 | Ctrl+P | Toggle pin |
-| Delete (Ctrl+Delete also accepted) | Delete highlighted item |
+| Delete (Ctrl+Delete also accepted) | Delete highlighted item — only when the search box is empty; otherwise the key edits the search text (see `PickerWindow+Keyboard.swift`'s `isTypingInSearchField`) |
 | Ctrl+1 / 2 / 3 | Switch to History / Pinned / Snippets |
 
 ## Row actions and the right-click context menu
@@ -212,9 +212,9 @@ public final class SnippetEditorWindow: @unchecked Sendable {
 
 ## `SettingsWindow`
 
-The GTK4 counterpart of macOS's `SettingsView` — four tabs (General /
-History / Apps / Shortcuts) in a `GtkNotebook`, backed directly by
-`SettingsStore`.
+The GTK4 counterpart of macOS's `SettingsView` — five tabs (General /
+History / Apps / Shortcuts / Permissions) in a `GtkNotebook`, backed
+directly by `SettingsStore`.
 
 ```swift
 public final class SettingsWindow: @unchecked Sendable {
@@ -250,6 +250,35 @@ public final class SettingsWindow: @unchecked Sendable {
   (a bundle ID on macOS; whatever the platform layer's focused-app lookup
   reports on Linux, e.g. a `.desktop` file ID or WM class) — `SettingsStore`
   itself only stores/compares strings.
+- The Permissions tab (`SettingsWindow+Permissions.swift`, T-OPT3) is the
+  Linux analogue of macOS's Accessibility-grant Permissions tab. Linux has
+  no equivalent OS permission dialog to deep-link into; the analogue here is
+  the `clipnest-input` uinput grant that lets auto-paste synthesize a
+  keystroke into the focused app, instead of Clipnest only placing the item
+  on the clipboard for the user to paste manually (the default, normal
+  state without the grant — not an error). It shows two independent,
+  freshly-read booleans, never cached: whether `/dev/uinput` is accessible
+  to this process **right now**, and whether the user is currently listed
+  in the `clipnest-input` group in `/etc/group`. These can disagree —
+  `usermod -aG` (run by the grant helper) updates the group database
+  immediately, but Linux only resolves a process's supplementary groups at
+  login — and when they do, the tab shows an explicit note that a re-login
+  is required, rather than a single ambiguous "granted" flag. Clicking
+  "Grant Access…" runs `pkexec clipnest-grant-input`
+  (`packaging/linux/scripts/clipnest-grant-input`, gated by the
+  `app.clipnest.grant-input` polkit action), which adds the *authenticating*
+  user (never an argv-supplied one) to the dedicated `clipnest-input`
+  group — deliberately not the broader `input` group some similar tools
+  use, which also grants read access to every real keystroke and mouse
+  movement on the machine. Both the status read and the grant action are
+  injected into `SettingsWindow.init` as required, non-defaulted closures
+  (`uinputPermissionStatusProvider`/`requestUInputGrant`) resolved at the
+  composition root (`LinuxAppEnvironment.init`, `ClipnestLinuxAppKit`) by
+  `UInputPermissionChecker`/`GrantInputHelperClient` — `ClipnestGTK` cannot
+  import `ClipnestLinuxAppKit` (dependency runs the other way), the same
+  reason `launchAtLoginProvider`/`reinstallToggleHotkeyFloor` are injected.
+  The pure "what to show" decisions (`PermissionsTabPresentation`, same
+  file) are unit-tested directly, independent of any live GTK widget tree.
 
 ## Actor isolation
 

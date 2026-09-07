@@ -53,6 +53,25 @@ struct AppStatusNotifierProtocolTests {
     #expect(StatusNotifierRequest.decode(message) == .getProperty("Title"))
   }
 
+  @Test("Introspectable.Introspect decodes to .introspect(path:), not .unknown (T-WB2)")
+  func introspectDecodesWithPath() {
+    let message = call(
+      interface: "org.freedesktop.DBus.Introspectable", member: "Introspect")
+    #expect(StatusNotifierRequest.decode(message) == .introspect(path: "/StatusNotifierItem"))
+  }
+
+  @Test("Introspectable with an unrecognized member still decodes to .unknown, not .introspect")
+  func introspectableWithWrongMemberDecodesToUnknown() {
+    let message = call(interface: "org.freedesktop.DBus.Introspectable", member: "NotIntrospect")
+    #expect(StatusNotifierRequest.decode(message) == .unknown)
+  }
+
+  @Test("A completely unrecognized interface decodes to .unknown")
+  func unrecognizedInterfaceDecodesToUnknown() {
+    let message = call(interface: "com.example.NotARealInterface", member: "Whatever")
+    #expect(StatusNotifierRequest.decode(message) == .unknown)
+  }
+
   @Test("GetGroupProperties(ids, propertyNames) decodes both arrays")
   func getGroupPropertiesDecodesIdsAndPropertyNames() {
     let message = call(
@@ -138,6 +157,76 @@ struct AppStatusNotifierRepliesTests {
       return
     }
     #expect(entries.count == 6)
+  }
+
+  @Test("introspect(path:replyingTo:) replies with a METHOD_RETURN carrying the XML string")
+  func introspectRepliesWithMethodReturn() {
+    let request = call(interface: "org.freedesktop.DBus.Introspectable", member: "Introspect")
+    let reply = StatusNotifierReplies.introspect(
+      path: StatusNotifierItemName.objectPath, replyingTo: request)
+    #expect(reply.type == .methodReturn)
+    #expect(reply.replySerial == request.serial)
+    guard case .string(let xml)? = reply.body.first else {
+      Issue.record("expected Introspect's reply body to be a single string")
+      return
+    }
+    #expect(xml.contains(StatusNotifierItemName.interface))
+  }
+
+  @Test(
+    "unknownMethod(replyingTo:) replies with a real org.freedesktop.DBus.Error.UnknownMethod (T-WB2)"
+  )
+  func unknownMethodRepliesWithErrorType() {
+    let request = call(interface: "com.example.NotARealInterface", member: "NotARealMethod")
+    let reply = StatusNotifierReplies.unknownMethod(replyingTo: request)
+    #expect(reply.type == .error)
+    #expect(reply.errorName == "org.freedesktop.DBus.Error.UnknownMethod")
+    #expect(reply.replySerial == request.serial)
+  }
+}
+
+@Suite("StatusNotifierIntrospection")
+struct AppStatusNotifierIntrospectionTests {
+  @Test("xml(forPath:) for /StatusNotifierItem describes org.kde.StatusNotifierItem's contract")
+  func itemPathDescribesStatusNotifierItem() {
+    let xml = StatusNotifierIntrospection.xml(forPath: StatusNotifierItemName.objectPath)
+    #expect(xml.contains(StatusNotifierItemName.interface))
+    #expect(xml.contains(StatusNotifierItemMember.activate))
+    #expect(xml.contains(StatusNotifierItemMember.secondaryActivate))
+    #expect(xml.contains(StatusNotifierItemMember.contextMenu))
+    #expect(xml.contains(StatusNotifierItemProperty.iconName))
+    #expect(xml.contains(FreedesktopIntrospectableName.interface))
+    #expect(xml.contains(FreedesktopPropertiesName.interface))
+    #expect(xml.contains("<node>"))
+    // Must NOT describe the dbusmenu interface — the two exported objects'
+    // introspection must not be confused with each other.
+    #expect(!xml.contains(DBusMenuName.interface))
+  }
+
+  @Test("xml(forPath:) for the dbusmenu object path describes com.canonical.dbusmenu's contract")
+  func menuPathDescribesDBusMenu() {
+    let xml = StatusNotifierIntrospection.xml(forPath: DBusMenuName.objectPath)
+    #expect(xml.contains(DBusMenuName.interface))
+    #expect(xml.contains(DBusMenuMember.getLayout))
+    #expect(xml.contains(DBusMenuMember.getGroupProperties))
+    #expect(xml.contains(DBusMenuMember.aboutToShow))
+    #expect(xml.contains(DBusMenuMember.event))
+    #expect(xml.contains(FreedesktopIntrospectableName.interface))
+    // Must NOT describe the StatusNotifierItem interface.
+    #expect(!xml.contains(StatusNotifierItemName.interface))
+  }
+
+  @Test("xml(forPath:) for an unexported/unknown path still answers Introspectable, never empty")
+  func unknownPathStillAnswersIntrospectable() {
+    let xml = StatusNotifierIntrospection.xml(forPath: "/")
+    #expect(xml.contains(FreedesktopIntrospectableName.interface))
+    #expect(!xml.isEmpty)
+  }
+
+  @Test("xml(forPath:) for a nil path (no path header on the incoming call) still answers")
+  func nilPathStillAnswers() {
+    let xml = StatusNotifierIntrospection.xml(forPath: nil)
+    #expect(xml.contains(FreedesktopIntrospectableName.interface))
   }
 }
 

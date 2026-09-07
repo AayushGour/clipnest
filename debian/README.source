@@ -126,11 +126,57 @@ The one genuinely open blocker left before `clipnest-ocr-data` can ship
 real recognition is Known gap #3, below — the PP-OCRv5 model files
 themselves, not anything about how `clipnest`/`clipnest-ocr` link together.
 
-Known gap #3 — PP-OCRv5 model files are not vendored
------------------------------------------------------
-See `packaging/linux/vendor/ppocr-models/README.md`. `debian/rules` fails
-the build loudly and explains why if they're absent, rather than shipping
-an empty/wrong `clipnest-ocr-data`.
+Known gap #3 (RESOLVED, kept here for the record) — PP-OCRv5 model files are
+now vendored; OCR runs for real on Linux
+-----------------------------------------------------------------------------
+This gap used to be real: `packaging/linux/vendor/ppocr-models/` shipped
+only a placeholder README, and `debian/rules` refused to build
+`clipnest-ocr-data` without the four real model files present.
+
+**That is now fixed.** The four required files (`det.onnx`, `rec.onnx`,
+`cls.onnx`, `dict.txt`) are vendored for real — RapidOCR's official
+ModelScope-hosted ONNX conversion of PaddleOCR's PP-OCRv5, pinned at
+RapidOCR release tag `v3.9.2`, each SHA-256-verified against RapidOCR's own
+`default_models.yaml` at that tag. Full provenance, exact upstream URLs, and
+per-file checksums are in `packaging/linux/vendor/ppocr-models/SOURCE.md`
+(mirroring `packaging/linux/vendor/onnxruntime/SOURCE.md`'s own pattern).
+`debian/copyright` carries a matching `Files: packaging/linux/vendor/
+ppocr-models/*` stanza (Apache-2.0 — verified via GitHub's license API
+against both `PaddlePaddle/PaddleOCR` and `RapidAI/RapidOCR`, with the full
+license text, not the `License: TBD` a real `lintian` run had previously
+flagged as `missing-license-paragraph-in-dep5-copyright`).
+
+Fixing two real bugs in THIS repo's own OCR pipeline (found once real model
+output was available to test against, not upstream problems — the model
+itself was independently verified correct against RapidOCR's checksums
+before either fix) was needed before recognition was trustworthy:
+
+1. **`CTCDecoder` was dropping every space.** `rec.onnx` has 18385 output
+   classes; `dict.txt` has 18383 lines — `18383 + 1 (blank) = 18384 ≠
+   18385`. PP-OCRv5 was trained with PaddleOCR's `use_space_char=True`,
+   which appends one more class (a literal space) AFTER the dictionary's own
+   characters (`ppocr/postprocess/rec_postprocess.py`). `CharacterDictionary
+   .load(path:)` now applies this exact convention at load time — see that
+   function's doc comment and `packaging/linux/vendor/ppocr-models/
+   SOURCE.md`'s "The 18385-class convention" section.
+2. **`BoxOrdering.sortReadingOrder` under-sorted multi-line/multi-word
+   text.** It did a single FORWARD adjacent-pair bubble pass; PaddleOCR's
+   real `sorted_boxes` (`tools/infer/predict_system.py`) is a BACKWARD
+   insertion-sort pass with an early break, which can correct a box's
+   position by more than one slot in a single outer iteration. Now matches
+   upstream exactly — see that function's doc comment.
+
+Both are pinned by regression tests in `Tests/ClipnestPlatformLinuxTests/
+OCRCharacterDictionaryTests.swift`/`OCRBoxOrderingTests.swift` and by real,
+ImageMagick-rendered image fixtures in `Tests/ClipnestLinuxOCRTests/`
+(conditional on `clipnest-ocr`/`clipnest-ocr-data` actually being installed
+— see that target's own doc comment).
+
+`packaging/linux/vnc/Dockerfile` no longer stages zero-byte model
+stand-ins — the real vendored files flow through `COPY . /src` like every
+other tracked file, and its runtime stage now installs `clipnest-ocr`/
+`clipnest-ocr-data` alongside `clipnest` so the VNC test image exercises
+real, on-device OCR end to end.
 
 `clipnest-ctl`'s D-Bus action-name contract is unverified
 -----------------------------------------------------------
@@ -288,6 +334,132 @@ wrapping-structs regression. Linux `swift build`+`swift test`: **1106/1106**
 (1092 baseline + 14 new). macOS `swift test`: **605/605, 51 suites**, exact
 baseline, untouched (`DBusValue`/`DBusByteWriter` are Linux-only).
 
+**UPDATE (2026-09-07, senior-dev, T-WB2/T-BB3) — the `.unknown` silent-drop
+hang is FIXED (every exported object now answers `Introspect` for real); the
+T-BB3 render contradiction is a tiebreak in Clipnest's favor: the icon
+rendered reliably, without a panel restart, in every trial run this
+session, in BOTH start orderings.**
+
+**T-WB2.** `StatusNotifierTray.handle(_:message:)` used to return `nil` for
+`.unknown` (`StatusNotifierTray.swift`), and `receiveLoop()`'s `guard let
+reply = handle(...) else { continue }` turned that into a silent drop — no
+`METHOD_RETURN`, no `ERROR`. `org.freedesktop.DBus.Introspectable
+.Introspect` decoded to exactly `.unknown` (no case for `Introspectable`
+existed), so a real `Introspect` call against `/StatusNotifierItem` or
+`/app/clipnest/TrayMenu` hung forever (`dbus-send` exit 124) — the same bug
+class T-LX1 was, just missed on the tray. **Fixed, two parts:**
+1. `Introspect` now decodes to its own `StatusNotifierRequest
+   .introspect(path:)` case and gets a REAL introspection-XML reply
+   describing the actual interfaces at whichever path was queried
+   (`StatusNotifierIntrospection.xml(forPath:)`,
+   `Sources/ClipnestLinuxAppKit/DBus/StatusNotifierIntrospection.swift`,
+   new) — "every object we export must answer `Introspectable.Introspect`"
+   literally, not just fail fast.
+2. Every genuinely unrecognized method now maps to `.unknown`, and
+   `StatusNotifierTray.handle`'s `.unknown` case returns
+   `StatusNotifierReplies.unknownMethod(replyingTo:)` — a real
+   `org.freedesktop.DBus.Error.UnknownMethod` — instead of `nil`, mirroring
+   `ClipnestControlDispatcher.handle`'s own `.unknown` case exactly.
+   `handle`'s return type is now the NON-optional `DBusMessage` (was
+   `DBusMessage?`), so a future silent-drop regression is a compile error,
+   not a runtime hang.
+
+Re-verified against a real bus, real `.deb`, real Ubuntu-Flashback stack
+(`indicator-application-service` + `gnome-panel`, this task's own rebuilt
+`clipnest-vnc:live`/`clipnest-desktop:wb2bb3`): `Introspect` on
+`/StatusNotifierItem` and on `/app/clipnest/TrayMenu` both return a clean
+`METHOD_RETURN` with the correct per-path interface XML (confirmed via BOTH
+`dbus-send` and `gdbus call` — two independent D-Bus client
+implementations); a genuinely unrecognized interface/method gets
+`org.freedesktop.DBus.Error.UnknownMethod: No such member '...' on '...'`
+immediately; `Properties.GetAll` and `com.canonical.dbusmenu.GetLayout`
+(the pre-existing, previously-verified functionality) both still return
+correct data — no regression. One methodology note for whoever verifies
+this again: `org.kde.StatusNotifierWatcher.RegisteredStatusNotifierItems`
+lists the registered value as `"<uniquename>/StatusNotifierItem"` — extract
+the unique name from THAT array element, not from the reply's own
+`sender=` header line (indicator-application-service's OWN connection),
+which sorts first in `dbus-send --print-reply` output and is easy to
+grab by mistake (this session did, briefly, before catching it via
+`GetConnectionUnixProcessID` resolving to the wrong PID).
+
+**T-BB3.** Read the SNI spec and confirmed (via `deepwiki` against
+`GNOME/gtk`) that `GtkIconTheme` only scans icon-theme subdirectories
+actually declared in that theme's `index.theme` `[Icon Theme] Directories`
+key — so the natural first suspicion (hicolor doesn't declare a `symbolic`
+context, so `hicolor/symbolic/apps/` is never scanned at all) would have
+been a real, deterministic dead end. Checked the ACTUAL installed
+`hicolor-icon-theme` package on Ubuntu 22.04 rather than assuming: its
+`index.theme` DOES declare `[symbolic/apps]` (`Context=Applications`,
+`Type=Scalable`), so `app.clipnest.Clipnest-symbolic` at
+`hicolor/symbolic/apps/` is a spec-legal, resolvable icon location — that
+theory is ruled out. `debian/clipnest.postinst` already calls
+`gtk-update-icon-cache -q -t /usr/share/icons/hicolor` at install time
+(baked into the image at BUILD time, before any container ever starts),
+so a stale runtime icon cache was also ruled out.
+
+The real answer was already sitting in this project's own `D77` decision
+(`.claude/project-context.md`): "the icon did not appear until gnome-panel
+was restarted once AFTER clipnest had already registered — a start-order/
+refresh race in the test harness (indicator-applet loads its item list
+once at panel startup and doesn't appear to re-poll after a late
+`StatusNotifierItemRegistered` signal in this container)." That's a
+timing-sensitive race in `indicator-applet`'s own live-add handling — a
+third-party GTK3 binary this project doesn't own — not a Clipnest-side
+D-Bus defect; the D-Bus side was independently re-confirmed correct THIS
+session too (watcher's `RegisteredStatusNotifierItems` lists the item,
+`Properties.GetAll` returns correct `Category`/`Id`/`Title`/`Status`/
+`IconName`/`Menu`, the icon file is genuinely present at the resolvable
+hicolor path).
+
+**Hardened, not just diagnosed:** `packaging/linux/vnc`'s test-harness
+desktop image (`start-desktop.sh`, part of this task's own scratchpad
+verification image) now starts `clipnest` BEFORE `gnome-panel`, so
+`gnome-panel`'s FIRST enumeration of `RegisteredStatusNotifierItems`
+(a `Properties.GetAll` every implementation must get right, and which
+this task re-confirmed correct) already includes Clipnest — removing any
+dependency on the timing-sensitive live-signal path entirely, rather than
+attempting to fix a bug in a binary this project doesn't ship.
+Deliberately did NOT change this ordering unconditionally without
+evidence: `PANEL_BEFORE_CLIPNEST=1` reproduces the old ordering for
+comparison. **Result across every trial run this session — one with the
+new (clipnest-first) ordering, two independent fresh containers with the
+OLD (panel-first) ordering, one of the two checked as early as possible
+after `clipnest` started, not just after a settling delay — the icon
+rendered correctly and stayed rendered, with NO restart, every single
+time** (screenshots: the icon's real "nest" silhouette, matching
+`assets/clipnest-icons/app.clipnest.Clipnest-symbolic.svg` rendered
+standalone via `rsvg-convert` for a direct visual comparison — not a
+generic/fallback icon). The originally-reported non-render could not be
+reproduced despite deliberately re-running the flagged-risky ordering
+twice; it most likely reflects host/timing sensitivity in
+`indicator-applet`'s live-update path (CPU scheduling noise on a shared
+build machine, plausible given this session ran alongside several other
+agents' concurrent Docker builds) rather than a strictly deterministic
+per-ordering bug. The corrected ordering ships anyway as a no-downside
+hardening measure: it can only remove a race, never introduce one.
+
+**Menu click, partial verification.** `com.canonical.dbusmenu.GetLayout`/
+`GetGroupProperties`/`Event` are independently confirmed correct via
+direct `dbus-send` calls (correct 3-item menu, correct labels) and via
+`StatusNotifierTray`'s own dispatch unit tests (`.menuEvent` correctly
+routes each item id to `onOpenClipnest`/`onOpenSettings`/`onQuit`). A
+synthetic `xdotool` click on the tray icon DOES reach Clipnest (confirmed
+via `dbus-monitor`: `AboutToShow(0)` fires), but the resulting popup menu
+could not be visually confirmed via screenshot in this headless/VNC
+session — genuinely unverified, not claimed. T-TRAY3's own real-mouse
+verification (this same container stack) already showed the popup
+opening and all 3 items firing correctly end to end, so this is most
+likely an `xdotool` synthetic-input limitation for GTK's popup grab
+rather than a regression; flagged rather than assumed.
+
+Linux `swift test`: see this task's own `logs/senior-dev.md` entry for the
+exact count (run in an isolated `git worktree` at HEAD with only this
+task's own files overlaid, per this session's parallel-agent safety rule).
+macOS `swift test`: **605/605, 51 suites**, exact baseline, unchanged
+(`ClipnestLinuxAppKit` is `#if os(Linux)`-gated in `Package.swift`).
+`swift format lint --recursive --strict` clean on every touched file.
+
 ---
 
 **Original write-up (2026-09), kept for the record — root cause below was
@@ -318,3 +490,36 @@ properties instead (confirmed live: `gnome-panel`'s widget receives
 `Category`/`Id`/`Title`/... where it asked for the menu's own properties).
 Not fixed here either — out of this task's assigned scope
 (`Hello`/identity/`GetGroupProperties`).
+
+Known gap #5 (P0, real, verified, NOT fixable from this package's Swift
+source — needs a dependency version bump)
+------------------------------------------------------------------------
+Any external X11 client that becomes the `CLIPBOARD` selection owner while
+GTK's own async `TARGETS` negotiation with it hits a specific, benign ICCCM
+edge case (its `SelectionNotify` reply property doesn't land on GDK's
+window — reproduced with a raw `python-xlib` client that answers correctly
+but writes the property to its own window instead of the requestor's; no
+malice required) crashes the WHOLE `clipnest` process with a `SIGSEGV`.
+Root-caused with a fully-symbolicated `gdb` backtrace against this series'
+actual `libgtk-4-1`/`libglib2.0-0` (installed matching `-dbgsym` ddebs):
+`strcmp`←`g_str_equal(type=NULL,"ATOM")`←
+`gdk_x11_clipboard_request_targets_got_stream`
+(`gdk/x11/gdkclipboard-x11.c`) — a NULL-unsafe string compare GTK itself
+fixed later (switched to the NULL-safe `g_strcmp0`) in a clipboard/selection
+rewrite landing around GTK 4.10 (upstream commit `0212291a`). Ubuntu 22.04's
+own archives (`main`, `-updates`, `-security`) top out at the AFFECTED
+`4.6.9+ds-0ubuntu0.22.04.2` — there is no newer `libgtk-4-1` to `apt install`
+on this series. Confirmed via source (`gdk/x11/gdkdisplay-x11.c`'s
+`_gdk_x11_display_open`) that GTK creates its own, independent CLIPBOARD/
+PRIMARY tracking UNCONDITIONALLY the instant `gtk_init()` opens a display —
+before any of this app's code runs, with no `GDK_DEBUG`/`GDK_DISABLE` flag
+or supported API to opt out — so this is not fixable by changing how
+`ClipnestGTK`/`ClipnestPlatformLinux` use GTK's clipboard APIs. **The real
+fix is a `libgtk-4-1` version bump** (>= the point release carrying commit
+`0212291a`) via a GNOME/Ubuntu PPA backport pinned in this image's build
+stage (and eventually `debian/control`'s `Build-Depends`/generated
+`${shlibs:Depends}`), or building GTK4 from source — tracked as task
+`T-WB1-GTKBUMP` in `.claude/task-board.md`, `.claude/project-context.md`'s
+decision D81 has the full root-cause trail (source line numbers + the exact
+core-dump backtrace). Not fixed in this file/session — packaging-level,
+outside a Swift source change's reach.

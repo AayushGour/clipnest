@@ -48,6 +48,20 @@ public final class SettingsWindow: @unchecked Sendable {
   let clipStore: any ClipStore
   let ocrBackfillViewModel: OCRBackfillViewModel
 
+  /// Whether this machine can actually perform on-device OCR right now
+  /// (`OnnxTextRecognizer.isAvailable` — `ClipnestLinuxOCR`'s `dlopen`
+  /// check for `libonnxruntime.so.1` plus the PP-OCRv5 models actually
+  /// being installed). `ClipnestGTK` sits BELOW `ClipnestLinuxOCR` in the
+  /// dependency graph (same constraint `launchAtLoginProvider`/
+  /// `reinstallToggleHotkeyFloor` below already document), so this is a
+  /// plain `Bool` resolved once at the composition root
+  /// (`LinuxAppEnvironment.init`), not a live import. `buildHistoryTab()`
+  /// gates the "Recognize text in copied images" toggle and Fast/Accurate
+  /// quality picker on this — `clipnest` only `Recommends` `clipnest-ocr`,
+  /// so a `--no-install-recommends` install must never show controls that
+  /// would silently no-op.
+  let isTextRecognitionAvailable: Bool
+
   /// P10-A: `AutostartDesktopFile` (`ClipnestLinuxAppKit`) is unreachable
   /// from this module — see this file's top doc comment's link note, and
   /// `LinuxAppEnvironment.init`'s own doc comment at its call site. Two
@@ -73,6 +87,29 @@ public final class SettingsWindow: @unchecked Sendable {
   /// invisible precisely because the default made the call site compile.
   /// A required parameter turns the same mistake into a build error.
   let reinstallToggleHotkeyFloor: (_ accelerator: String) -> Void
+
+  /// T-OPT3: reads the CURRENT, real uinput auto-paste grant state (see
+  /// `UInputPermissionStatus`'s doc comment for why it's two independent
+  /// booleans) — called at tab-build time and again every `show()`, never
+  /// cached across those calls, so a grant that only took effect after a
+  /// re-login is reflected the next time the user opens Settings.
+  ///
+  /// Injected across the `ClipnestGTK` -> `ClipnestLinuxAppKit` module
+  /// boundary, same reasoning as `reinstallToggleHotkeyFloor` above — the
+  /// real implementation (`UInputPermissionChecker`, `ClipnestLinuxAppKit`)
+  /// does real, side-effect-free `access(2)`/`getgrnam(3)` syscalls this
+  /// module cannot reach directly. Deliberately NOT given a default value —
+  /// see `reinstallToggleHotkeyFloor`'s doc comment for why a defaulted seam
+  /// is a build-time-invisible way to ship a dead feature.
+  let uinputPermissionStatusProvider: () -> UInputPermissionStatus
+
+  /// T-OPT3: invokes `pkexec clipnest-grant-input` (see
+  /// `GrantInputHelperClient`, `ClipnestLinuxAppKit`) and reports the
+  /// outcome via `completion`. `completion` may be called on ANY thread —
+  /// `SettingsWindow+Permissions.swift`'s call site hops back to the GTK
+  /// thread itself before touching any widget. Also deliberately not
+  /// defaulted, same reasoning as `uinputPermissionStatusProvider` above.
+  let requestUInputGrant: (_ completion: @escaping @Sendable (UInputGrantOutcome) -> Void) -> Void
 
   let window: OpaquePointer
   let notebook: OpaquePointer
@@ -108,22 +145,39 @@ public final class SettingsWindow: @unchecked Sendable {
   /// mirroring `UpdateChecker`'s own steady-state timer.
   var ocrPollSourceID: UInt32?
 
+  /// Permissions tab (`SettingsWindow+Permissions.swift`, T-OPT3) — every
+  /// widget `refreshPermissionsStatus()`/`requestUInputGrantFromUI()` need
+  /// to update. All `nil` until `buildPermissionsTab()` runs (during
+  /// `init`), same contract as every other tab's widget refs above.
+  var permissionsUInputStatusLabel: OpaquePointer?
+  var permissionsGroupStatusLabel: OpaquePointer?
+  var permissionsReloginNoteLabel: OpaquePointer?
+  var permissionsResultLabel: OpaquePointer?
+  var permissionsGrantButton: OpaquePointer?
+
   public init(
     settings: SettingsStore,
     updateChecker: UpdateChecker,
     clipStore: any ClipStore,
     ocrBackfillViewModel: OCRBackfillViewModel,
+    isTextRecognitionAvailable: Bool,
     launchAtLoginProvider: @escaping () -> Bool,
     setLaunchAtLogin: @escaping (Bool) throws -> Void,
-    reinstallToggleHotkeyFloor: @escaping (_ accelerator: String) -> Void
+    reinstallToggleHotkeyFloor: @escaping (_ accelerator: String) -> Void,
+    uinputPermissionStatusProvider: @escaping () -> UInputPermissionStatus,
+    requestUInputGrant: @escaping (_ completion: @escaping @Sendable (UInputGrantOutcome) -> Void)
+      -> Void
   ) {
     self.settings = settings
     self.updateChecker = updateChecker
     self.clipStore = clipStore
     self.ocrBackfillViewModel = ocrBackfillViewModel
+    self.isTextRecognitionAvailable = isTextRecognitionAvailable
     self.launchAtLoginProvider = launchAtLoginProvider
     self.setLaunchAtLogin = setLaunchAtLogin
     self.reinstallToggleHotkeyFloor = reinstallToggleHotkeyFloor
+    self.uinputPermissionStatusProvider = uinputPermissionStatusProvider
+    self.requestUInputGrant = requestUInputGrant
     window = gtk_window_new()
     notebook = gtk_notebook_new()
 
@@ -141,11 +195,20 @@ public final class SettingsWindow: @unchecked Sendable {
       buildHistoryTab()
       buildAppsTab()
       buildShortcutsTab()
+      buildPermissionsTab()
       startOCRBackfillPolling()
     }
   }
 
   public func show() {
+    // T-OPT3: re-reads the real uinput grant state every time Settings is
+    // opened — see `refreshPermissionsStatus()`'s doc comment for why this,
+    // rather than a continuous poll, is the right cadence for state that
+    // only ever changes at login time or via this same window's own Grant
+    // button.
+    MainActor.assumeIsolated {
+      refreshPermissionsStatus()
+    }
     gtk_widget_set_visible(window, 1)
     gtk_window_present(window)
   }

@@ -34,7 +34,7 @@ public enum AutostartDesktopFile {
     Name=Clipnest
     Comment=Clipboard history manager
     Exec=\(executablePath)
-    Icon=edit-paste-symbolic
+    Icon=\(StatusNotifierItemValue.iconName)
     Terminal=false
     NoDisplay=true
     X-GNOME-Autostart-enabled=true

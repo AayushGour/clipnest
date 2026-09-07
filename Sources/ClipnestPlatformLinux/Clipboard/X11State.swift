@@ -155,6 +155,26 @@ final class X11State: @unchecked Sendable {
     }
     defer { _ = XFree(propertyData) }
 
+    // `XGetWindowProperty` is documented to return `Success` (not an
+    // error `status`) even when `propertyAtom` does not exist at all on
+    // `window` — it signals that via `actualType == None` (`Self.zero`),
+    // not via `status`. Every caller here relies on `nil` meaning
+    // "nothing to read" (a claimed-successful ICCCM selection conversion
+    // whose reply property was never actually written — see this
+    // codebase's P0 clipnest-crash investigation, where GTK4's OWN
+    // GdkX11Clipboard hits exactly this "property claims to exist but
+    // doesn't" case and, lacking this same guard, dereferences a NULL
+    // atom name in `g_str_equal` — a genuine, upstream GTK 4.6.x bug,
+    // fixed later by switching to the NULL-safe `g_strcmp0`, that lives
+    // entirely inside `libgtk-4.so`/`libgio-2.0.so` and cannot be patched
+    // from this module; see `X11ClipboardConnection`'s doc comment).
+    // Folding this into the `guard` above would be wrong: a real,
+    // *present* property legitimately reports zero items (format 8/16/32
+    // is irrelevant, `actualType` is never `None` for it) — ICCCM
+    // 2.7.2's zero-length INCR terminator is exactly that case, and must
+    // still resolve to a present-but-empty `RawX11Property`, not `nil`.
+    guard actualType != Self.zero else { return nil }
+
     guard itemCount > 0 else {
       return RawX11Property(type: actualType, format: actualFormat, bytes: [])
     }

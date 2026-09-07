@@ -54,28 +54,45 @@ extension SettingsWindow {
       }
     }
 
-    addCheckButton(
-      to: box, label: "Recognize text in copied images",
-      initialValue: settings.isTextRecognitionEnabled
-    ) { [settings] isEnabled in
-      MainActor.assumeIsolated {
-        settings.isTextRecognitionEnabled = isEnabled
+    // T-OCR (honesty fix): `clipnest` only Recommends `clipnest-ocr` (see
+    // that package's description in debian/control), so a
+    // `--no-install-recommends` install genuinely has neither the vendored
+    // ONNX Runtime nor the PP-OCRv5 models. Showing the toggle and quality
+    // picker anyway would let a user "enable" OCR that silently never
+    // recognizes anything — `isTextRecognitionAvailable` (resolved once at
+    // the composition root via `OnnxTextRecognizer.isAvailable`) gates
+    // both controls truthfully. Mirrors this same window's own established
+    // idiom for "don't show a control that would only ever no-op" (see
+    // `pollOCRBackfillTick()`'s pending-count-0 case below).
+    if isTextRecognitionAvailable {
+      addCheckButton(
+        to: box, label: "Recognize text in copied images",
+        initialValue: settings.isTextRecognitionEnabled
+      ) { [settings] isEnabled in
+        MainActor.assumeIsolated {
+          settings.isTextRecognitionEnabled = isEnabled
+        }
       }
-    }
 
-    addRadioGroup(
-      to: box,
-      options: TextRecognitionQuality.allCases.map { quality in
-        (
-          label: textRecognitionQualityLabel(quality),
-          isInitiallyActive: quality == settings.textRecognitionQuality
-        )
+      addRadioGroup(
+        to: box,
+        options: TextRecognitionQuality.allCases.map { quality in
+          (
+            label: textRecognitionQualityLabel(quality),
+            isInitiallyActive: quality == settings.textRecognitionQuality
+          )
+        }
+      ) { [settings] selectedIndex in
+        let quality = TextRecognitionQuality.allCases[selectedIndex]
+        MainActor.assumeIsolated {
+          settings.textRecognitionQuality = quality
+        }
       }
-    ) { [settings] selectedIndex in
-      let quality = TextRecognitionQuality.allCases[selectedIndex]
-      MainActor.assumeIsolated {
-        settings.textRecognitionQuality = quality
-      }
+    } else {
+      let unavailableLabel = addStatusLabel(to: box)
+      setStatusLabel(
+        unavailableLabel,
+        text: "Install clipnest-ocr to recognize text in copied images.")
     }
 
     buildOCRBackfillRow(in: box)

@@ -98,6 +98,27 @@ public enum LinuxAppLifecycle {
   /// the tray's Quit item) — matches every other GTK application's
   /// `main()`.
   public static func run(arguments: [String]) {
+    let commandArguments = Array(arguments.dropFirst())
+    let earlyCommand = LinuxAppCLI.parse(commandArguments)
+
+    // T-BB2 fix (black-box test, Ubuntu 22.04): `--version`/`--help` MUST
+    // be handled before any single-instance/bus logic and before GTK even
+    // initializes — print to stdout and exit(0), never launch a window,
+    // never forward to a running instance. Previously neither flag was
+    // recognized at all: with no instance running they fell through to a
+    // full resident GUI launch (the tester had to `timeout`-kill it, exit
+    // 124); with one running they silently forwarded and printed nothing.
+    switch earlyCommand {
+    case .version:
+      print(LinuxAppEnvironment.installedVersion)
+      exit(0)
+    case .help:
+      print(LinuxAppCLI.usageText)
+      exit(0)
+    case .togglePicker, .expandSnippet, .none:
+      break
+    }
+
     ClipnestGTKApplication.initializeGTK(
       programName: ClipnestControlName.programName,
       displayName: ClipnestControlName.displayName)
@@ -115,19 +136,18 @@ public enum LinuxAppLifecycle {
 
     if decision == .forwardToRunningInstance {
       if let instanceConnection {
-        SingleInstance.forwardArguments(Array(arguments.dropFirst()), on: instanceConnection)
+        SingleInstance.forwardArguments(commandArguments, on: instanceConnection)
       }
       logger.info("another Clipnest instance owns the bus name — forwarded argv and exiting")
       exit(0)
     }
 
     let controlConnection = decision == .becomePrimary ? instanceConnection : nil
-    let initialCommand = LinuxAppCLI.parse(Array(arguments.dropFirst()))
 
     Task {
       await launch(
         sessionBusAddress: sessionBusAddress, controlConnection: controlConnection,
-        initialCommand: initialCommand)
+        initialCommand: earlyCommand)
     }
 
     ClipnestGTKApplication.runMainLoop()
@@ -156,7 +176,11 @@ public enum LinuxAppLifecycle {
     switch initialCommand {
     case .togglePicker: environment.togglePicker()
     case .expandSnippet: environment.expandSnippet()
-    case .none: break
+    // Unreachable in practice: `run(arguments:)`'s early-exit guard above
+    // handles `.version`/`.help` and `exit(0)`s before this async `launch`
+    // is ever scheduled (see T-BB2's doc comment there). Kept here only
+    // because `LinuxAppCLICommand`'s switch must stay exhaustive.
+    case .version, .help, .none: break
     }
 
     guard let controlConnection, let sessionBusAddress else {

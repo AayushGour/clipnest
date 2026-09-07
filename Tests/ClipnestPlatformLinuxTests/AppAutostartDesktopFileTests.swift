@@ -13,6 +13,18 @@ struct AppAutostartDesktopFileTests {
     #expect(content.contains("X-GNOME-Autostart-enabled=true"))
   }
 
+  // T-BB6 regression: this used to hardcode the generic stock
+  // `edit-paste-symbolic` icon instead of the branded symbolic icon this
+  // app now ships and already uses for its tray item
+  // (`StatusNotifierItemValue.iconName`) — pins the fix so the two can't
+  // silently drift apart again.
+  @Test("content() uses the branded symbolic icon, matching the tray's own icon name")
+  func contentUsesBrandedIcon() {
+    let content = AutostartDesktopFile.content(executablePath: "/usr/bin/clipnest")
+    #expect(content.contains("Icon=\(StatusNotifierItemValue.iconName)"))
+    #expect(!content.contains("edit-paste-symbolic"))
+  }
+
   @Test("fileURL honors XDG_CONFIG_HOME when set")
   func fileURLHonorsOverride() {
     let fileManager = FileManager.default

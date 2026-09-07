@@ -97,7 +97,13 @@ final class LinuxAppEnvironment {
   /// `@MainActor`, so an un-annotated `static let` here would be isolated
   /// too). Safe unconditionally: an immutable `String` literal has no
   /// actor-affinity to protect in the first place.
-  private nonisolated static let installedVersion = "0.9.1"
+  ///
+  /// Module-visible (not `private`), not `public`: `LinuxAppLifecycle.run
+  /// (arguments:)`'s `--version` handling (T-BB2 fix) is this constant's
+  /// second reader, in `ClipnestLinuxAppKit` alongside this file — the
+  /// existing source of truth, so `--version` never grows a second
+  /// hardcoded copy of the version string.
+  nonisolated static let installedVersion = "0.9.1"
 
   /// Resolves this process's own absolute executable path for
   /// `AutostartDesktopFile.setEnabled(_:executablePath:)`'s `.desktop`
@@ -379,6 +385,15 @@ final class LinuxAppEnvironment {
       updateChecker: updateChecker,
       clipStore: clipStore,
       ocrBackfillViewModel: ocrBackfillViewModel,
+      // T-OCR9/T-OCR10 (this task): resolved ONCE here at the composition
+      // root, not re-checked on every Settings open — `clipnest-ocr`/
+      // `clipnest-ocr-data` are only ever installed or removed by a
+      // package manager action outside this process's own lifetime, so a
+      // launch-time snapshot is correct (same reasoning `eventSynthesizerKind`
+      // above already applies to a different one-shot machine-capability
+      // check). See `SettingsWindow.isTextRecognitionAvailable`'s doc
+      // comment for what this gates.
+      isTextRecognitionAvailable: OnnxTextRecognizer.isAvailable,
       launchAtLoginProvider: { AutostartDesktopFile.isEnabled() },
       setLaunchAtLogin: { enabled in
         try AutostartDesktopFile.setEnabled(enabled, executablePath: resolvedExecutablePath)
@@ -389,6 +404,18 @@ final class LinuxAppEnvironment {
       // files, not this one's; only this call site's new argument is mine.
       reinstallToggleHotkeyFloor: { accelerator in
         ToggleHotkeyFloorBinding.reinstallFloor(withAccelerator: accelerator)
+      },
+      // T-OPT3: the uinput auto-paste grant seam — `UInputPermissionChecker`/
+      // `GrantInputHelperClient` (this module, new files) are the real,
+      // side-effect-having implementations `SettingsWindow+Permissions.swift`
+      // (`ClipnestGTK`) cannot reach directly. No default value on either
+      // parameter (see `SettingsWindow.uinputPermissionStatusProvider`'s doc
+      // comment) — both are required here.
+      uinputPermissionStatusProvider: {
+        UInputPermissionChecker.currentStatus()
+      },
+      requestUInputGrant: { completion in
+        GrantInputHelperClient.requestGrant(completion: completion)
       })
 
     monitor.onCapture = { [weak self, weak viewModel] _ in

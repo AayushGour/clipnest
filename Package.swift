@@ -129,5 +129,21 @@ let package = Package(
         "ClipnestPlatformLinux", "ClipnestLinuxOCR", "ClipnestGTK",
         "ClipnestLinuxAppKit", "ClipnestCore",
       ]),
+    // T-OCR9/T-OCR10: a SEPARATE test target from `ClipnestPlatformLinuxTests`
+    // (which already carries every fast, synthetic-input OCR*Tests.swift —
+    // CTCDecoder, CharacterDictionary, BoxOrdering, BoxScaling, etc.) for a
+    // different kind of test: real, ImageMagick-rendered PNG fixtures run
+    // through the REAL vendored ONNX Runtime + PP-OCRv5 models (mirroring
+    // `OCREndToEndRealModelTests`'s existing "real model, graceful skip
+    // outside a fully-provisioned container" shape, but generating its own
+    // fixtures at test time via `convert` rather than one embedded base64
+    // image). Kept separate rather than folded into
+    // `ClipnestPlatformLinuxTests` because it shells out to an external
+    // process (`convert`) — an environment dependency none of that target's
+    // existing tests have — and because this is this task's own named,
+    // dedicated home for it.
+    .testTarget(
+      name: "ClipnestLinuxOCRTests",
+      dependencies: ["ClipnestLinuxOCR", "ClipnestCore"]),
   ]
 #endif

@@ -176,15 +176,22 @@ public final class StatusNotifierTray: @unchecked Sendable {
 
       guard let message = ownConnection.receiveOneMessage(timeout: .seconds(1)) else { continue }
       guard let request = StatusNotifierRequest.decode(message) else { continue }
-      guard let reply = handle(request, message: message) else { continue }
-      var outgoing = reply
+      var outgoing = handle(request, message: message)
       outgoing.serial = ownConnection.allocateSerial()
       ownConnection.send(outgoing)
     }
   }
 
-  func handle(_ request: StatusNotifierRequest, message: DBusMessage) -> DBusMessage? {
+  /// **Always produces a reply — never `nil`.** Returning `DBusMessage?`
+  /// used to let the `.unknown` branch silently drop a call
+  /// (`receiveLoop()`'s old `guard let reply = handle(...) else {
+  /// continue }`); making the return type non-optional makes that class of
+  /// regression a compile error instead of a runtime hang (T-WB2 — see
+  /// `.unknown`'s own doc comment below for the real repro this fixes).
+  func handle(_ request: StatusNotifierRequest, message: DBusMessage) -> DBusMessage {
     switch request {
+    case .introspect(let path):
+      return StatusNotifierReplies.introspect(path: path, replyingTo: message)
     case .activate:
       onOpenClipnest()
       return StatusNotifierReplies.empty(replyingTo: message)
@@ -214,7 +221,19 @@ public final class StatusNotifierTray: @unchecked Sendable {
       }
       return StatusNotifierReplies.empty(replyingTo: message)
     case .unknown:
-      return nil
+      // T-WB2 FIX: this used to return `nil`, which `receiveLoop()`'s
+      // `guard let reply = handle(...) else { continue }` turned into a
+      // silent drop — no reply, no error, indistinguishable from a hung
+      // process to the caller. `org.freedesktop.DBus.Introspectable
+      // .Introspect` decoded to exactly this case (it matched none of
+      // `StatusNotifierRequest.decode`'s interface cases before
+      // `.introspect` existed) and reproducibly hung a real `dbus-send`
+      // against this object's real running process — see
+      // `AppStatusNotifierTrayDispatchTests.swift`'s regression pin. Every
+      // genuinely unrecognized method now gets a proper
+      // `UnknownMethod` error instead, mirroring
+      // `ClipnestControlDispatcher.handle`'s own `.unknown` case exactly.
+      return StatusNotifierReplies.unknownMethod(replyingTo: message)
     }
   }
 }

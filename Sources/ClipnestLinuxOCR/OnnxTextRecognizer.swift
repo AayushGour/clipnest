@@ -36,6 +36,26 @@ public struct OnnxTextRecognizer: TextRecognizing {
   /// existing ceilings."
   public static let maxPixelDimension = 20_000
 
+  /// True when this machine can actually perform on-device OCR right now:
+  /// `libonnxruntime.so.1` resolves via `dlopen` (`OrtRuntimeAvailability
+  /// .isAvailable`) AND the PP-OCRv5 model files are installed at
+  /// `StandardOCRModelLocator`'s expected path. `clipnest` only
+  /// `Recommends` `clipnest-ocr` (see that package's description in
+  /// `debian/control`), so a `--no-install-recommends` install genuinely
+  /// lacks both. Settings surfaces this truthfully — see
+  /// `SettingsWindow+History.swift`'s gating on this property — rather
+  /// than showing a "Recognize text in copied images" toggle and Fast/
+  /// Accurate quality picker that would silently no-op. Not injected via
+  /// `modelLocator`/`capacityProber` above: those exist to make
+  /// `recognizeText`'s BEHAVIOR testable without a real filesystem; this
+  /// is a one-shot, whole-machine capability check the composition root
+  /// reads once at launch, mirroring how `OrtRuntimeAvailability
+  /// .isAvailable` itself is a bare static check, not an injectable
+  /// dependency.
+  public static var isAvailable: Bool {
+    OrtRuntimeAvailability.isAvailable && StandardOCRModelLocator().locate() != nil
+  }
+
   private let modelLocator: OCRModelLocating
   private let capacityProber: MachineCapacityProbing
   private let tierOverride: OCRTierOverride

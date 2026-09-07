@@ -138,86 +138,129 @@ import Testing
     }
   }
 
-  /// **Regression pin for a real defect found testing `StatusNotifierTray`
-  /// against a real Ubuntu 22.04 `dbus-daemon`
-  /// (`packaging/linux/vnc/Dockerfile`).** `StatusNotifierTray.handle(_:
-  /// message:)` returns `nil` for `.unknown` (`StatusNotifierTray.swift`),
-  /// and `receiveLoop()`'s `guard let reply = handle(...) else { continue
-  /// }` means a `nil` reply is a SILENT DROP — no `METHOD_RETURN`, no
-  /// `ERROR`, nothing sent back at all. That is a D-Bus Specification
-  /// violation ("all Method Calls should have their reply sent back to
-  /// the caller ... unless the NO_REPLY_EXPECTED flag is set") and it is
-  /// not hypothetical: `org.freedesktop.DBus.Introspectable.Introspect`
-  /// decodes to `.unknown` (it matches none of `StatusNotifierRequest
-  /// .decode`'s interface cases), and calling it against a REAL running
-  /// `clipnest` binary in the Ubuntu 22.04 container reproducibly hangs
-  /// (`dbus-send --print-reply ... Introspect` times out — verified twice,
-  /// on both `/StatusNotifierItem` and `/app/clipnest/TrayMenu`) — while
-  /// the SAME call against `ClipnestControlService`'s object
-  /// (`/app/clipnest/Clipnest`) correctly returns `org.freedesktop.DBus
+  /// **T-WB2 — FIXED, regression-pinned.** `StatusNotifierTray.handle(_:
+  /// message:)` used to return `nil` for `.unknown` (`StatusNotifierTray
+  /// .swift`), and `receiveLoop()`'s `guard let reply = handle(...) else {
+  /// continue }` turned a `nil` reply into a SILENT DROP — no
+  /// `METHOD_RETURN`, no `ERROR`, nothing sent back at all. That was a
+  /// D-Bus Specification violation ("all Method Calls should have their
+  /// reply sent back to the caller ... unless the NO_REPLY_EXPECTED flag is
+  /// set") and it was not hypothetical:
+  /// `org.freedesktop.DBus.Introspectable.Introspect` used to decode to
+  /// `.unknown` (it matched none of `StatusNotifierRequest.decode`'s
+  /// interface cases), and calling it against a REAL running `clipnest`
+  /// binary in the Ubuntu 22.04 container reproducibly hung (`dbus-send
+  /// --print-reply ... Introspect` timed out — verified twice, on both
+  /// `/StatusNotifierItem` and `/app/clipnest/TrayMenu`) — while the SAME
+  /// call against `ClipnestControlService`'s object
+  /// (`/app/clipnest/Clipnest`) correctly returned `org.freedesktop.DBus
   /// .Error.UnknownMethod` immediately, because `ClipnestControlService
   /// .handle`'s own `.unknown` case returns `ClipnestControlReplies
   /// .unknownMethod(replyingTo:)` instead of `nil`
-  /// (`ClipnestControlService.swift`). Any D-Bus client/tool that
-  /// introspects before calling — `gdbus call`'s default behavior, GUI
-  /// bus browsers like `d-feet`, and some real tray-host implementations
-  /// — hangs on `StatusNotifierTray`'s object paths for exactly this
-  /// reason. `swift test`'s prior coverage never caught this because
-  /// nothing in this suite (`AppStatusNotifierProtocolTests`) ever
-  /// constructs a `StatusNotifierTray` and calls `.handle(_:message:)` —
-  /// every existing test there only exercises the pure
-  /// `StatusNotifierRequest.decode`/`DBusMenuLayoutBuilder`/
-  /// `StatusNotifierReplies` layer, never the dispatcher this bug lives
-  /// in.
+  /// (`ClipnestControlProtocol.swift`). Any D-Bus client/tool that
+  /// introspects before calling — `gdbus call`'s default behavior, GUI bus
+  /// browsers like `d-feet`, and some real tray-host implementations —
+  /// hung on `StatusNotifierTray`'s object paths for exactly this reason.
+  /// `swift test`'s prior coverage never caught this because nothing in
+  /// `AppStatusNotifierProtocolTests` ever constructs a `StatusNotifierTray`
+  /// and calls `.handle(_:message:)` — every existing test there only
+  /// exercises the pure `StatusNotifierRequest.decode`/
+  /// `DBusMenuLayoutBuilder`/`StatusNotifierReplies` layer, never the
+  /// dispatcher this bug lived in.
   ///
-  /// **This test is EXPECTED TO FAIL until fixed.** It pins the correct,
-  /// spec-required behavior (some reply — an error is the appropriate
-  /// shape, mirroring `ClipnestControlService`'s own `.unknown` handling)
-  /// so it goes green the moment `StatusNotifierTray.handle`'s `.unknown`
-  /// case stops returning `nil`.
+  /// **Fix, two parts (`StatusNotifierProtocol.swift`/`StatusNotifierTray
+  /// .swift`/`StatusNotifierIntrospection.swift`):**
+  /// 1. `Introspect` now decodes to its own `.introspect(path:)` case and
+  ///    gets a REAL introspection-XML reply describing whichever object
+  ///    path was actually queried (`StatusNotifierIntrospection.xml
+  ///    (forPath:)`) — "every object we export must answer
+  ///    `Introspectable.Introspect`", not merely fail fast.
+  /// 2. Every OTHER genuinely unrecognized method now maps to `.unknown`,
+  ///    and `StatusNotifierTray.handle`'s `.unknown` case returns
+  ///    `StatusNotifierReplies.unknownMethod(replyingTo:)` — a proper
+  ///    `org.freedesktop.DBus.Error.UnknownMethod` — instead of `nil`.
+  ///    `handle`'s return type is now the NON-optional `DBusMessage` (was
+  ///    `DBusMessage?`), so a future silent-drop regression is a compile
+  ///    error, not a runtime hang.
   @Suite("StatusNotifierTray.handle — unrecognized-method dispatch (real fake-bus Hello)")
   struct AppStatusNotifierTrayDispatchTests {
-    @Test("handle(.unknown, ...) must not silently drop the call — a real client hangs otherwise")
-    func unknownMethodMustStillGetAReply() throws {
+    private func connectedTray() throws -> (tray: StatusNotifierTray, peer: FakeBusPeer) {
       guard let peer = FakeBusPeer() else {
         Issue.record("could not create a local AF_UNIX listening socket for the fake bus")
-        return
+        throw TestSetupFailure.fakeBusUnavailable
       }
       peer.acceptOnceAndReplyToHello(uniqueName: ":1.999")
       guard let connection = DBusConnection.connect(address: peer.address, timeout: .seconds(2))
       else {
         Issue.record("DBusConnection.connect failed against the fake bus's real Hello handshake")
-        return
+        throw TestSetupFailure.connectFailed
       }
+      return (StatusNotifierTray(ownConnection: connection, watchConnection: nil), peer)
+    }
 
-      let tray = StatusNotifierTray(ownConnection: connection, watchConnection: nil)
+    @Test("Introspect on /StatusNotifierItem decodes to .introspect, not .unknown, and replies")
+    func introspectOnItemPathGetsARealReply() throws {
+      let (tray, _) = try connectedTray()
       let introspect = DBusMessage(
-        type: .methodCall, serial: 7, path: "/StatusNotifierItem",
+        type: .methodCall, serial: 7, path: StatusNotifierItemName.objectPath,
         interface: "org.freedesktop.DBus.Introspectable", member: "Introspect", sender: ":1.50")
 
-      // `StatusNotifierRequest.decode` correctly has no case for
-      // `Introspectable` — this assertion documents that the INPUT really
-      // does reach `.handle` as `.unknown`, so the failure captured below
-      // is squarely `.handle`'s, not `.decode`'s.
-      #expect(StatusNotifierRequest.decode(introspect) == .unknown)
+      let decoded = StatusNotifierRequest.decode(introspect)
+      #expect(decoded == .introspect(path: StatusNotifierItemName.objectPath))
 
-      // `withKnownIssue` (not `.disabled`) so this ACTUALLY RUNS the real
-      // repro every `swift test`, keeps the suite green while the defect
-      // stands (matching this task's "don't regress the 1106 baseline"
-      // constraint), and — the point of using this API rather than just
-      // suppressing the assertion — flips to a hard FAILURE the moment
-      // someone fixes `StatusNotifierTray.handle`'s `.unknown` case,
-      // which is exactly the signal to come delete this wrapper.
-      let knownIssueDescription =
-        "StatusNotifierTray.handle(.unknown, ...) returns nil, so receiveLoop() never replies at"
-        + " all — a real Introspect call against the real running binary hangs forever (verified"
-        + " via dbus-send in packaging/linux/vnc/Dockerfile's Ubuntu 22.04 container). Fix:"
-        + " return an UnknownMethod error DBusMessage, matching"
-        + " ClipnestControlService.handle's own .unknown case."
-      withKnownIssue(Comment(rawValue: knownIssueDescription)) {
-        let reply = tray.handle(.unknown, message: introspect)
-        #expect(reply != nil, "a real Introspect call must get SOME reply, not a silent drop")
+      let reply = tray.handle(decoded!, message: introspect)
+      #expect(reply.type == .methodReturn)
+      #expect(reply.replySerial == 7)
+      guard case .string(let xml)? = reply.body.first else {
+        Issue.record("expected Introspect's reply body to be a single string")
+        return
       }
+      // The real defect: a real Introspect call must describe the REAL
+      // interface at this path, not just avoid hanging.
+      #expect(xml.contains(StatusNotifierItemName.interface))
+      #expect(xml.contains(StatusNotifierItemMember.activate))
+      #expect(xml.contains(FreedesktopIntrospectableName.interface))
     }
+
+    @Test("Introspect on /app/clipnest/TrayMenu describes com.canonical.dbusmenu")
+    func introspectOnMenuPathDescribesDBusMenu() throws {
+      let (tray, _) = try connectedTray()
+      let introspect = DBusMessage(
+        type: .methodCall, serial: 8, path: DBusMenuName.objectPath,
+        interface: "org.freedesktop.DBus.Introspectable", member: "Introspect", sender: ":1.50")
+
+      let decoded = StatusNotifierRequest.decode(introspect)
+      #expect(decoded == .introspect(path: DBusMenuName.objectPath))
+
+      let reply = tray.handle(decoded!, message: introspect)
+      #expect(reply.type == .methodReturn)
+      guard case .string(let xml)? = reply.body.first else {
+        Issue.record("expected Introspect's reply body to be a single string")
+        return
+      }
+      #expect(xml.contains(DBusMenuName.interface))
+      #expect(xml.contains(DBusMenuMember.getLayout))
+      #expect(xml.contains(DBusMenuMember.getGroupProperties))
+    }
+
+    @Test("handle(.unknown, ...) must not silently drop the call — a real client hung otherwise")
+    func unknownMethodGetsAProperErrorReply() throws {
+      let (tray, _) = try connectedTray()
+      let bogus = DBusMessage(
+        type: .methodCall, serial: 9, path: StatusNotifierItemName.objectPath,
+        interface: "com.example.NotARealInterface", member: "NotARealMethod", sender: ":1.50")
+
+      #expect(StatusNotifierRequest.decode(bogus) == .unknown)
+
+      let reply = tray.handle(.unknown, message: bogus)
+      #expect(reply.type == .error, "a real unrecognized call must get an ERROR, not a silent drop")
+      #expect(reply.errorName == StatusNotifierErrorName.unknownMethod)
+      #expect(reply.replySerial == 9)
+    }
+  }
+
+  private enum TestSetupFailure: Error {
+    case fakeBusUnavailable
+    case connectFailed
   }
 #endif

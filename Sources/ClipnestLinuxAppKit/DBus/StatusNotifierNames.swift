@@ -95,3 +95,29 @@ enum DBusMenuItemID {
   static let openSettings: Int32 = 2
   static let quit: Int32 = 3
 }
+
+/// `org.freedesktop.DBus.Introspectable` — every D-Bus object should answer
+/// this (T-WB2: a real client that introspects before calling — `d-feet`,
+/// `gdbus call`'s default discovery behavior, and some tray-host
+/// implementations — hung forever against `StatusNotifierTray`'s object
+/// paths because nothing here ever answered it; see `StatusNotifierRequest
+/// .introspect`'s doc comment for the full repro). This module's own copy
+/// of the interface name, mirroring `FreedesktopPropertiesName`'s shape.
+enum FreedesktopIntrospectableName {
+  static let interface = "org.freedesktop.DBus.Introspectable"
+}
+
+enum FreedesktopIntrospectableMember {
+  static let introspect = "Introspect"
+}
+
+/// The one D-Bus error name this tray ever replies with — same fixed
+/// string as `ClipnestControlErrorName.unknownMethod`
+/// (`ClipnestControlProtocol.swift`) per the D-Bus Specification's error
+/// vocabulary; kept as this file's own copy rather than imported, same
+/// "duplicate across an ownership boundary" precedent `DBusStandardName`'s
+/// own doc comment documents (that file mirrors `ATSPIBusName` for the
+/// identical reason).
+enum StatusNotifierErrorName {
+  static let unknownMethod = "org.freedesktop.DBus.Error.UnknownMethod"
+}

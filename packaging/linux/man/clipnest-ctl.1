@@ -15,10 +15,24 @@ activation handles that.
 .SH COMMANDS
 .TP
 .B toggle-picker
-Open or close the clipboard-history picker.
+Open or close the clipboard-history picker. Runs
+.B clipnest \-\-toggle\-picker
+directly (which forwards to an already-running instance, or starts one).
 .TP
 .B expand-snippet
-Expand the current text selection as a snippet keyword.
+Expand the current text selection as a snippet keyword. Runs
+.B clipnest \-\-expand\-snippet
+directly, same as
+.BR toggle-picker .
+.TP
+.B open-settings
+Open Clipnest's Settings window. Calls the running instance's D-Bus
+control interface directly (D-Bus-activating it first if it isn't
+already running).
+.TP
+.B ping
+Check that Clipnest is running and responding. Also D-Bus-activates it
+if it isn't already running.
 .TP
 .B version
 Print the installed

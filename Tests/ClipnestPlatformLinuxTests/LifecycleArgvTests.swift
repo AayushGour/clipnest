@@ -37,6 +37,42 @@ struct LifecycleArgvCLITests {
   func recognizesFlagAmongOtherArguments() {
     #expect(LinuxAppCLI.parse(["/usr/bin/clipnest", "--toggle-picker"]) == .togglePicker)
   }
+
+  // T-BB2 regression: black-box testing on Ubuntu 22.04 found `--version`/
+  // `--help` unrecognized by this parser entirely — both fell through to
+  // `.none`, which `LinuxAppLifecycle.run(arguments:)` used to treat as a
+  // plain launch (full resident GUI with no instance running, exit-124
+  // hang for the tester; silent no-op forward with one running).
+  @Test("recognizes --version")
+  func recognizesVersion() {
+    #expect(LinuxAppCLI.parse(["--version"]) == .version)
+  }
+
+  @Test("recognizes --help")
+  func recognizesHelp() {
+    #expect(LinuxAppCLI.parse(["--help"]) == .help)
+  }
+}
+
+/// `LinuxAppCLI.usageText` — the exact stdout `--help` prints (T-BB2 fix).
+/// Content assertions only (the actual print+exit(0)+no-window/no-forward
+/// behavior is verified end-to-end in the real `.deb`, not here — `exit(0)`
+/// cannot be safely called from inside this test binary).
+@Suite("LinuxAppCLI.usageText")
+struct LifecycleArgvUsageTextTests {
+  @Test("mentions every flag parse(_:) actually recognizes")
+  func mentionsEveryRecognizedFlag() {
+    let text = LinuxAppCLI.usageText
+    #expect(text.contains(LinuxAppCLIFlag.togglePicker))
+    #expect(text.contains(LinuxAppCLIFlag.expandSnippet))
+    #expect(text.contains(LinuxAppCLIFlag.version))
+    #expect(text.contains(LinuxAppCLIFlag.help))
+  }
+
+  @Test("mentions clipnest-ctl for scripting a running instance")
+  func mentionsClipnestCtl() {
+    #expect(LinuxAppCLI.usageText.contains("clipnest-ctl"))
+  }
 }
 
 @Suite("GlobalShortcutsPortalClient.isAvailable — fake connection, no real bus")
