@@ -27,6 +27,29 @@ public enum PickerKeyAction: Equatable, Sendable {
   case togglePin
   case delete
   case switchTab(PickerTabIndex)
+
+  /// Whether this action's key is one a focused text field legitimately owns,
+  /// so the picker must NOT act on it while the search entry has focus.
+  ///
+  /// Only `delete` qualifies today. `PickerWindow`'s key controller runs at
+  /// `GTK_PHASE_CAPTURE` — it sees keys BEFORE the focused widget, which is
+  /// required for the picker's own chords to work while the search entry holds
+  /// focus (it holds focus for most of the picker's life). That was harmless
+  /// while Delete required Ctrl; making it bare to match macOS turned it into a
+  /// key the entry owns, and pressing it while searching permanently destroyed
+  /// the highlighted item — found by black-box testing, confirmed on a clean
+  /// build, measured as 4 rows -> 3 with no confirmation and no undo.
+  ///
+  /// The arrow keys are deliberately NOT included: moving the picker's
+  /// selection while typing a search is the intended behaviour on both
+  /// platforms, and matches macOS. `focusSearch`/`togglePin`/`switchTab` are
+  /// Ctrl-chords a plain text field never consumes, and `commit`/`dismiss`
+  /// (Return/Escape) are picker-level actions the search entry has no competing
+  /// meaning for.
+  var isTextEditingKeyWhenTypingInSearch: Bool {
+    if case .delete = self { return true }
+    return false
+  }
 }
 
 /// The three Ctrl+1/2/3-addressable tabs, as a 1-based index — kept

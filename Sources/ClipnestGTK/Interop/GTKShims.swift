@@ -187,6 +187,24 @@ func gtk_widget_add_controller(_ widget: OpaquePointer, _ controller: OpaquePoin
 func gtk_widget_grab_focus(_ widget: OpaquePointer) {
   _ = gtk_widget_grab_focus(gtkPointer(widget) as UnsafeMutablePointer<GtkWidget>)
 }
+/// Whether `widget` is, or contains, the window's current focus widget.
+///
+/// NOT `gtk_widget_has_focus`, which was tried first and silently failed: a
+/// `GtkSearchEntry` is a composite whose focusable child is an internal
+/// `GtkText`, so `has_focus` on the search entry itself is always false even
+/// while the user is typing into it. Asking the window for its real focus
+/// widget and walking up the parent chain is what actually answers "is the
+/// user typing in the search field."
+func gtkFocusIsWithin(window: OpaquePointer, widget: OpaquePointer) -> Bool {
+  guard
+    let focused = gtk_window_get_focus(gtkPointer(window) as UnsafeMutablePointer<GtkWindow>)
+  else { return false }
+  let focusedWidget = OpaquePointer(focused)
+  if focusedWidget == widget { return true }
+  return gtk_widget_is_ancestor(
+    gtkPointer(focusedWidget) as UnsafeMutablePointer<GtkWidget>,
+    gtkPointer(widget) as UnsafeMutablePointer<GtkWidget>) != 0
+}
 func gtk_widget_get_first_child(_ widget: OpaquePointer) -> OpaquePointer? {
   gtk_widget_get_first_child(gtkPointer(widget) as UnsafeMutablePointer<GtkWidget>).map(
     OpaquePointer.init)

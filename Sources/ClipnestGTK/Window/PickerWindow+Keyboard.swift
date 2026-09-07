@@ -59,8 +59,48 @@ extension PickerWindow {
 
   func handleKeyPressed(keyval: UInt32, state: UInt32) -> Int32 {
     guard let action = KeyEventMapping.action(keyval: keyval, state: state) else { return 0 }
+    // P0 DATA LOSS, found by black-box testing on Ubuntu 22.04 and confirmed on
+    // a clean HEAD build: typing in the search field and pressing Delete
+    // permanently destroyed the highlighted clipboard item (measured: 4 rows ->
+    // 3, no confirmation, no undo).
+    //
+    // This controller is attached at GTK_PHASE_CAPTURE, so it sees every key
+    // BEFORE the focused widget does. That is required for the picker's own
+    // chords (arrows, Ctrl-chords, Escape) to work while the search entry holds
+    // focus, which it does for most of the picker's life. Bare Delete was
+    // harmless under that arrangement only while it required Ctrl; making it
+    // bare to match macOS (T-KBPARITY1) turned it into a key the text field
+    // legitimately owns.
+    //
+    // macOS does not have this problem because SwiftUI routes the keystroke to
+    // the focused control first; GTK's capture phase deliberately does the
+    // opposite. So the fix belongs here, not in `KeyEventMapping` (which stays
+    // a pure keyval->action mapping with no view state) — see that type's own
+    // doc comment.
+    if action.isTextEditingKeyWhenTypingInSearch, isTypingInSearchField {
+      return 0  // GDK_EVENT_PROPAGATE — let the focused GtkEntry handle it
+    }
     dispatch(action)
     return 1
+  }
+
+  /// Whether the user is actively editing search text, so a text-editing key
+  /// belongs to the entry rather than to the picker.
+  ///
+  /// Requires BOTH focus and non-empty text, and the second half is not
+  /// redundant: `willShow()` focuses the search entry every time the picker
+  /// opens, so a focus-only check would mean bare Delete never reached the list
+  /// at all — measured, after a first attempt at this fix did exactly that.
+  ///
+  /// With an empty search box there is nothing for Delete to edit, so the
+  /// picker's own meaning (delete the highlighted item) is the only sensible
+  /// one; once the user has typed something, Delete is forward-delete and the
+  /// entry owns it. That split matches what a user intends in each state and
+  /// keeps macOS parity for the common case of opening the picker and pressing
+  /// Delete straight away.
+  private var isTypingInSearchField: Bool {
+    guard gtkFocusIsWithin(window: window, widget: searchEntry) else { return false }
+    return !String(cString: gtk_editable_get_text(searchEntry)).isEmpty
   }
 
   /// Dispatches one mapped `PickerKeyAction` — see `PickerKeyAction.swift`'s
