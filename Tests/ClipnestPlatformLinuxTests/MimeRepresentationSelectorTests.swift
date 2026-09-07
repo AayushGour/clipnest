@@ -82,4 +82,25 @@ struct MimeRepresentationSelectorTests {
       #expect(MimeRepresentationSelector.winningMimeType(for: category, in: []) == nil)
     }
   }
+
+  @Test("allAvailableMimeTypes returns EVERY offered rich-text representation, in priority order")
+  func allAvailableMimeTypesReturnsEveryRichTextRepresentation() {
+    let result = MimeRepresentationSelector.allAvailableMimeTypes(
+      for: .richText, in: ["text/rtf", "text/html", "application/rtf"])
+    #expect(result == ["text/html", "application/rtf", "text/rtf"])
+  }
+
+  @Test("allAvailableMimeTypes returns only what's actually present, not the full priority list")
+  func allAvailableMimeTypesOmitsAbsentCandidates() {
+    let result = MimeRepresentationSelector.allAvailableMimeTypes(
+      for: .richText, in: ["text/rtf"])
+    #expect(result == ["text/rtf"])
+  }
+
+  @Test("allAvailableMimeTypes returns an empty array, not nil-crashing, when none are present")
+  func allAvailableMimeTypesEmptyWhenNonePresent() {
+    #expect(MimeRepresentationSelector.allAvailableMimeTypes(for: .richText, in: []) == [])
+    #expect(
+      MimeRepresentationSelector.allAvailableMimeTypes(for: .richText, in: ["image/png"]) == [])
+  }
 }

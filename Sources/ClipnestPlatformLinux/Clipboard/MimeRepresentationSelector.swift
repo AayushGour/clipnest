@@ -38,4 +38,23 @@ public enum MimeRepresentationSelector {
   ) -> Bool {
     winningMimeType(for: category, in: availableMimeTypes) != nil
   }
+
+  /// Every MIME type in `category`'s priority list that appears in
+  /// `availableMimeTypes`, in priority order — unlike `winningMimeType`,
+  /// this does NOT stop at the first match. `LinuxPasteboard` uses this
+  /// for `.richText` so a single capture can preserve every rich
+  /// representation a source app offers (e.g. LibreOffice Writer
+  /// routinely offers BOTH `text/html` and `text/rtf` for one copy — see
+  /// `LinuxRichTextBundle`'s doc comment for how those get bundled into
+  /// the one blob slot `ClipnestCore` has room for). Every other category
+  /// still only ever needs its single winning representation (there's no
+  /// equivalent "richer alternate format" question for a file URI list or
+  /// a single image), so `winningMimeType` remains what they call.
+  public static func allAvailableMimeTypes(
+    for category: ClipboardRepresentationCategory,
+    in availableMimeTypes: [String]
+  ) -> [String] {
+    let available = Set(availableMimeTypes)
+    return LinuxClipboardConstants.mimePriority(for: category).filter(available.contains)
+  }
 }

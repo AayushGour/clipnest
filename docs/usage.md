@@ -127,7 +127,7 @@ Once an image has recognized text:
 
 ### How much history does Clipnest keep?
 
-By default, Clipnest keeps everything you copy until you delete it yourself (or delete your whole history — see [Uninstall](#10-uninstall)). Open Settings (`⌘,`) → **History** to change this: keep **Everything** (the default), the most recent N items, or only the last N days — pinned items are always kept regardless of this setting. **Clear All History…** on the same tab deletes everything, including pinned items.
+By default, Clipnest keeps your most recent **1,000 items** — older, unpinned items beyond that are trimmed automatically as new ones arrive. Open Settings (`⌘,`) → **History** to change this: **Most recent items** (the default, 1,000 — adjustable), **A number of days**, or **Everything** (no automatic trimming) — pinned items are always kept regardless of this setting. **Clear All History…** on the same tab deletes everything, including pinned items.
 
 ## 6. Snippets
 

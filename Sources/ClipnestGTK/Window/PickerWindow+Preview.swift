@@ -20,6 +20,7 @@
 // only wires it to the two GTK calls that need it.
 import CGtk4
 import ClipnestCore
+import Foundation
 
 /// Retained for the lifetime of one `GdkPixbufLoader` decode (see
 /// `Interop/GTKCallbackTrampoline.swift`) — carries the bound the
@@ -75,6 +76,13 @@ extension PickerWindow {
   /// `renderedRows` (mirroring how `PickerView` resolves it from `rows` on
   /// macOS before calling `updatePreview` — see that property's doc
   /// comment) and shows/updates/hides the popover.
+  ///
+  /// Content mirrors macOS `ItemPreview.content` exactly (see
+  /// `ItemPreviewContent`'s doc comment, `Support/ItemPreviewContent.swift`):
+  /// `.image` shows only the thumbnail (no caption — `previewLabel` hides),
+  /// plus an optional recognized-text section (T-OCR2); `.file` shows the
+  /// filename headline plus size/path metadata; everything else shows the
+  /// plain wrapped `previewText`.
   func updatePreviewPopover(targetID: ClipItem.ID?) {
     guard let targetID, let item = renderedRows.first(where: { $0.id == targetID }) else {
       gtk_popover_popdown(previewPopover)
@@ -85,16 +93,77 @@ extension PickerWindow {
       gtk_popover_set_pointing_to(previewPopover, &rect)
     }
 
-    switch item.kind {
-    case .image:
-      gtk_widget_set_visible(previewImage, 1)
-      gtk_label_set_text(previewLabel, item.previewText)
+    let content = ItemPreviewContent(item: item)
+    let isImage = item.kind == .image
+
+    gtk_widget_set_visible(previewImage, isImage ? 1 : 0)
+    gtk_widget_set_visible(previewLabel, isImage ? 0 : 1)
+    if isImage {
       decodeBoundedThumbnail(for: item)
-    case .text, .richText, .link, .file:
-      gtk_widget_set_visible(previewImage, 0)
-      gtk_label_set_text(previewLabel, item.previewText)
+    } else {
+      gtk_label_set_text(previewLabel, content.bodyText)
     }
+    updateFilePreviewMetadata(isFile: item.kind == .file, item: item, path: content.filePath)
+    updateOCRSection(content: content)
+
     gtk_popover_popup(previewPopover)
+  }
+
+  /// `.file` metadata (size + path) below the filename headline
+  /// (`previewLabel`) — mirrors macOS `ItemPreview.FilePreview`. The size is
+  /// read from disk here, synchronously: a single `stat()` on an
+  /// already-resolved local path, triggered by one hover — not a
+  /// capture-path loop — which is the same "hover-triggered, bounded,
+  /// already-on-disk" exception `decodeBoundedThumbnail` below already
+  /// relies on for blob reads (see that method's doc comment). Mirrors
+  /// `PasteboardReader.readFile`'s own doc comment, which explains why
+  /// `ClipItem.byteSize` is always 0 for `.file` and states the real size
+  /// is meant to be "read later, off the main thread, only when a preview
+  /// needs it" — this is that read. A missing/unreadable file simply omits
+  /// the size line, matching macOS `FilePreview`'s `sizeText` staying `nil`.
+  private func updateFilePreviewMetadata(isFile: Bool, item: ClipItem, path: String?) {
+    guard isFile else {
+      gtk_widget_set_visible(previewFileSizeLabel, 0)
+      gtk_widget_set_visible(previewFilePathLabel, 0)
+      return
+    }
+
+    if let path {
+      gtk_widget_set_visible(previewFilePathLabel, 1)
+      gtk_label_set_text(previewFilePathLabel, path)
+    } else {
+      gtk_widget_set_visible(previewFilePathLabel, 0)
+    }
+
+    guard let reference = item.fileReference, let url = URL(string: reference), url.isFileURL,
+      let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+      let bytes = attributes[.size] as? Int
+    else {
+      gtk_widget_set_visible(previewFileSizeLabel, 0)
+      return
+    }
+    gtk_widget_set_visible(previewFileSizeLabel, 1)
+    gtk_label_set_text(
+      previewFileSizeLabel,
+      ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file))
+  }
+
+  /// The recognized-text section shown below an `.image` preview (T-OCR2
+  /// parity, mirrors macOS `ItemPreview.imagePreview`'s `if item
+  /// .hasRecognizedText` block) — hidden together whenever the hovered item
+  /// has no recognized text (every non-`.image` kind included, since
+  /// `ClipItem.hasRecognizedText` is always `false` there).
+  private func updateOCRSection(content: ItemPreviewContent) {
+    guard content.hasRecognizedText, let ocrText = content.ocrText else {
+      gtk_widget_set_visible(previewOCRSeparator, 0)
+      gtk_widget_set_visible(previewOCRHeaderLabel, 0)
+      gtk_widget_set_visible(previewOCRTextLabel, 0)
+      return
+    }
+    gtk_widget_set_visible(previewOCRSeparator, 1)
+    gtk_widget_set_visible(previewOCRHeaderLabel, 1)
+    gtk_widget_set_visible(previewOCRTextLabel, 1)
+    gtk_label_set_text(previewOCRTextLabel, ocrText)
   }
 
   /// Reads `item`'s blob and decodes it through a `GdkPixbufLoader` bounded
@@ -133,6 +202,19 @@ extension PickerWindow {
       return
     }
     gtk_image_set_from_pixbuf(previewImage, pixbuf)
+    // REAL BUG found by this task's own runtime verification (nobody had
+    // ever hovered a real captured image before): without an explicit
+    // `pixel-size`, this GTK 4.6 build renders a `GTK_IMAGE_PIXBUF`-storage
+    // `GtkImage` at GTK's small default icon size (~16px) instead of the
+    // pixbuf's own resolution — reproduced with a real 240×160 PNG
+    // rendering as a ~16×9px speck regardless of `previewImage`'s own
+    // `size-request` (`PickerWindow+Layout.swift`'s `buildPreviewPopover()`,
+    // which only sets a MINIMUM width, not a render scale). Setting
+    // `pixel-size` to the decoded pixbuf's own longer edge (already bounded
+    // to `ThumbnailBounds.previewMaxPixelSize` above) makes GTK render it at
+    // that real resolution — verified visually in this task's container.
+    gtk_image_set_pixel_size(
+      previewImage, max(gdk_pixbuf_get_width(pixbuf), gdk_pixbuf_get_height(pixbuf)))
   }
 }
 

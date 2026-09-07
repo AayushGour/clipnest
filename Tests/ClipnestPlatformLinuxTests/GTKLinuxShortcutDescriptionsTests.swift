@@ -40,4 +40,18 @@ struct GTKLinuxShortcutDescriptionsTests {
     #expect(delete?.description.contains("search box is empty") == true)
     #expect(delete?.description.contains("Ctrl+Delete") == true)
   }
+
+  // Keyboard-parity pass (routed follow-up): the four newly-bound chords
+  // (`KeyEventMapping.swift`) must be listed here with the exact same combo
+  // wording `ShortcutHints.swift`'s Linux `platformDefault` advertises in the
+  // footer — the same T-BB6 "two surfaces must agree" guard as the Delete
+  // test above, extended to every new entry.
+  @Test("Save/new/replace/settings entries exist with the footer's exact combo wording")
+  func newEntriesMatchFooterWording() {
+    let combos = Set(LinuxShortcutDescriptions.all.map(\.combo))
+    #expect(combos.contains("Ctrl+S"))
+    #expect(combos.contains("Ctrl+N"))
+    #expect(combos.contains("Ctrl+Shift+E"))
+    #expect(combos.contains("Ctrl+,"))
+  }
 }

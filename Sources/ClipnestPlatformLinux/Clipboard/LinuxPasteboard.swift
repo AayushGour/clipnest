@@ -24,14 +24,29 @@ import Foundation
 /// its rich-text branch, ALSO asks for `.string` unconditionally as a
 /// plain-text fallback. This type reports each of those four keys as
 /// "available" exactly when `MimeRepresentationSelector` finds a winning
-/// MIME type for the matching category, and resolves `data(forType:)`/
-/// `string(forType:)` for that key by fetching and decoding THAT winning
-/// MIME type's real payload — regardless of what the real underlying MIME
-/// type actually was (e.g. `image/webp` bytes are still reported under the
-/// `.png` key). That's safe: `BlobStore` stores opaque bytes, and
-/// `PortableImageHeaderProbe`'s dimension probing sniffs the real
-/// container format from the bytes themselves, not from the key they were
-/// requested under.
+/// MIME type for the matching category. For `.fileURL`/`.png`/`.string`,
+/// `data(forType:)`/`string(forType:)` resolve that key by fetching and
+/// decoding THAT winning MIME type's real payload, regardless of what the
+/// real underlying MIME type actually was (e.g. `image/webp` bytes are
+/// still reported under the `.png` key) — safe, since `BlobStore` stores
+/// opaque bytes and `PortableImageHeaderProbe`'s dimension probing sniffs
+/// the real container format from the bytes themselves, not the key they
+/// were requested under.
+///
+/// `.rtf` is the one exception, fixed by the rich-text fidelity task: a
+/// real clipboard owner commonly offers SEVERAL rich representations at
+/// once (LibreOffice Writer routinely offers both `text/html` and
+/// `text/rtf` for a single copy — verified via `xclip -t TARGETS`, not
+/// assumed), and picking only the single highest-priority one to store
+/// silently discarded whichever wasn't `text/html`. `data(forType: .rtf)`
+/// now fetches EVERY offered rich-text representation (see
+/// `richTextBundle(mimeTypes:)`) and packs them into one
+/// `LinuxRichTextBundle` — see that type's doc comment for the wire format
+/// and for why bundling into the one blob slot `ClipnestCore` has room for
+/// (rather than widening its model) is the right fix. `GTKClipboardWriting
+/// .writeRichText` (paste side, `ClipnestLinuxAppKit`) unpacks the bundle
+/// and republishes every representation under its own real MIME type, so
+/// a paste target can pick whichever it supports.
 public final class LinuxPasteboard: MonitoredPasteboard, @unchecked Sendable {
   private let connection: any X11SelectionConnecting
 
@@ -87,13 +102,33 @@ public final class LinuxPasteboard: MonitoredPasteboard, @unchecked Sendable {
       else { return nil }
       return connection.payload(forMimeType: mimeType)
     case .rtf:
-      guard
-        let mimeType = MimeRepresentationSelector.winningMimeType(for: .richText, in: mimeTypes)
-      else { return nil }
-      return connection.payload(forMimeType: mimeType)
+      return richTextBundle(mimeTypes: mimeTypes)?.encode()
     default:
       return nil
     }
+  }
+
+  /// Fetches EVERY rich-text representation the owner actually offers
+  /// (not just the highest-priority one) and bundles them into one
+  /// `LinuxRichTextBundle` — see that type's doc comment for why bundling
+  /// into the single opaque blob slot, rather than widening
+  /// `ClipnestCore`'s model, is the fidelity fix. A representation whose
+  /// TARGET was advertised but whose payload conversion then fails (a
+  /// refused/failed `XConvertSelection`) is simply skipped rather than
+  /// aborting the whole capture — strictly more resilient than the old
+  /// single-representation path, which returned `nil` outright if its one
+  /// chosen MIME type's payload fetch failed even when a lower-priority
+  /// candidate would have worked. Returns `nil` only when NONE of the
+  /// candidates yield a real payload.
+  private func richTextBundle(mimeTypes: [String]) -> LinuxRichTextBundle? {
+    let representations = MimeRepresentationSelector.allAvailableMimeTypes(
+      for: .richText, in: mimeTypes
+    ).compactMap { mimeType -> LinuxRichTextBundle.Representation? in
+      guard let payload = connection.payload(forMimeType: mimeType) else { return nil }
+      return LinuxRichTextBundle.Representation(mimeType: mimeType, data: payload)
+    }
+    guard !representations.isEmpty else { return nil }
+    return LinuxRichTextBundle(representations: representations)
   }
 
   /// Resolves the file category's winning MIME type, fetches its payload,

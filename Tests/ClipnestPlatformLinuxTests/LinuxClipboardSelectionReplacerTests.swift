@@ -202,7 +202,24 @@ struct LinuxClipboardSelectionReplacerTests {
     let result = await replacer.replaceSelection { _ in "EXPANDED" }
 
     #expect(result == .replaced)
-    #expect(writer.writes.last == .richText(rtf: Data("<b>hi</b>".utf8), plain: "hi"))
+    // The rich-text fidelity fix: `LinuxPasteboard.data(forType: .rtf)` now
+    // returns a `LinuxRichTextBundle`-encoded blob (every offered
+    // representation, tagged with its real MIME type) rather than raw,
+    // unwrapped `text/html` bytes — see that type's doc comment. This
+    // snapshot/restore path forwards whatever it read verbatim, so the
+    // restored write carries the SAME bundle bytes the snapshot captured;
+    // decode it to assert on the meaningful content instead of pinning the
+    // wire format's exact byte count.
+    guard case .richText(let rtf, let plain) = writer.writes.last else {
+      Issue.record("Expected a .richText write, got \(String(describing: writer.writes.last))")
+      return
+    }
+    #expect(plain == "hi")
+    #expect(
+      LinuxRichTextBundle.decode(rtf)
+        == LinuxRichTextBundle(representations: [
+          .init(mimeType: "text/html", data: Data("<b>hi</b>".utf8))
+        ]))
   }
 
   @Test("Restores original image bytes after the transaction")

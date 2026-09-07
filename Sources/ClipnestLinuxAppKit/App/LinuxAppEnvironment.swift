@@ -418,6 +418,17 @@ final class LinuxAppEnvironment {
         GrantInputHelperClient.requestGrant(completion: completion)
       })
 
+    // Keyboard-parity pass (routed follow-up): `PickerViewModel.openSettings`
+    // (used by `openSettingsFromPicker()`, now reachable via the picker's own
+    // `Ctrl+,` — `ClipnestGTK/Window/PickerWindow+Keyboard.swift`'s
+    // `.openSettings` case) defaults to a no-op and was never wired on Linux
+    // — only macOS's `PickerView.swift` `.onAppear` set it. Without this, the
+    // picker would dismiss on `Ctrl+,` but never actually show Settings.
+    // Wired to the exact same `openSettings()` the tray/D-Bus "Settings…"
+    // entry already calls (`LinuxAppLifecycle.swift`), mirroring
+    // `AppEnvironment`'s macOS equivalent one line up the stack.
+    viewModel.openSettings = { [weak self] in self?.openSettings() }
+
     monitor.onCapture = { [weak self, weak viewModel] _ in
       viewModel?.handleNewCapture()
       self?.scheduleRetentionEnforcement()

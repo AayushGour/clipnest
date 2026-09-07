@@ -29,11 +29,23 @@ public enum KeyEventMapping {
   /// these are hardcoded rather than imported), spelled out as named
   /// constants (not inline `4`/`8`) per coding-standards.md's no-magic-
   /// numbers rule. `controlMask` gates the Linux-conventional primary
-  /// modifier (Ctrl+F/P/1/2/3 — this picker's substitute for macOS's
+  /// modifier (Ctrl+F/P/S/N/1/2/3/, — this picker's substitute for macOS's
   /// ⌘-chords); Delete is the one exception — it matches with or without
   /// Ctrl held, see `Keyval.delete`'s case below for why. `altMask` gates
   /// the Enter/plain-text variant, mirroring macOS's ⌥⏎ specifically (not
   /// ⌘⏎) — see `.commit`'s case below.
+  ///
+  /// Keyboard-parity pass (routed follow-up): four more Ctrl-chords added —
+  /// `Ctrl+S` (save highlighted as snippet), `Ctrl+N` (new snippet, Snippets
+  /// tab only), `Ctrl+Shift+E` (replace/edit the highlighted snippet — needs
+  /// `shiftMask` too, see `Keyval.eLower`/`Keyval.eUpper`'s case below), and
+  /// `Ctrl+,` (open Settings) — mirroring macOS's `⌘S`/`⌘N`/the mouse-only
+  /// "Edit" snippet action/`⌘,`. All four are ordinary Ctrl-chords a plain
+  /// `GtkEntry` does not itself bind, and — like every other chord in this
+  /// file — are intercepted at `GTK_PHASE_CAPTURE` before the focused search
+  /// entry ever sees them (see
+  /// `PickerKeyAction.isTextEditingKeyWhenTypingInSearch`'s doc comment), so
+  /// none of the four needs that flag.
   static let controlMask: UInt32 = 1 << 2
   static let altMask: UInt32 = 1 << 3
 
@@ -90,6 +102,18 @@ public enum KeyEventMapping {
     static let one: UInt32 = 0x031
     static let two: UInt32 = 0x032
     static let three: UInt32 = 0x033
+    /// Keyboard-parity pass: `s`/`S` (Ctrl+S, save highlighted as snippet),
+    /// `n`/`N` (Ctrl+N, new snippet), `e`/`E` (Ctrl+Shift+E, replace/edit the
+    /// highlighted snippet) — same lower/upper-case-both-mean-the-key
+    /// reasoning as `fLower`/`fUpper` above. `comma` (Ctrl+,, open Settings)
+    /// has no case variant to worry about — it isn't a letter.
+    static let sLower: UInt32 = 0x073
+    static let sUpper: UInt32 = 0x053
+    static let nLower: UInt32 = 0x06e
+    static let nUpper: UInt32 = 0x04e
+    static let eLower: UInt32 = 0x065
+    static let eUpper: UInt32 = 0x045
+    static let comma: UInt32 = 0x02c
   }
 
   /// Maps a raw `(keyval, state)` GTK key-press to the `PickerKeyAction` it
@@ -113,6 +137,12 @@ public enum KeyEventMapping {
   ///     (T-BUG1/parity-audit bug #4).
   public static func action(keyval: UInt32, state: UInt32) -> PickerKeyAction? {
     let isControlDown = state & controlMask != 0
+    // Keyboard-parity pass: only `Ctrl+Shift+E` (`.replaceSnippet`) below
+    // consults this — every other Ctrl-chord in this file is deliberately
+    // Shift-agnostic (Caps Lock/Shift held incidentally must not break e.g.
+    // Ctrl+F), matching this file's existing masking-not-exact-match
+    // philosophy (see this method's own doc comment above).
+    let isShiftDown = state & shiftMask != 0
 
     switch keyval {
     case Keyval.up:
@@ -159,6 +189,27 @@ public enum KeyEventMapping {
       return isControlDown ? .switchTab(.two) : nil
     case Keyval.three:
       return isControlDown ? .switchTab(.three) : nil
+    // Keyboard-parity pass (routed follow-up): four more Ctrl-chords,
+    // mirroring macOS's ⌘S/⌘N/(mouse-only Edit action)/⌘, — see this
+    // method's top doc comment. Written as plain `case`s with a ternary
+    // (never `case a, b where cond:`), same discipline as every other
+    // multi-keyval-with-a-guard case above, for the exact reason this file's
+    // top "NOTE (bug found by ...)" comment documents.
+    case Keyval.sLower, Keyval.sUpper:
+      return isControlDown ? .saveAsSnippet : nil
+    case Keyval.nLower, Keyval.nUpper:
+      return isControlDown ? .newSnippet : nil
+    // `Ctrl+Shift+E`, not bare `Ctrl+E`: verified at runtime (this task's own
+    // container test) that a bare `Ctrl+E` here would collide with nothing
+    // GTK/the search entry binds by default, but Shift is required anyway
+    // per this task's spec (`Ctrl+Shift+E`) — GDK reports `E`'s *shifted*
+    // keyval (`Keyval.eUpper`) plus `GDK_SHIFT_MASK` in `state` when Shift is
+    // physically held, so both are checked explicitly rather than assumed
+    // redundant.
+    case Keyval.eLower, Keyval.eUpper:
+      return isControlDown && isShiftDown ? .replaceSnippet : nil
+    case Keyval.comma:
+      return isControlDown ? .openSettings : nil
     default:
       return nil
     }

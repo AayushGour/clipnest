@@ -3,6 +3,13 @@
 Owner: architect (seed) · senior-dev refines. Grep this before building; match it.
 
 ## Non-negotiables (every project, every agent, regardless of stack)
+
+- **A cross-platform seam MUST NOT have a silent default.** An injected closure or protocol witness that one platform fills and another silently does not is invisible: the call site compiles, the feature does nothing, and no test fails. Declare it as a required initializer parameter (or a non-optional `let` set at construction) so a missing wiring is a BUILD ERROR, not a dead feature.
+  **Evidence — this exact bug shipped three times in one day on the Linux port:**
+  `PickerViewModel.presentSnippetEditor` defaulted to `{ _ in }`; macOS injected it, Linux never did, and snippet creation silently did nothing for the ENTIRE port — `saveHighlightedAsSnippet()` ran, called the closure, and returned. `PickerViewModel.openSettings` defaulted to `{}` and was likewise never set on Linux, so binding `Ctrl+,` would have dismissed the picker and done nothing. Both were found by accident, not by a test. `SettingsWindow.reinstallToggleHotkeyFloor` and `requestUInputGrant` were deliberately declared WITHOUT defaults for this reason and are the pattern to copy.
+  When you genuinely need a no-op fallback (a headless test, say), make it explicit at the call site — `presentSnippetEditor: { _ in }` written out — never a default the caller can forget.
+
+- **Re-entrancy: a GTK signal handler that changes window state must not re-enter itself.** Hiding a window makes it inactive, which fires `notify::is-active`, whose handler may hide it again. The same shape recurred FIVE times in one day (dismissal, context menu, snippet editor, and two grab handoffs) — twice reaching 156% and 200%+ sustained CPU before being caught. Guard with an explicit re-entrancy flag, and defer window/grab handoffs to the next GLib idle iteration (`g_idle_add_full`) rather than performing them synchronously inside the signal.
 - **DRY** — no copy-pasted logic. Extract to a shared function/module the *second* a real duplicate appears (not preemptively).
 - **No magic strings/numbers** — every literal used more than once, or that carries meaning (status codes, keys, routes, error messages, thresholds), lives in one `constants` module. Nothing else hardcodes it inline.
 - **Config in one place** — all env vars read through a single config module (e.g. `config.py` / `config.ts`); rest of the codebase imports from it. Never scatter raw `process.env.*` / `os.environ.*` calls through business logic.

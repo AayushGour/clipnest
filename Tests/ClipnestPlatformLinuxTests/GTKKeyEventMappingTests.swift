@@ -33,6 +33,15 @@ struct GTKKeyEventMappingTests {
   private static let two: UInt32 = 0x032
   private static let three: UInt32 = 0x033
   private static let unboundKey: UInt32 = 0x061  // 'a'
+  // Keyboard-parity pass (routed follow-up): keyvals for the four new
+  // Ctrl-chords (Ctrl+S/Ctrl+N/Ctrl+Shift+E/Ctrl+,).
+  private static let sLower: UInt32 = 0x073
+  private static let sUpper: UInt32 = 0x053
+  private static let nLower: UInt32 = 0x06e
+  private static let nUpper: UInt32 = 0x04e
+  private static let eLower: UInt32 = 0x065
+  private static let eUpper: UInt32 = 0x045
+  private static let comma: UInt32 = 0x02c
 
   @Test("Up/Down move regardless of modifiers")
   func upDownMove() {
@@ -169,5 +178,47 @@ struct GTKKeyEventMappingTests {
     #expect(
       KeyEventMapping.action(keyval: Self.pLower, state: Self.controlMask | lockMask)
         == .togglePin)
+  }
+
+  // MARK: - Keyboard-parity pass (routed follow-up): Ctrl+S/Ctrl+N/
+  // Ctrl+Shift+E/Ctrl+, — four more Ctrl-chords closing the gap where each
+  // action was reachable only by mouse. Same lower/upper-case-both-match
+  // coverage as `ctrlFFocusesSearch`/case-insensitivity above.
+
+  @Test("Ctrl+S saves the highlighted item as a snippet; plain S does nothing")
+  func ctrlSSavesAsSnippet() {
+    #expect(
+      KeyEventMapping.action(keyval: Self.sLower, state: Self.controlMask) == .saveAsSnippet)
+    #expect(
+      KeyEventMapping.action(keyval: Self.sUpper, state: Self.controlMask) == .saveAsSnippet)
+    #expect(KeyEventMapping.action(keyval: Self.sLower, state: 0) == nil)
+  }
+
+  @Test("Ctrl+N opens the new-snippet form; plain N does nothing")
+  func ctrlNOpensNewSnippetForm() {
+    #expect(KeyEventMapping.action(keyval: Self.nLower, state: Self.controlMask) == .newSnippet)
+    #expect(KeyEventMapping.action(keyval: Self.nUpper, state: Self.controlMask) == .newSnippet)
+    #expect(KeyEventMapping.action(keyval: Self.nLower, state: 0) == nil)
+  }
+
+  @Test(
+    "Ctrl+Shift+E replaces/edits the highlighted snippet; Ctrl+E alone and Shift+E alone do nothing"
+  )
+  func ctrlShiftEReplacesSnippet() {
+    #expect(
+      KeyEventMapping.action(keyval: Self.eLower, state: Self.controlMask | Self.shiftMask)
+        == .replaceSnippet)
+    #expect(
+      KeyEventMapping.action(keyval: Self.eUpper, state: Self.controlMask | Self.shiftMask)
+        == .replaceSnippet)
+    #expect(KeyEventMapping.action(keyval: Self.eLower, state: Self.controlMask) == nil)
+    #expect(KeyEventMapping.action(keyval: Self.eLower, state: Self.shiftMask) == nil)
+    #expect(KeyEventMapping.action(keyval: Self.eLower, state: 0) == nil)
+  }
+
+  @Test("Ctrl+, opens Settings; plain comma does nothing")
+  func ctrlCommaOpensSettings() {
+    #expect(KeyEventMapping.action(keyval: Self.comma, state: Self.controlMask) == .openSettings)
+    #expect(KeyEventMapping.action(keyval: Self.comma, state: 0) == nil)
   }
 }

@@ -133,6 +133,9 @@ func gtk_event_controller_motion_new() -> OpaquePointer {
 func gdk_pixbuf_loader_new() -> OpaquePointer {
   OpaquePointer(gdk_pixbuf_loader_new()!)
 }
+func gtk_separator_new(_ orientation: GtkOrientation) -> OpaquePointer {
+  OpaquePointer(gtk_separator_new(orientation)!)
+}
 
 // MARK: - GtkWidget (a real named type — nearly every call site)
 func gtk_box_append(_ box: OpaquePointer, _ child: OpaquePointer) {

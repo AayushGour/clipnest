@@ -42,6 +42,17 @@ public enum LinuxShortcutDescriptions {
   // the search box has focus AND non-empty text — omitting that here
   // would repeat the same kind of misleading-but-technically-true wording
   // that caused the original contradiction.
+  // Keyboard-parity pass (routed follow-up): four entries added
+  // (`Ctrl+S`/`Ctrl+N`/`Ctrl+Shift+E`/`Ctrl+,`) — each already had a working
+  // `PickerViewModel` method reachable only by mouse (a row's hover
+  // button/context-menu item, or the tray/D-Bus "Settings…" entry) but no
+  // key binding at all, until `KeyEventMapping.swift` added them. Combo
+  // strings match this footer's `ShortcutHints.swift` Linux vocabulary
+  // exactly (`Ctrl+S save`/`Ctrl+N new`/`Ctrl+Shift+E replace`/`Ctrl+,
+  // settings`) — the two lists disagreeing about the same shortcut is
+  // exactly the T-BB6 class of bug the Delete entry's own doc comment above
+  // already describes, so this list is kept in lockstep with the footer
+  // rather than re-drifting.
   public static let all: [Entry] = [
     Entry(combo: "↑ / ↓", description: "Move selection"),
     Entry(combo: "Enter", description: "Paste the highlighted item"),
@@ -49,11 +60,15 @@ public enum LinuxShortcutDescriptions {
     Entry(combo: "Escape", description: "Close the picker"),
     Entry(combo: "Ctrl+F", description: "Focus the search field"),
     Entry(combo: "Ctrl+P", description: "Pin or unpin the highlighted item"),
+    Entry(combo: "Ctrl+S", description: "Save the highlighted item as a snippet"),
     Entry(
       combo: "Delete",
       description:
         "Delete the highlighted item (when the search box is empty; also works via Ctrl+Delete)"
     ),
+    Entry(combo: "Ctrl+N", description: "New snippet (Snippets tab)"),
+    Entry(combo: "Ctrl+Shift+E", description: "Edit the highlighted snippet (Snippets tab)"),
     Entry(combo: "Ctrl+1 / 2 / 3", description: "Switch to History / Pinned / Snippets"),
+    Entry(combo: "Ctrl+,", description: "Open Settings"),
   ]
 }

@@ -109,8 +109,80 @@ struct LinuxPasteboardTests {
     connection.payloads["text/plain;charset=utf-8"] = Data("hi".utf8)
     let pasteboard = LinuxPasteboard(connection: connection)
 
-    #expect(pasteboard.data(forType: .rtf) == Data("<b>hi</b>".utf8))
+    let bundle = LinuxRichTextBundle.decode(pasteboard.data(forType: .rtf)!)
+    #expect(
+      bundle
+        == LinuxRichTextBundle(representations: [
+          .init(mimeType: "text/html", data: Data("<b>hi</b>".utf8))
+        ]))
     #expect(pasteboard.string(forType: .string) == "hi")
+  }
+
+  @Test(
+    "data(forType: .rtf) bundles EVERY rich-text representation offered, not just the winner — the fidelity fix"
+  )
+  func richTextBundlesEveryOfferedRepresentation() {
+    let connection = FakeX11SelectionConnecting()
+    connection.targets = ["text/html", "text/rtf", "application/rtf"]
+    connection.payloads["text/html"] = Data("<b>hi</b>".utf8)
+    connection.payloads["text/rtf"] = Data("{\\rtf1 hi}".utf8)
+    connection.payloads["application/rtf"] = Data("{\\rtf1 hi-app}".utf8)
+    let pasteboard = LinuxPasteboard(connection: connection)
+
+    let bundle = LinuxRichTextBundle.decode(pasteboard.data(forType: .rtf)!)
+    // Priority order (LinuxClipboardConstants.richTextMimePriority):
+    // text/html, application/rtf, text/rtf — ALL THREE preserved, none
+    // discarded, each tagged with its own real MIME type.
+    #expect(
+      bundle
+        == LinuxRichTextBundle(representations: [
+          .init(mimeType: "text/html", data: Data("<b>hi</b>".utf8)),
+          .init(mimeType: "application/rtf", data: Data("{\\rtf1 hi-app}".utf8)),
+          .init(mimeType: "text/rtf", data: Data("{\\rtf1 hi}".utf8)),
+        ]))
+  }
+
+  @Test("A rich-text-only source (no text/html at all) is still captured, tagged as text/rtf")
+  func richTextOnlySourceCapturedWithRealMimeType() {
+    let connection = FakeX11SelectionConnecting()
+    connection.targets = ["text/rtf"]
+    connection.payloads["text/rtf"] = Data("{\\rtf1 hi}".utf8)
+    let pasteboard = LinuxPasteboard(connection: connection)
+
+    let bundle = LinuxRichTextBundle.decode(pasteboard.data(forType: .rtf)!)
+    #expect(
+      bundle
+        == LinuxRichTextBundle(representations: [
+          .init(mimeType: "text/rtf", data: Data("{\\rtf1 hi}".utf8))
+        ]))
+  }
+
+  @Test(
+    "A rich-text target advertised but whose payload conversion fails is skipped, not fatal to the whole capture"
+  )
+  func richTextSkipsFailedConversionButKeepsOthers() {
+    let connection = FakeX11SelectionConnecting()
+    connection.targets = ["text/html", "text/rtf"]
+    // No payload registered for text/html — simulates a refused/failed
+    // XConvertSelection for the highest-priority candidate.
+    connection.payloads["text/rtf"] = Data("{\\rtf1 hi}".utf8)
+    let pasteboard = LinuxPasteboard(connection: connection)
+
+    let bundle = LinuxRichTextBundle.decode(pasteboard.data(forType: .rtf)!)
+    #expect(
+      bundle
+        == LinuxRichTextBundle(representations: [
+          .init(mimeType: "text/rtf", data: Data("{\\rtf1 hi}".utf8))
+        ]))
+  }
+
+  @Test("Returns nil when every advertised rich-text target's payload conversion fails")
+  func richTextReturnsNilWhenAllConversionsFail() {
+    let connection = FakeX11SelectionConnecting()
+    connection.targets = ["text/html", "text/rtf"]
+    let pasteboard = LinuxPasteboard(connection: connection)
+
+    #expect(pasteboard.data(forType: .rtf) == nil)
   }
 
   @Test("data(forType: .png) returns the winning image representation's raw bytes")

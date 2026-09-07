@@ -32,7 +32,13 @@
 //                    GtkPopover manages its own floating surface)
 //        └─ previewBox (vertical)
 //             ├─ previewImage
-//             └─ previewLabel
+//             ├─ previewLabel               (hidden for .image — see
+//             │                              PickerWindow+Preview.swift)
+//             ├─ previewFileSizeLabel        (.file only)
+//             ├─ previewFilePathLabel        (.file only)
+//             ├─ previewOCRSeparator         (.image w/ recognized text only)
+//             ├─ previewOCRHeaderLabel       ("Recognized Text", ditto)
+//             └─ previewOCRTextLabel         (ditto)
 //   contextMenuPopover (Linux parity pass, 2026-09-06 — also parented to
 //                    listBox, same reasoning as previewPopover; its content
 //                    box is built fresh per right-click, not built once
@@ -132,9 +138,26 @@ extension PickerWindow {
     gtk_widget_set_parent(contextMenuPopover, listBox)
   }
 
+  /// Approximates macOS `ItemPreview.textMaxWidth`/`ocrTextMaxHeight`'s 380pt
+  /// text column (`ItemPreview.swift`) — GTK labels wrap by character count,
+  /// not points, so this is a deliberate approximation, not a pixel match.
+  /// Applied to every wrapped preview text label (`previewLabel`,
+  /// `previewOCRTextLabel`, `previewFilePathLabel`) so the popover's text
+  /// column stays a consistent, readable width instead of growing to fit
+  /// whatever the longest line happens to be.
+  static let previewTextMaxWidthChars: Int32 = 46
+  /// Mirrors macOS `FilePreview`'s `.lineLimit(4)` on the file path line.
+  static let previewFilePathMaxLines: Int32 = 4
+
   /// The hover-preview popover's content — built once and reused for every
   /// row (see `PickerWindow+Preview.swift`, which only ever mutates this
-  /// content's visibility/markup/pixbuf, never rebuilds it).
+  /// content's visibility/markup/pixbuf, never rebuilds it). Layout mirrors
+  /// macOS `ItemPreview.content`: an `.image` shows the thumbnail plus an
+  /// optional recognized-text section below it (T-OCR2 parity); `.file`
+  /// shows a filename headline plus size/path metadata rows; plain
+  /// text/richText/link shows just the wrapped text — see
+  /// `PickerWindow+Preview.swift`'s `updatePreviewPopover(targetID:)` for
+  /// which of these is actually visible for a given item.
   func buildPreviewPopover() {
     gtk_widget_set_parent(previewPopover, listBox)
     gtk_popover_set_autohide(previewPopover, 0)
@@ -142,8 +165,42 @@ extension PickerWindow {
     let previewBox: OpaquePointer = gtk_box_new(GTK_ORIENTATION_VERTICAL, PickerWindow.outerSpacing)
     gtk_widget_set_size_request(previewImage, ThumbnailBounds.previewMaxPixelSize.gtkInt32, -1)
     gtk_box_append(previewBox, previewImage)
+
     gtk_label_set_wrap(previewLabel, 1)
+    gtk_label_set_xalign(previewLabel, 0)
+    gtk_label_set_max_width_chars(previewLabel, PickerWindow.previewTextMaxWidthChars)
     gtk_box_append(previewBox, previewLabel)
+
+    // `.file` metadata — secondary-styled (`dim-label`, matching
+    // `emptyStateLabel`'s own use of that stock GTK class elsewhere in this
+    // file) rows below the filename headline (`previewLabel`) above.
+    gtk_widget_add_css_class(previewFileSizeLabel, "dim-label")
+    gtk_widget_add_css_class(previewFileSizeLabel, "picker-row-meta")
+    gtk_label_set_xalign(previewFileSizeLabel, 0)
+    gtk_box_append(previewBox, previewFileSizeLabel)
+
+    gtk_widget_add_css_class(previewFilePathLabel, "dim-label")
+    gtk_widget_add_css_class(previewFilePathLabel, "picker-row-meta")
+    gtk_label_set_xalign(previewFilePathLabel, 0)
+    gtk_label_set_wrap(previewFilePathLabel, 1)
+    gtk_label_set_max_width_chars(previewFilePathLabel, PickerWindow.previewTextMaxWidthChars)
+    gtk_label_set_lines(previewFilePathLabel, PickerWindow.previewFilePathMaxLines)
+    gtk_label_set_ellipsize(previewFilePathLabel, PANGO_ELLIPSIZE_MIDDLE)
+    gtk_box_append(previewBox, previewFilePathLabel)
+
+    // Recognized-text section (T-OCR2 parity) — separator + caption + the
+    // same wrap/width treatment as `previewLabel` above.
+    gtk_box_append(previewBox, previewOCRSeparator)
+    gtk_widget_add_css_class(previewOCRHeaderLabel, "dim-label")
+    gtk_widget_add_css_class(previewOCRHeaderLabel, "picker-row-meta")
+    gtk_label_set_xalign(previewOCRHeaderLabel, 0)
+    gtk_box_append(previewBox, previewOCRHeaderLabel)
+
+    gtk_label_set_wrap(previewOCRTextLabel, 1)
+    gtk_label_set_xalign(previewOCRTextLabel, 0)
+    gtk_label_set_max_width_chars(previewOCRTextLabel, PickerWindow.previewTextMaxWidthChars)
+    gtk_box_append(previewBox, previewOCRTextLabel)
+
     gtk_popover_set_child(previewPopover, previewBox)
   }
 }

@@ -299,40 +299,49 @@ struct ItemKindCapabilityTests {
   }
 #else
   // T-BUG2 (parity-audit bug #2): the Linux equivalent of the macOS suite
-  // above — same shape/coverage, but asserting Linux's real Ctrl-based
-  // chords and confirming the nonexistent-on-Linux hints (save/new-snippet/
-  // replace-snippet/settings) never appear at all, on any tab or capability
-  // state (unlike macOS's `⌘S save`, which is only CONDITIONALLY shown —
-  // Linux never shows it, full stop, since there is no bound chord for it).
+  // above — same shape/coverage, asserting Linux's real Ctrl-based chords.
+  //
+  // Keyboard-parity pass (routed follow-up): `KeyEventMapping.swift` now
+  // binds Ctrl+S/Ctrl+N/Ctrl+Shift+E/Ctrl+, (see that file's top doc
+  // comment), so `save`/`newSnippet`/`replaceSnippet`/`settings` are no
+  // longer permanently absent on Linux the way T-BUG2 originally required —
+  // this suite is rewritten to mirror the macOS matrix's per-tab/capability
+  // presence logic (`⌘S save` -> `Ctrl+S save`, etc.) instead of asserting
+  // universal absence. What's still asserted, unconditionally: Mac glyphs
+  // (`⌘`/`⌥`) never appear, since Linux never renders them regardless of
+  // which chords are bound.
   @Suite("ShortcutHints.text matrix (Linux)")
   struct LinuxShortcutHintsMatrixTests {
 
     private static let capabilityCases:
       [(name: String, capabilities: HighlightedItemCapabilities)] =
         [
-          ("text/link", HighlightedItemCapabilities(item: makeClipItem(kind: .text))),
+          ("text/link (Ctrl+S save)", HighlightedItemCapabilities(item: makeClipItem(kind: .text))),
           (
-            "richText (Alt+Enter plain)",
+            "richText (Alt+Enter plain, no save)",
             HighlightedItemCapabilities(item: makeClipItem(kind: .richText))
           ),
           (
-            "image w/o OCR",
+            "image w/o OCR (no Alt+Enter, no save)",
             HighlightedItemCapabilities(item: makeClipItem(kind: .image, ocrText: nil))
           ),
           (
-            "image w/ OCR (Alt+Enter OCR text)",
+            "image w/ OCR (Alt+Enter OCR text, no save)",
             HighlightedItemCapabilities(item: makeClipItem(kind: .image, ocrText: "text"))
           ),
           (
-            "file",
+            "file (no Alt+Enter, no save)",
             HighlightedItemCapabilities(
               item: makeClipItem(kind: .file, fileReference: "file:///tmp/x"))
           ),
-          ("nil / nothing highlighted", HighlightedItemCapabilities(item: nil)),
+          (
+            "nil / nothing highlighted (no Alt+Enter, no save)",
+            HighlightedItemCapabilities(item: nil)
+          ),
         ]
 
     @Test(
-      "Every tab × capability-state combination: Alt+Enter wording matches the capability; save/new/replace/settings never appear",
+      "Every tab × capability-state combination: Alt+Enter wording and Ctrl+S save presence match the capability; no Mac glyphs ever",
       arguments: PickerTab.allCases, Self.capabilityCases)
     func matchesCapability(
       tab: PickerTab, testCase: (name: String, capabilities: HighlightedItemCapabilities)
@@ -350,17 +359,32 @@ struct ItemKindCapabilityTests {
         #expect(!hints.contains("Alt+Enter"))
       }
 
-      // T-BUG2's core assertion: none of these ever appear, on ANY tab or
-      // capability state — `KeyEventMapping.swift` binds none of them.
-      #expect(!hints.contains("save"))
-      #expect(!hints.contains("new"))
-      #expect(!hints.contains("replace"))
-      #expect(!hints.contains("settings"))
+      switch tab {
+      case .history, .pinned:
+        if testCase.capabilities.supportsSaveAsSnippet {
+          #expect(hints.contains("Ctrl+S save"))
+        } else {
+          #expect(
+            !hints.contains("Ctrl+S save"), "no-supporting-kind row must not advertise Ctrl+S save"
+          )
+        }
+        #expect(!hints.contains("Ctrl+N new"))
+        #expect(!hints.contains("Ctrl+Shift+E replace"))
+      case .snippets:
+        // Ctrl+S isn't part of the Snippets group at all, regardless of
+        // `supportsSaveAsSnippet` — mirrors macOS's identical Snippets-tab
+        // exclusion (see `ShortcutHints.swift`'s top doc comment).
+        #expect(!hints.contains("Ctrl+S save"))
+        #expect(hints.contains("Ctrl+N new"))
+        #expect(hints.contains("Ctrl+Shift+E replace"))
+      }
+
+      // Never Mac glyphs, regardless of which chords are bound.
       #expect(!hints.contains("⌘"))
       #expect(!hints.contains("⌥"))
     }
 
-    @Test("Every combination uses real Ctrl-based chords for search/move/tabs")
+    @Test("Every combination uses real Ctrl-based chords, ends with tabs · settings")
     func everyCombinationUsesRealChords() {
       for tab in PickerTab.allCases {
         for testCase in Self.capabilityCases {
@@ -368,28 +392,40 @@ struct ItemKindCapabilityTests {
           #expect(hints.contains("↑/↓ move"))
           #expect(hints.contains("Enter paste"))
           #expect(hints.contains("Ctrl+F search"))
-          #expect(hints.hasSuffix("Ctrl+1/2/3 tabs"))
+          #expect(hints.hasSuffix("Ctrl+1/2/3 tabs · Ctrl+, settings"))
         }
       }
     }
 
-    @Test("History tab, exact hint string for text/link (no Alt+Enter, real Ctrl chords, no save)")
+    @Test("`Ctrl+, settings` appears exactly once, every tab/capability combination")
+    func everyCombinationContainsSettingsHint() {
+      for tab in PickerTab.allCases {
+        for testCase in Self.capabilityCases {
+          let hints = ShortcutHints.text(for: tab, capabilities: testCase.capabilities)
+          #expect(hints.contains("Ctrl+, settings"))
+        }
+      }
+    }
+
+    @Test(
+      "History tab, exact hint string for text/link (no Alt+Enter, Ctrl+S save shown, settings appended)"
+    )
     func historyTextExact() {
       #expect(
         ShortcutHints.text(
           for: .history,
           capabilities: HighlightedItemCapabilities(item: makeClipItem(kind: .text)))
-          == "↑/↓ move · Enter paste · Ctrl+F search · Ctrl+P pin · Delete delete · Ctrl+1/2/3 tabs"
+          == "↑/↓ move · Enter paste · Ctrl+F search · Ctrl+P pin · Ctrl+S save · Delete delete · Ctrl+1/2/3 tabs · Ctrl+, settings"
       )
     }
 
-    @Test("History tab, exact hint string for .richText (Alt+Enter plain)")
+    @Test("History tab, exact hint string for .richText (Alt+Enter plain, Ctrl+S save hidden)")
     func historyRichTextExact() {
       #expect(
         ShortcutHints.text(
           for: .history,
           capabilities: HighlightedItemCapabilities(item: makeClipItem(kind: .richText)))
-          == "↑/↓ move · Enter paste · Alt+Enter plain · Ctrl+F search · Ctrl+P pin · Delete delete · Ctrl+1/2/3 tabs"
+          == "↑/↓ move · Enter paste · Alt+Enter plain · Ctrl+F search · Ctrl+P pin · Delete delete · Ctrl+1/2/3 tabs · Ctrl+, settings"
       )
     }
 
@@ -400,7 +436,7 @@ struct ItemKindCapabilityTests {
           for: .history,
           capabilities: HighlightedItemCapabilities(
             item: makeClipItem(kind: .image, ocrText: "text")))
-          == "↑/↓ move · Enter paste · Alt+Enter OCR text · Ctrl+F search · Ctrl+P pin · Delete delete · Ctrl+1/2/3 tabs"
+          == "↑/↓ move · Enter paste · Alt+Enter OCR text · Ctrl+F search · Ctrl+P pin · Delete delete · Ctrl+1/2/3 tabs · Ctrl+, settings"
       )
     }
 
@@ -413,11 +449,11 @@ struct ItemKindCapabilityTests {
       }
     }
 
-    @Test("Snippets tab, exact hint string — no new/replace group, since neither is bound on Linux")
+    @Test("Snippets tab, exact hint string (no Alt+Enter, no Ctrl+S, Ctrl+N/Ctrl+Shift+E group)")
     func snippetsExact() {
       #expect(
         ShortcutHints.text(for: .snippets, capabilities: HighlightedItemCapabilities(item: nil))
-          == "↑/↓ move · Enter paste · Ctrl+F search · Delete delete · Ctrl+1/2/3 tabs"
+          == "↑/↓ move · Enter paste · Ctrl+F search · Ctrl+N new · Ctrl+Shift+E replace · Delete delete · Ctrl+1/2/3 tabs · Ctrl+, settings"
       )
     }
   }

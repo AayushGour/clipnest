@@ -144,6 +144,20 @@ public final class PickerWindow: @unchecked Sendable {
   let previewPopover: OpaquePointer
   let previewImage: OpaquePointer
   let previewLabel: OpaquePointer
+  /// `.file`-only metadata rows, below `previewLabel`'s filename headline —
+  /// mirrors macOS `ItemPreview.FilePreview`'s size + abbreviated-path
+  /// lines. Hidden for every other kind — see `PickerWindow+Preview.swift`'s
+  /// `updateFilePreviewMetadata(isFile:item:path:)`.
+  let previewFileSizeLabel: OpaquePointer
+  let previewFilePathLabel: OpaquePointer
+  /// The recognized-text section shown BELOW an `.image` preview when
+  /// `ClipItem.hasRecognizedText` — mirrors macOS `ItemPreview.imagePreview`
+  /// (T-OCR2 parity). All three hidden together whenever the hovered item
+  /// has no recognized text — see `PickerWindow+Preview.swift`'s
+  /// `updateOCRSection(content:)`.
+  let previewOCRSeparator: OpaquePointer
+  let previewOCRHeaderLabel: OpaquePointer
+  let previewOCRTextLabel: OpaquePointer
   /// Linux parity pass (routed follow-up, 2026-09-06): the row right-click
   /// context menu — built once, parented to `listBox` in `buildLayout()`
   /// (mirrors `previewPopover`'s lifetime exactly), with its CONTENT
@@ -279,6 +293,11 @@ public final class PickerWindow: @unchecked Sendable {
     previewPopover = gtk_popover_new()
     previewImage = gtk_image_new()
     previewLabel = gtk_label_new("")
+    previewFileSizeLabel = gtk_label_new("")
+    previewFilePathLabel = gtk_label_new("")
+    previewOCRSeparator = gtk_separator_new(GTK_ORIENTATION_HORIZONTAL)
+    previewOCRHeaderLabel = gtk_label_new("Recognized Text")
+    previewOCRTextLabel = gtk_label_new("")
     contextMenuPopover = gtk_popover_new()
     newSnippetButton = gtk_button_new_from_icon_name("list-add")
 

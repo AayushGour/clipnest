@@ -112,6 +112,19 @@
 // re-measurement against the width budget above is needed (that budget is
 // macOS-only in the first place; this file's Linux branch renders in
 // `ClipnestGTK`'s own window, not `PickerPanel`'s fixed-width one).
+//
+// Keyboard-parity pass (routed follow-up): closes the last real gap between
+// the two platforms' footers — `save`/`newSnippet`/`replaceSnippet`/
+// `settings` were `nil` on Linux because `KeyEventMapping.swift` had no
+// Ctrl+S/Ctrl+N/Ctrl+Shift+E/Ctrl+, binding at all (see `PickerKeyAction
+// .swift`'s top doc comment for the full inventory: each already had a
+// working `PickerViewModel` method reachable only by mouse, or — for
+// "settings" — only via the tray/D-Bus menu). Now that
+// `KeyEventMapping.action(keyval:state:)` binds all four, this vocabulary
+// names them, in the same terse "Ctrl+X action" style every other Linux
+// entry already uses (no spaces around `+`, matching `Ctrl+1/2/3`). As with
+// the Delete fix above, this file's Linux branch has no fixed-width budget
+// to re-measure against.
 import ClipnestCore
 import Foundation
 
@@ -244,9 +257,15 @@ extension ShortcutModifierVocabulary {
     /// identical to `LinuxShortcutDescriptions.all`'s combo strings for the
     /// chords it also lists (compacted, no spaces around "/", matching this
     /// footer's own terse style — e.g. `Ctrl+1/2/3` not `Ctrl+1 / 2 / 3`).
-    /// `save`/`newSnippet`/`replaceSnippet`/`settings` are `nil`: Linux has
-    /// no ⌘S/⌘N/⌥⌘E/⌘, equivalent bound at all, so this footer must not
-    /// advertise them (that was exactly the bug).
+    /// Keyboard-parity pass (routed follow-up): `save`/`newSnippet`/
+    /// `replaceSnippet`/`settings` used to be `nil` — Linux had no ⌘S/⌘N/
+    /// ⌥⌘E/⌘, equivalent bound at all, so this footer correctly didn't
+    /// advertise them (that was exactly the T-BUG2 bug this file's doc
+    /// comment above describes). `KeyEventMapping.swift` now binds all four
+    /// as Ctrl-chords (`Ctrl+S`/`Ctrl+N`/`Ctrl+Shift+E`/`Ctrl+,` — see that
+    /// file's top doc comment), so this vocabulary is updated to match —
+    /// the same "advertise only what's actually bound" rule that made them
+    /// `nil` before now requires naming them.
     ///
     /// `delete: "Delete delete"` (not "Ctrl+Delete delete"): `KeyEventMapping
     /// .action(keyval:state:)`'s `Keyval.delete` case now matches bare
@@ -269,12 +288,12 @@ extension ShortcutModifierVocabulary {
       altEnterOCRText: "Alt+Enter OCR text",
       search: "Ctrl+F search",
       pin: "Ctrl+P pin",
-      save: nil,
+      save: "Ctrl+S save",
       delete: "Delete delete",
-      newSnippet: nil,
-      replaceSnippet: nil,
+      newSnippet: "Ctrl+N new",
+      replaceSnippet: "Ctrl+Shift+E replace",
       tabs: "Ctrl+1/2/3 tabs",
-      settings: nil
+      settings: "Ctrl+, settings"
     )
   #endif
 }

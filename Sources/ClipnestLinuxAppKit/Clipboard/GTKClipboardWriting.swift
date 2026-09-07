@@ -33,25 +33,27 @@ import Foundation
 /// only (no display in CI, same as before) — proven instead via a Docker/
 /// `xclip` session (see this task's PR/decision log), not `swift test`.
 ///
-/// **Rich text on Linux is HTML, not RTF, despite the `rtf:` parameter
-/// name** (that name is `PasteboardWriting`'s shared, macOS-shaped
-/// vocabulary — see that protocol's doc comment). `ClipnestPlatformLinux
-/// .LinuxPasteboard`'s capture path stores whatever bytes won
-/// `LinuxClipboardConstants.richTextMimePriority` under the SAME "rtf"
-/// slot regardless of which real MIME type they came from — `text/html`
-/// wins that priority list in the overwhelming majority of real captures,
-/// so `writeRichText` publishes `rtf` under `text/html` per this task's
-/// explicit directive ("offer text/html first... mirroring the capture-
-/// side priority"). In the rarer case a source offered `application/rtf`/
-/// `text/rtf` instead (both lower-priority than `text/html`, so only
-/// chosen when no `text/html` was available), those bytes would be
-/// mislabeled as `text/html` here — `ClipItem`/`PasteboardReader.Classification`
-/// don't currently record WHICH MIME type actually won at capture time, so
-/// there is no way for this write path to tell the difference. Flagged as
-/// a known limitation, not a silent gap; fixing it needs a capture-side
-/// model change (recording the winning MIME type alongside the blob) that
-/// is out of this task's scope (`Sources/ClipnestLinuxAppKit/Clipboard/**`
-/// only, not `ClipnestCore`/`ClipnestPlatformLinux`).
+/// **Rich text on Linux is HTML-and-more, not RTF, despite the `rtf:`
+/// parameter name** (that name is `PasteboardWriting`'s shared,
+/// macOS-shaped vocabulary — see that protocol's doc comment). FIXED (Linux
+/// rich-text fidelity task): `rtf` is no longer assumed to be flat
+/// `text/html` bytes. `ClipnestPlatformLinux.LinuxPasteboard`'s capture
+/// path now fetches EVERY rich-text representation a source app offers
+/// (verified via real `xclip -t TARGETS`: LibreOffice Writer routinely
+/// offers both `text/html` and `text/rtf` for one copy, and the old
+/// single-representation capture silently discarded whichever wasn't
+/// `text/html`) and packs them into a `LinuxRichTextBundle` — see that
+/// type's doc comment for the wire format. `writeRichText` decodes that
+/// bundle via `representationsToPublish(for:)` and republishes EVERY
+/// representation it contains under its OWN real MIME type (never
+/// relabeled), so a paste target can pick whichever it actually supports —
+/// exactly the "advertise every format you can supply" fidelity fix this
+/// task's directive calls for. A `rtf` blob that ISN'T a valid bundle
+/// (every item captured by a pre-fix Clipnest build — plain, unwrapped
+/// `text/html` bytes) still publishes correctly: `representationsToPublish`
+/// falls back to treating it as flat `text/html`, identical to this file's
+/// pre-fix behavior, so existing history keeps pasting exactly as before —
+/// no migration needed.
 ///
 /// **A separate, out-of-scope gap still blocks IMAGE paste end-to-end
 /// through the real app, even though `writeData` below is real:**
@@ -98,34 +100,54 @@ public struct GTKClipboardWriting: PasteboardWriting {
     string.withCString { gdk_clipboard_set_text(clipboard, $0) }
   }
 
-  /// Publishes `rtf` as `text/html` and `plain` as `text/plain` in a
-  /// single union provider, so a paste target picks whichever
-  /// representation it supports — mirroring the capture-side priority
-  /// (`text/html` first, per `LinuxClipboardConstants.richTextMimePriority`).
-  /// See this type's top doc comment for why `rtf`'s bytes are treated as
-  /// HTML on this platform despite the shared protocol's macOS-shaped
-  /// parameter name.
+  /// Publishes every real rich-text representation `rtf` bundles (see
+  /// `representationsToPublish(for:)`) PLUS `plain` as `text/plain`, all in
+  /// a single union provider, so a paste target picks whichever
+  /// representation it actually supports. See this type's top doc comment
+  /// for why `rtf`'s bytes are no longer assumed to be flat HTML.
   public func writeRichText(rtf: Data, plain: String) {
     guard let clipboard = defaultClipboard() else { return }
 
-    let htmlBytes = gBytesNew(rtf)
-    let htmlProvider = gdkContentProviderNewForBytes(
-      mimeType: Self.richTextMimeType, bytes: htmlBytes)
-    gBytesUnref(htmlBytes)
+    var providers: [OpaquePointer] = []
+    for representation in Self.representationsToPublish(for: rtf) {
+      let bytes = gBytesNew(representation.data)
+      providers.append(
+        gdkContentProviderNewForBytes(mimeType: representation.mimeType, bytes: bytes))
+      gBytesUnref(bytes)
+    }
 
     let plainBytes = gBytesNew(Data(plain.utf8))
-    let plainProvider = gdkContentProviderNewForBytes(
-      mimeType: Self.plainTextMimeType, bytes: plainBytes)
+    providers.append(
+      gdkContentProviderNewForBytes(mimeType: Self.plainTextMimeType, bytes: plainBytes))
     gBytesUnref(plainBytes)
 
-    // `gdkContentProviderNewUnion` CONSUMES both references above — see
-    // `GdkContentProviderInterop.swift`'s top doc comment; neither
-    // `htmlProvider` nor `plainProvider` is unref'd individually.
-    let union = gdkContentProviderNewUnion([htmlProvider, plainProvider])
+    // `gdkContentProviderNewUnion` CONSUMES every reference in `providers`
+    // — see `GdkContentProviderInterop.swift`'s top doc comment; none of
+    // them is unref'd individually.
+    let union = gdkContentProviderNewUnion(providers)
     if !gdkClipboardSetContent(clipboard, union) {
       Self.logger.error("gdk_clipboard_set_content failed for rich text")
     }
     gObjectUnref(union)
+  }
+
+  /// Every (mimeType, data) representation `writeRichText` should publish
+  /// for `rtf`, in priority order — pure, no GDK, so this decision is
+  /// unit-testable without a live display (only the actual
+  /// `gdk_content_provider_*` calls in `writeRichText` itself need a real
+  /// `GdkClipboard`, per this type's "manual-verify only" top doc comment).
+  ///
+  /// Decodes `rtf` as a `LinuxRichTextBundle` and republishes every
+  /// representation it contains under its own real MIME type. Falls back
+  /// to treating `rtf` as flat, unwrapped `text/html` bytes when it isn't
+  /// a valid (non-empty) bundle — the exact shape every blob captured
+  /// before this fix has, so existing history items keep pasting exactly
+  /// as they always did.
+  static func representationsToPublish(for rtf: Data) -> [LinuxRichTextBundle.Representation] {
+    if let bundle = LinuxRichTextBundle.decode(rtf), !bundle.representations.isEmpty {
+      return bundle.representations
+    }
+    return [LinuxRichTextBundle.Representation(mimeType: richTextMimeType, data: rtf)]
   }
 
   /// Publishes `data` as a single image MIME type — see

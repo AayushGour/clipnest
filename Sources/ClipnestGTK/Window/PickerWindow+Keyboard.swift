@@ -77,30 +77,65 @@ extension PickerWindow {
     // opposite. So the fix belongs here, not in `KeyEventMapping` (which stays
     // a pure keyval->action mapping with no view state) — see that type's own
     // doc comment.
-    if action.isTextEditingKeyWhenTypingInSearch, isTypingInSearchField {
+    //
+    // Regression-coverage pass (routed follow-up, an independent reviewer
+    // rejection): this decision used to live entirely inside a private
+    // `isTypingInSearchField` computed var, which read live GTK state
+    // directly and so had NO automated coverage at all — the P0 fix above
+    // shipped verified by exactly one manual run on Ubuntu. The decision
+    // itself is now `Self.shouldPropagateToSearchEntry(action:
+    // focusIsInSearchEntry:searchText:)` (below), a pure function taking
+    // plain values; this call site is the only place that still reads the
+    // two live GTK values (`gtkFocusIsWithin`, the search entry's current
+    // text) and hands them in.
+    if Self.shouldPropagateToSearchEntry(
+      action: action,
+      focusIsInSearchEntry: gtkFocusIsWithin(window: window, widget: searchEntry),
+      searchText: String(cString: gtk_editable_get_text(searchEntry))
+    ) {
       return 0  // GDK_EVENT_PROPAGATE — let the focused GtkEntry handle it
     }
     dispatch(action)
     return 1
   }
 
-  /// Whether the user is actively editing search text, so a text-editing key
-  /// belongs to the entry rather than to the picker.
+  /// Whether a mapped `PickerKeyAction` should be propagated to the focused
+  /// search entry (`GDK_EVENT_PROPAGATE`) instead of being acted on by the
+  /// picker — the pure decision behind `handleKeyPressed`'s P0 data-loss fix
+  /// (see that method's doc comment), extracted so it's unit-testable
+  /// without a live GTK widget tree/display. `static`, not an instance
+  /// method: it touches no stored property of this class, only its three
+  /// plain-value parameters — same reason `KeyEventMapping.action(keyval:
+  /// state:)` is a `static func` on its own type.
   ///
-  /// Requires BOTH focus and non-empty text, and the second half is not
-  /// redundant: `willShow()` focuses the search entry every time the picker
-  /// opens, so a focus-only check would mean bare Delete never reached the list
-  /// at all — measured, after a first attempt at this fix did exactly that.
+  /// Requires BOTH `focusIsInSearchEntry` AND non-empty `searchText`, and
+  /// the second half is not redundant: `willShow()` focuses the search entry
+  /// every time the picker opens, so a focus-only check would mean bare
+  /// Delete never reached the list at all — measured, after a first attempt
+  /// at this fix did exactly that (see `PickerKeyActionTests`/this method's
+  /// own test suite for the pinned matrix, including that exact case).
   ///
   /// With an empty search box there is nothing for Delete to edit, so the
   /// picker's own meaning (delete the highlighted item) is the only sensible
-  /// one; once the user has typed something, Delete is forward-delete and the
-  /// entry owns it. That split matches what a user intends in each state and
-  /// keeps macOS parity for the common case of opening the picker and pressing
-  /// Delete straight away.
-  private var isTypingInSearchField: Bool {
-    guard gtkFocusIsWithin(window: window, widget: searchEntry) else { return false }
-    return !String(cString: gtk_editable_get_text(searchEntry)).isEmpty
+  /// one; once the user has typed something, Delete is forward-delete and
+  /// the entry owns it. That split matches what a user intends in each
+  /// state and keeps macOS parity for the common case of opening the picker
+  /// and pressing Delete straight away. `action.isTextEditingKeyWhenTypingInSearch`
+  /// (`PickerKeyAction.swift`) is checked first — only `.delete` ever
+  /// qualifies today, so every other action (arrows, Ctrl-chords including
+  /// the four keyboard-parity additions, commit, dismiss) always returns
+  /// `false` here regardless of focus/text, i.e. the picker always acts on
+  /// them even while the user is typing a search — deliberate, matching
+  /// macOS (Cmd-chords/arrow-key navigation both keep working while a
+  /// SwiftUI `TextField` has focus there too).
+  static func shouldPropagateToSearchEntry(
+    action: PickerKeyAction,
+    focusIsInSearchEntry: Bool,
+    searchText: String
+  ) -> Bool {
+    guard action.isTextEditingKeyWhenTypingInSearch else { return false }
+    guard focusIsInSearchEntry else { return false }
+    return !searchText.isEmpty
   }
 
   /// Dispatches one mapped `PickerKeyAction` — see `PickerKeyAction.swift`'s
@@ -125,6 +160,58 @@ extension PickerWindow {
     case .switchTab(let index):
       guard tabButtons.indices.contains(index.rawValue - 1) else { return }
       gtk_toggle_button_set_active(tabButtons[index.rawValue - 1], 1)
+    case .saveAsSnippet:
+      // Mirrors macOS's ⌘S key handler exactly: no tab/kind gate here —
+      // `saveHighlightedAsSnippet()` already no-ops on the Snippets tab and
+      // for a highlighted row whose kind doesn't support it (see that
+      // method's own doc comment).
+      MainActor.assumeIsolated { viewModel.saveHighlightedAsSnippet() }
+    case .newSnippet:
+      // Mirrors macOS's ⌘N key handler: `presentCreateSnippetForm()` itself
+      // has no tab guard (unlike `saveHighlightedAsSnippet()` above), so the
+      // Snippets-tab-only gate lives here, matching `PickerView.handle(_:)`'s
+      // `guard viewModel.activeTab == .snippets else { return .ignored }`.
+      MainActor.assumeIsolated {
+        guard viewModel.activeTab == .snippets else { return }
+        viewModel.presentCreateSnippetForm()
+      }
+    case .replaceSnippet:
+      // Opens the edit form for the highlighted snippet — the same
+      // `presentEditSnippetForm(_:)` a Snippets-tab row's "Edit" hover
+      // button/context-menu item already calls
+      // (`PickerWindow+RowActions.swift`). Unlike macOS, this has no global
+      // ⌥⌘E analogue to defer to: macOS's ⌥⌘E is `SnippetExpander`'s
+      // system-wide "replace the OS-level text selection with a snippet's
+      // body" hotkey, registered outside the picker entirely
+      // (`HotkeyManager`/`AppEnvironment.swift`) — it does not open this
+      // edit form and has no notion of "the highlighted row." `PickerView`'s
+      // own key handler has no ⌥⌘E case at all. `presentEditSnippetForm(_:)`
+      // takes a concrete `Snippet`, and `PickerViewModel.highlightedSnippet`
+      // is `private` (not reachable from this module) — so the lookup below
+      // mirrors the exact `snippetRows.first { $0.id == id }` pattern
+      // `PickerView.swift`'s own `.onChange(of: previewTargetID)` already
+      // uses against the same public `snippetRows`/`selectedSnippetID`,
+      // rather than adding a new `PickerViewModel` method for this one
+      // dispatch site. A no-op off the Snippets tab or with nothing
+      // highlighted, mirroring `saveHighlightedAsSnippet()`/
+      // `deleteHighlighted()`'s own "guard ... else return" shape for an
+      // absent highlighted row.
+      MainActor.assumeIsolated {
+        guard viewModel.activeTab == .snippets,
+          let id = viewModel.selectedSnippetID,
+          let snippet = viewModel.snippetRows.first(where: { $0.id == id })
+        else { return }
+        viewModel.presentEditSnippetForm(snippet)
+      }
+    case .openSettings:
+      // Mirrors macOS's ⌘, (`PickerPanel.onCommandComma` ->
+      // `viewModel.openSettingsFromPicker()`): dismisses the picker, then
+      // calls `viewModel.openSettings` — wired, on Linux, by the composition
+      // root (`LinuxAppEnvironment.init`) to `self.openSettings()` (the same
+      // method the tray/D-Bus "Settings…" entry already calls), exactly as
+      // `PickerView.swift`'s `.onAppear` wires it on macOS to
+      // `openSettings()` + `SettingsFocusCoordinator.focusAfterOpening()`.
+      MainActor.assumeIsolated { viewModel.openSettingsFromPicker() }
     }
   }
 
