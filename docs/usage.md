@@ -1,5 +1,5 @@
 ---
-layout: default
+layout: article
 title: Getting Started with Clipnest — Usage Guide
 description: Learn Clipnest's hotkeys, search, pinning, and snippet expansion — get productive with your Mac clipboard manager in minutes.
 permalink: /usage/
@@ -8,8 +8,27 @@ permalink: /usage/
 # Using Clipnest
 
 A guide for everyday use — install, permissions, clipboard history, snippets, and troubleshooting.
+{: .lead}
 
 > Looking for the developer/API reference instead? See [`docs/API.md`](https://github.com/AayushGour/clipnest/blob/main/docs/API.md) on GitHub.
+
+<nav class="box-grid" aria-label="On this page" markdown="1">
+
+<p class="eyebrow">On this page</p>
+
+- [1. What is Clipnest](#1-what-is-clipnest)
+- [2. Requirements](#2-requirements)
+- [3. Install](#3-install)
+- [4. First launch & permissions](#4-first-launch--permissions)
+- [5. Clipboard history](#5-clipboard-history)
+- [6. Snippets](#6-snippets)
+- [7. Privacy & exclusions](#7-privacy--exclusions)
+- [8. Settings window](#8-settings-window)
+- [9. Keyboard shortcuts reference](#9-keyboard-shortcuts-reference)
+- [10. Troubleshooting](#10-troubleshooting)
+- [11. Uninstall](#11-uninstall)
+
+</nav>
 
 ## 1. What is Clipnest
 
@@ -22,20 +41,33 @@ Clipnest lives only in the menu bar (there's no Dock icon day-to-day, no window 
 - **macOS 14 (Sonoma) or later**
 - **Apple Silicon or Intel** — either Mac works
 - **Accessibility permission** (optional) — only needed so Clipnest can type your paste directly into the app you were using, and so snippet keyword-expansion can work. Everything else (capturing, browsing, and searching your history) works without it.
+{: .detail-list}
 
 ## 3. Install
 
 ### One-line install (recommended)
 
+<div class="install-card" markdown="1">
+
+<div class="terminal-bar"><span></span><span></span><span></span></div>
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash
 ```
 
+</div>
+
 Clipnest installs into your Applications folder and launches. To update later:
+
+<div class="install-card" markdown="1">
+
+<div class="terminal-bar"><span></span><span></span><span></span></div>
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/update.sh | bash
 ```
+
+</div>
 
 ### Download the `.dmg`
 
@@ -43,7 +75,11 @@ Grab the latest `.dmg` from the project's [Releases](https://github.com/AayushGo
 
 ### First launch — signing, honestly
 
+<div class="notice" markdown="1">
+
 Clipnest isn't distributed through the Mac App Store, and it isn't signed with a notarized Apple Developer ID by default — but the **recommended one-line install** above doesn't trigger any Gatekeeper dialog at all. Here's why: macOS's "unidentified developer" check is triggered by the `com.apple.quarantine` flag, and that flag is set by the *downloader* (Safari, Chrome, Mail, AirDrop…), not by the app itself — `curl` never sets it. In its place, `install.sh`/`update.sh` verify the downloaded `.dmg` against a SHA-256 checksum published alongside every release, and refuse to install anything unverifiable.
+
+</div>
 
 Every release is still signed — with one long-lived, self-signed certificate, not a throwaway ad-hoc identity — which is exactly what lets your Accessibility grant survive updates instead of needing to be re-added every release (see [First launch & permissions](#4-first-launch--permissions)).
 
@@ -136,7 +172,11 @@ Once an image has recognized text:
 - Right-click an image row → **Copy Recognized Text** copies just the text to your clipboard without dismissing the picker.
 - **Settings → History** also has a one-off **Recognize Text in Existing Images** button that runs recognition over images you captured before turning the toggle on — it doesn't run automatically on old items otherwise.
 
+<div class="notice" markdown="1">
+
 Turning this on is a real privacy trade-off: recognized text becomes indexed, searchable content stored alongside the image, so a screenshot of a password or anything else sensitive turns that into searchable text on disk — which is exactly why it's **off by default**. It never runs on anything Clipnest wouldn't have captured anyway — concealed/transient copies and excluded apps are filtered out before an item is even captured (see [Privacy & exclusions](#7-privacy--exclusions)), so recognition never sees them either.
+
+</div>
 
 ### How much history does Clipnest keep?
 
@@ -188,6 +228,7 @@ Clipnest is built to never see or store things it shouldn't:
 - **"Don't record this" copies are always honored.** Many apps (password managers among them) mark a copy as *concealed* or *transient* using a standard macOS clipboard convention — Clipnest checks for this marker first, before anything else, and it can never be bypassed.
 - **No content ever appears in logs.** If something goes wrong internally, Clipnest logs only metadata (an item's ID, an error type) — never the text, image, or file content involved.
 - **Nothing you copy, paste, or save as a snippet ever leaves your Mac.** There are no servers, no sync, no telemetry, and no account. The one narrow exception is a background check against GitHub's public Releases API, about once a day, to see whether a newer version exists — it's on by default, can be turned off in **Settings → General** (see [Settings window](#8-settings-window)), never downloads or installs anything on its own, and sends nothing about you or your clipboard, just an anonymous request for the latest release tag.
+{: .detail-list}
 
 ### Where your data lives on disk
 

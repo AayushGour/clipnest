@@ -1,0 +1,49 @@
+<!--
+  Purpose-built header (T91, ux-designer) — replaces minima's header.html,
+  which rendered every site.pages title verbatim as nav text (e.g. the full
+  "Clipnest vs Maccy, Deck & macOS Tahoe — Comparison" as a single nav link).
+  Nav labels here are short, hand-picked words that already appear verbatim
+  elsewhere on the site as this page's own name (e.g. "Features", "FAQ",
+  "Privacy" are each used as exact link text in the existing, fact-checked
+  copy — see pages/index.md's "Learn more" list and pages/faq.md's
+  cross-links) — so this isn't new marketing copy, it's the site's own
+  established page identity, just used as nav microcopy instead of a full
+  <title>.
+
+  T93 (senior-dev): the standalone comparison page was removed and its nav
+  entry dropped from nav_items below — replaced on the home page by a
+  small ticks-only comparison table (pages/index.md, "How it compares").
+
+  Mobile nav is a zero-JS checkbox toggle (no build step / no JS on this
+  static Pages site): the checkbox stays in the true tab order (visually
+  hidden, not display:none) so keyboard users can Tab to it and press Space
+  to open/close, and its focus ring is painted on the adjacent label via
+  the `:focus-visible + label` selector in style.scss.
+-->
+<header class="site-header" role="banner">
+  <div class="shell">
+    <a class="wordmark" href="{{ "/" | relative_url }}">
+      {%- include favicon-mark.html -%}
+      <span>Clipnest</span>
+    </a>
+
+    <nav class="nav" aria-label="Primary">
+      <input type="checkbox" id="nav-trigger" class="nav-toggle-input" aria-controls="site-nav-links" aria-label="Toggle menu" />
+      <label for="nav-trigger" class="nav-toggle-label">
+        <svg viewBox="0 0 18 15" aria-hidden="true"><path fill="currentColor" d="M18,1.484c0,0.82-0.665,1.484-1.484,1.484H1.484C0.665,2.969,0,2.304,0,1.484l0,0C0,0.665,0.665,0,1.484,0 h15.032C17.335,0,18,0.665,18,1.484L18,1.484z M18,7.516C18,8.335,17.335,9,16.516,9H1.484C0.665,9,0,8.335,0,7.516l0,0 c0-0.82,0.665-1.484,1.484-1.484h15.032C17.335,6.031,18,6.696,18,7.516L18,7.516z M18,13.516C18,14.335,17.335,15,16.516,15H1.484 C0.665,15,0,14.335,0,13.516l0,0c0-0.82,0.665-1.483,1.484-1.483h15.032C17.335,12.031,18,12.695,18,13.516L18,13.516z"/></svg>
+      </label>
+
+      <ul class="nav-links" id="site-nav-links">
+        {%- assign nav_items = "Features|/features/,Download|/download/,Usage|/usage/,Privacy|/privacy/,FAQ|/faq/" | split: "," -%}
+        {%- for item in nav_items -%}
+          {%- assign parts = item | split: "|" -%}
+          {%- assign label = parts[0] -%}
+          {%- assign path = parts[1] -%}
+          <li>
+            <a href="{{ path | relative_url }}"{% if page.url == path %} aria-current="page"{% endif %}>{{ label }}</a>
+          </li>
+        {%- endfor -%}
+      </ul>
+    </nav>
+  </div>
+</header>

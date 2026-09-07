@@ -10,7 +10,27 @@ description: >-
 url: "https://aayushgour.github.io"
 baseurl: "/clipnest"
 
-theme: minima
+# T91 (ux-designer): theme: minima dropped. minima is a *blog* theme
+# (post/page/home layouts, "posts" nav, an h-card footer) — its chrome
+# is why the site structurally read as a blog no matter what CSS was
+# layered on top (see T72's style.scss, which never even shipped: it
+# compiled correctly to /assets/css/style.css but no layout linked to
+# it, since minima's own default.html only links its own /assets/main.css
+# — the site's "horrible" look on production was that bug, not a
+# design failure). This site now ships its own _layouts/ (default,
+# home, page, article) and _includes/ (header, footer, favicon-mark),
+# with docs/assets/css/style.scss as the only stylesheet.
+#
+# Side effect, verified: dropping the theme also resolves the orphaned
+# _site/feed.xml devops flagged in T88 (.claude/logs/devops.md) — that
+# jekyll-feed output was being forced in by minima's own gemspec runtime
+# deps via Jekyll::PluginManager#require_theme_deps, a path that only
+# exists when `theme:` is set; jekyll-feed was never in this file's own
+# `plugins:` list below and github-pages' plugin whitelist governs
+# availability, not auto-require. jekyll-seo-tag and jekyll-sitemap keep
+# loading exactly as before: both ship inside the `github-pages` gem
+# (Gemfile) independent of any theme, and both stay explicitly listed
+# below.
 
 plugins:
   - jekyll-sitemap
