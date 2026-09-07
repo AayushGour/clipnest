@@ -1,96 +1,225 @@
 ---
 ---
 
-// Clipnest — lightweight brand pass over the minima theme (T72, ux-designer).
-// This is minima's documented override path: Jekyll compiles this .scss (the
-// front matter above makes that happen) and importing "minima" pulls in the
-// theme's compiled CSS first; everything below layers on top of it via the
-// normal cascade. Deliberately NOT a from-scratch design system rebuild —
-// scope is a color/type/spacing pass only, per T72.
+// =============================================================================
+// Clipnest marketing site — purpose-built stylesheet.
+// T91 (ux-designer) built the structure below; T92 (ux-designer) is a
+// PALETTE pass on top of it — no structural change, no copy change.
 //
-// Tokens are sampled directly from the existing, already-approved brand
-// artifacts, not invented here:
-//   - assets/clipnest-icons/README.md "Brand colors" table (card/nest/paper hexes)
-//   - assets/clipnest-icons/preview.html's own :root custom-property palette
-//     (--paper/--panel/--ink/--muted/--line/--accent, light + dark blocks)
-// This keeps the marketing site, the icon-set preview page, and the OG/social
-// PNGs (docs/assets/og-image.png, github-social-preview.png) visually one
-// family — Nielsen heuristic #4, consistency & standards.
-@import "minima";
+// T92 rationale — user verdict: "too brown," wants it lighter, built from
+// the logo's PAGE colors (assets/clipnest-icons/README.md "Brand colors"):
+//   purple card #C6BEDC · peach card #E7CEB0 · paper #F9F0E2 ·
+//   nest (brown) #9F7750 · text lines #C1B09C
+//
+// The hard constraint: #C6BEDC / #E7CEB0 are ~1.5-1.7:1 on a light page —
+// nowhere near AA. They can only ever be SURFACES (fills/washes/borders),
+// never text. So every text-bearing role (links, CTA fills, eyebrows, focus
+// rings) needed a *derived*, darkened, hue-matched variant instead — same
+// H in HSL, S nudged up a little (desaturated pastels go muddy/gray when
+// darkened straight), L walked down until contrast cleared 4.5:1. Math done
+// with the real WCAG relative-luminance formula (colorsys + a contrast()
+// function), not eyeballed — see the ratios inline below and the T92
+// handoff for the full derivation table.
+//
+// One finding that shaped the whole palette: peach and nest share almost
+// the same hue (~30-33°) — paper, peach, nest, and the card text-lines are
+// ALL clustered in that warm/amber band; only the purple card (H=256°) is a
+// genuinely different hue. That means *any* darkened peach variant still
+// reads as "brown" — darkening peach for text would just reintroduce the
+// exact problem this task exists to fix. So the design decision is:
+//   - purple carries EVERY text-bearing/interactive role (the one
+//     consistent "this is clickable" color — Nielsen #4, one pattern per
+//     thing), via a single derived --accent.
+//   - peach and (light) purple are SURFACES ONLY — the literal, unmodified
+//     logo hexes — used for hero backdrop wash, card tint washes, and a
+//     screenshot-frame treatment. Never under body text as a fill that
+//     itself carries text color obligations beyond "dark ink still reads
+//     fine on a light pastel," which it trivially does.
+//   - nest (brown) recedes to a single decorative rotation slot (the
+//     box-grid stripe, 1-of-3 items) — present because it's honestly one of
+//     the logo's five colors, but no longer touching any text, button, or
+//     link anywhere. That's what "stop being the dominant impression" means
+//     in code.
+//   - ink/muted body-text grays are re-hued too: the *old* tokens (#2A231C
+//     ink, #56493A/#7C7061 muted) were themselves warm brown-black — a
+//     second, uncredited source of the "brown" verdict beyond --accent.
+//   - New tokens this pass: --border-strong (a real 3:1-vs-background
+//     border for the one control whose border IS its primary affordance —
+//     .btn-secondary's default state) and a shared .shot-frame component
+//     (all three real screenshots on this site show the app's DARK UI, so
+//     the frame around them needed to read as deliberate on a much lighter
+//     page, not just var(--line)).
+//
+// DB corroboration (ui-ux-pro-max, --domain color, "pastel lavender peach
+// light palette productivity app"): the top hit (Mental Health App preset)
+// pairs a deep-violet primary (#8B5CF6) with a pale-lavender background
+// (#FAF5FF) and a near-black-violet foreground — the same shape as this
+// palette (dark-purple accent, pale-purple/peach wash background, cool
+// near-black ink), evidence this direction isn't a guess. No stock preset
+// in the DB is "purple + peach + paper" together (a 3-hue brand palette is
+// project-specific by nature), so the exact hexes below are first-
+// principles derivation from the logo's own colors, corroborated in shape
+// by that DB hit.
+// =============================================================================
 
 :root {
-  --paper: #F6F3EC;   // page background (light)
-  --panel: #FBF9F3;   // card/header background (light)
-  --ink: #2A231C;     // primary text / headings (light)
-  // NOTE: --muted below is intentionally split into two tokens where
-  // preview.html only had one (#7C7061). Verified contrast math (WCAG 2.2
-  // relative-luminance formula) showed #7C7061 on #F6F3EC = 4.36:1 — passes
-  // AA for large text (>=24px, or >=18.66px bold) but FAILS the 4.5:1 floor
-  // for regular body text. Splitting avoids silently shipping a body-text
-  // contrast failure while still reusing the exact brand hue family.
-  --muted-strong: #56493A; // regular-size secondary text — 7.9:1 on --paper (AA/AAA safe)
-  --muted-large: #7C7061;  // large-text-only (badges, eyebrows, captions >=24px) — 4.36:1 on --paper
-  --accent: #7A5A3C;       // links, eyebrows, CTA fills — 5.6:1 on --paper
-  --line: #E7DECF;         // borders, hairlines, table rules
-  --lilac: #C6BEDC;        // brand card accent (from clipnest-color.svg)
-  --peach: #E7CEB0;        // brand card accent (from clipnest-color.svg)
-  --nest: #9F7750;         // brand line accent (from clipnest-color.svg)
+  color-scheme: light;   // native controls + scrollbars stay light in Dark Mode
+  // ---- base surfaces (light) ----------------------------------------------
+  --paper: #F9F0E2;   // page background — the logo's OWN "paper" hex, unchanged
+  --panel: #FFFDF8;   // card/header background — a hair brighter than paper (card lift)
+
+  // ---- text (light) — cool, hue-neutral-to-purple ink family, replacing the
+  // old warm-brown ink/muted trio ----------------------------------------
+  --ink: #222027;          // primary text/headings — 14.26:1 on --paper
+  --muted-strong: #5C576B; // secondary text (lead, footer, captions) — 6.13:1 on --paper
+  --muted-large: #706A81;  // lower-emphasis tertiary text — 4.57:1 on --paper (now AA at ANY
+                            // size, not just >=24px — T91's old --muted-large was a "large
+                            // text only" footgun at 4.36:1; this one is safe everywhere, even
+                            // though nothing currently sets it below 24px — reserved token)
+
+  // ---- accent: the ONE interactive/text-bearing brand color, derived from
+  // the logo's PURPLE card (H=256°) — links, CTA fills, focus rings, the
+  // wordmark glyph, nav current-page state, eyebrows -----------------------
+  --accent: #6E58A8;    // 5.13:1 on --paper, 5.63:1 on --panel
+  --on-accent: #FBF9F3; // text ON an --accent fill (e.g. .btn-primary) — 5.50:1
+
+  // ---- borders ----------------------------------------------------------
+  --line: #D3CCE2;          // decorative hairline (card/table/section dividers) — a cool
+                             // lilac-tinted hairline replacing the old warm tan #E7DECF.
+                             // Intentionally low-contrast (~1.4:1): these are pure layout
+                             // dividers, not the sole indicator of any control (grouping is
+                             // also carried by spacing + panel/paper background contrast) —
+                             // the WCAG 1.4.11 exception for decorative/non-essential graphics.
+  --border-strong: #8D85A3; // 3.09:1 on --paper / 3.38:1 on --panel — for the one control
+                             // whose UNHOVERED border IS its primary visible affordance
+                             // (.btn-secondary's default state). New token this pass.
+
+  // ---- surfaces (NOT text) — the logo's own card hexes, verbatim, finally
+  // doing real work as backgrounds instead of sitting unused in :root ------
+  --lilac: #C6BEDC; // purple card, exact logo hex — hero backdrop wash, screenshot frame,
+                     // feature-card tint, box-grid stripe. Always paired with dark --ink
+                     // text sitting on top (8.7:1+), never asked to carry text itself.
+  --peach: #E7CEB0; // peach card, exact logo hex — same surface-only role as --lilac.
+  --nest: #9F7750;  // the logo's brown — kept ONLY as a small tertiary decorative accent
+                     // (1-of-3 rotation on the box-grid stripe). Not used for any text,
+                     // button, link, focus ring, or icon anywhere in this stylesheet.
+
   --radius: 14px;
-  --content-max: 46rem;    // ~72-78ch prose measure at the body size below
+  --radius-sm: 8px;
+  --radius-pill: 999px;
+
+  // 8pt-derived spacing scale, used throughout instead of ad-hoc margins.
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --space-9: 96px;
+
+  --content-max: 46rem;    // ~72-78ch prose measure — article/doc body copy
+  --shell-max: 75rem;      // header/hero/grid section outer width
+
+  --shadow-sm: 0 1px 2px rgba(34, 32, 39, 0.06), 0 1px 1px rgba(34, 32, 39, 0.04);
+  --shadow-md: 0 8px 24px rgba(34, 32, 39, 0.08), 0 2px 6px rgba(34, 32, 39, 0.05);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    // Same palette family as preview.html's dark block — verified contrast:
-    // ink/paper ~14.2:1, muted-strong/paper ~6.3:1, accent/paper ~7.2:1.
-    --paper: #1E1915;
-    --panel: #282019;
-    --ink: #EFE7DA;
-    --muted-strong: #C7BAA8;
-    --muted-large: #A89A88;
-    --accent: #CB9E70;
-    --line: #3A2F25;
-  }
-}
+// ---------------------------------------------------------------------------
+// DARK MODE — deliberately disabled (user decision): the site commits to the
+// light, logo-derived palette in every appearance, so a visitor whose macOS is
+// in Dark Mode still sees the light design. The full dark palette below was
+// contrast-verified (all pairs >= 4.5:1 body / 3:1 UI) and is kept, commented,
+// so re-enabling it is a matter of uncommenting this block — nothing to re-derive.
+// ---------------------------------------------------------------------------
+// @media (prefers-color-scheme: dark) {
+//   :root {
+//     // Dark mode RE-DERIVED from the same hue family this pass (T92) — not
+//     // the old warm-brown dark palette inverted. Same method as light mode:
+//     // hue held constant, HSL lightness walked until contrast cleared 4.5:1
+//     // (text) / 3:1 (borders) against BOTH --paper and --panel (panel is the
+//     // lighter of the two here too — cards still "lift" off the page in
+//     // dark mode, same convention as light mode).
+//     --paper: #18161D;  // cool near-black, purple-family (H=256°, low S) — not brown-black
+//     --panel: #23202A;
+//
+//     --ink: #E5E3E8;          // 14.07:1 on --paper / 12.57:1 on --panel
+//     --muted-strong: #B4B0BF; // 8.45:1 on --paper / 7.55:1 on --panel
+//     --muted-large: #9F9AAC;  // 6.57:1 on --paper / 5.87:1 on --panel — AA at any size here too
+//
+//     --accent: #9681CF;    // light-on-dark purple — 5.41:1 on --paper / 4.83:1 on --panel
+//     --on-accent: #18161D; // = --paper's own dark value, read back onto the accent fill —
+//                            // 5.41:1. Same elegant reuse T91 used for light mode's on-accent.
+//
+//     --line: #3A344B;          // decorative hairline, same low-contrast/decorative-only logic
+//     --border-strong: #756996; // 3.60:1 on --paper / 3.22:1 on --panel
+//
+//     // Surfaces re-derived dark (NOT the old brown-inverted --lilac/--peach):
+//     // dark, desaturated washes in each hue, meant to sit under LIGHT --ink
+//     // text (11-13:1 headroom) or --muted-strong (6-8:1) — verified, not
+//     // just assumed safe because "dark bg, light text is usually fine."
+//     --lilac: #292140; // hue 256°, dark wash
+//     --peach: #392D1D; // hue ~33°, dark wash — reads as a deep umber in dark mode; still only
+//                        // ever a background, never text, so it doesn't reintroduce "brown text"
+//
+//     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35);
+//     --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.4);
+//   }
+// }
 
-// ---- base ---------------------------------------------------------------
+// ---- reset / base ---------------------------------------------------------
+*, *::before, *::after { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
 @media (prefers-reduced-motion: reduce) {
   html { scroll-behavior: auto; }
-  * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; }
+  * { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; transition-duration: 0.001ms !important; scroll-behavior: auto !important; }
 }
 
 body {
+  margin: 0;
   background: var(--paper);
   color: var(--ink);
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
   font-size: 17px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-.wrapper { max-width: var(--content-max); }
+// System font stack, not a webfont: this site fronts a native Swift/SwiftUI
+// menu-bar app. -apple-system resolves to the same San Francisco the app
+// itself renders with, so the marketing site visually matches the product
+// with zero webfont weight — no render-blocking font fetch, no FOUT/CLS from
+// a swapped-in font (DB priority-3 Performance guideline: avoid layout
+// shift; a system stack sidesteps that class of problem entirely).
+img { max-width: 100%; height: auto; display: block; border-radius: var(--radius); }
+svg { display: block; }
 
-// Headings — Georgia/New York serif, matching the wordmark treatment used in
-// assets/clipnest-icons/preview.html (h1 { font-family: Georgia, "New York" }).
 h1, h2, h3, h4, h5, h6 {
   font-family: Georgia, "New York", "Times New Roman", serif;
   font-weight: 600;
   color: var(--ink);
   letter-spacing: -0.01em;
+  line-height: 1.2;
 }
-h1 { font-size: clamp(2rem, 4.5vw, 2.75rem); }
-h2 { font-size: clamp(1.4rem, 3vw, 1.85rem); margin-top: 2.25em; }
-h3 { font-size: 1.25rem; }
+h1 { font-size: clamp(2.25rem, 5vw, 3.25rem); margin: 0 0 var(--space-4); }
+h2 { font-size: clamp(1.4rem, 3vw, 1.85rem); margin: 2.25em 0 0.75em; }
+h3 { font-size: 1.25rem; margin: 1.6em 0 0.5em; }
+h4 { font-size: 1.05rem; margin: 1.4em 0 0.4em; }
 
 p, li { color: var(--ink); }
-.post-content, .page-content { color: var(--ink); }
+p { margin: 0 0 1em; }
+ul, ol { padding-left: 1.25em; }
+.lead {
+  font-size: clamp(1.05rem, 2.4vw, 1.25rem);
+  color: var(--muted-strong);
+  max-width: 62ch;
+}
 
-// Secondary/supporting copy — use the AA-safe token by default. Anything
-// intentionally >=24px (or >=18.66px bold) may use --muted-large instead.
-.post-meta, small, figcaption, .site-footer, .footer-col-wrapper { color: var(--muted-strong); }
+small, figcaption { color: var(--muted-strong); }
 
-// ---- links ----------------------------------------------------------------
+// ---- links ------------------------------------------------------------
 // Underline kept (not color-only) so link identification doesn't depend on
 // color perception alone — WCAG 1.4.1 (Use of Color).
 a {
@@ -110,46 +239,797 @@ a:focus-visible, button:focus-visible, input:focus-visible,
   border-radius: 2px;
 }
 
+// ---- utility ----------------------------------------------------------
+.visually-hidden {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+// WCAG 2.4.1 Bypass Blocks — keyboard/screen-reader users can jump straight
+// to <main> instead of tabbing through the nav on every page load.
+.skip-link {
+  position: absolute;
+  top: -48px;
+  left: var(--space-4);
+  z-index: 100;
+  background: var(--accent);
+  color: var(--on-accent) !important;
+  padding: var(--space-3) var(--space-4);
+  border-radius: var(--radius-sm);
+  font-weight: 600;
+  text-decoration: none;
+  transition: top 150ms ease;
+}
+.skip-link:focus { top: var(--space-4); }
+
+.shell {
+  max-width: var(--shell-max);
+  margin: 0 auto;
+  padding: 0 var(--space-5);
+}
+@media (max-width: 640px) {
+  .shell { padding: 0 var(--space-4); }
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  // 0.8rem/600 does NOT clear the WCAG "large text" bar (>=18.66px bold /
+  // >=24px regular) — --accent (5.13:1+) is correct here, same fix T91
+  // already applied when this used to sit on --muted-large.
+  color: var(--accent);
+}
+
+// ---- buttons ------------------------------------------------------------
+// 44px min-height clears the DB's Touch & Interaction floor (mobile
+// 44x44px) — stricter than the WCAG 2.5.8 24px floor, applied because these
+// are the primary marketing CTAs and the site is evaluated down to 375px.
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding: 0.7em 1.4em;
+  border-radius: var(--radius-pill);
+  font-weight: 600;
+  text-decoration: none !important;
+  border: 1px solid transparent;
+  cursor: pointer;
+  transition: transform 150ms ease, opacity 150ms ease, background 150ms ease, border-color 150ms ease;
+}
+.btn:hover { opacity: 0.88; }
+.btn:active { transform: translateY(1px); }
+
+// .button is kept as an alias to the T72 utility name and defaults to the
+// primary (filled) treatment, so any existing markup using it is unaffected.
+.button,
+.btn-primary {
+  background: var(--accent);
+  color: var(--on-accent) !important;
+}
+.button:hover, .btn-primary:hover { opacity: 0.88; }
+
+.btn-secondary {
+  background: transparent;
+  color: var(--ink) !important;
+  // T92: was var(--line) (~1.4:1, decorative-only by design) — this
+  // border IS the button's primary visible affordance in its default
+  // state, so it needs the real 3:1 UI-border token, not the hairline one.
+  border-color: var(--border-strong);
+}
+.btn-secondary:hover { border-color: var(--accent); background: var(--panel); opacity: 1; }
+
 // ---- header / nav -----------------------------------------------------
 .site-header {
-  background: var(--panel);
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  background: var(--panel); // fallback for browsers without color-mix()
+  background: color-mix(in srgb, var(--panel) 88%, transparent);
+  -webkit-backdrop-filter: saturate(180%) blur(12px);
+  backdrop-filter: saturate(180%) blur(12px);
   border-bottom: 1px solid var(--line);
 }
-.site-title, .site-title:visited {
+.site-header .shell {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 64px;
+  gap: var(--space-4);
+}
+
+.wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
   font-family: Georgia, "New York", "Times New Roman", serif;
   font-weight: 700;
+  font-size: 1.15rem;
   color: var(--ink) !important;
+  text-decoration: none !important;
 }
-.site-nav .page-link {
+.wordmark svg { width: 26px; height: 26px; color: var(--accent); }
+
+.nav {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.nav-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: var(--space-2) var(--space-3);
   color: var(--ink);
   font-weight: 500;
-  // Hit target >=24px tall per WCAG 2.5.8 — minima's default nav padding
-  // already clears this, kept explicit so it isn't regressed by future edits.
-  padding: 8px 4px;
-}
-.site-nav .page-link:hover { color: var(--accent); }
-
-// ---- footer -------------------------------------------------------------
-.site-footer {
-  background: var(--panel);
-  border-top: 1px solid var(--line);
-}
-
-// ---- generic CTA/button utility (opt-in; pages own their own markup) ----
-// Available for e.g. the Download page's install CTA. Not applied anywhere
-// automatically — this file only owns docs/assets/, page markup is out of
-// scope for T72.
-.button, .btn {
-  display: inline-block;
-  background: var(--accent);
-  color: var(--panel) !important;
-  font-weight: 600;
-  padding: 0.7em 1.4em;
-  border-radius: 999px;
   text-decoration: none;
-  min-height: 24px; // WCAG 2.5.8 target size floor
+  border-radius: var(--radius-sm);
 }
-.button:hover, .btn:hover { opacity: 0.85; }
+.nav-links a:hover { color: var(--accent); opacity: 1; }
+// Current-page indicator uses more than color alone (underline + weight) —
+// WCAG 1.4.1.
+.nav-links a[aria-current="page"] {
+  color: var(--accent);
+  font-weight: 700;
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 4px;
+}
+
+// The checkbox itself is never the visible click target — a <label for=...>
+// toggles its referenced input regardless of where that input sits in the
+// layout, so it doesn't need to be visually stacked under the label. It's
+// hidden with the same clip technique as .visually-hidden (not display:none,
+// so Tab still reaches it and Space still toggles it) rather than
+// opacity:0-at-a-guessed-position, which the previous draft of this rule
+// used and which wasn't reliably clickable/tappable.
+.nav-toggle-input {
+  position: absolute;
+  width: 1px; height: 1px;
+  margin: -1px; padding: 0; border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  overflow: hidden;
+  white-space: nowrap;
+}
+.nav-toggle-label {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.nav-toggle-label:hover { background: var(--panel); }
+.nav-toggle-label svg { width: 20px; height: 20px; color: var(--ink); }
+// The checkbox is visually hidden but stays in the tab order, so the focus
+// ring is painted on its visible label sibling instead of on nothing.
+.nav-toggle-input:focus-visible + .nav-toggle-label {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+@media (max-width: 760px) {
+  .nav-toggle-label { display: inline-flex; }
+  .nav-links {
+    display: none;
+    position: absolute;
+    top: 56px;
+    left: 0;
+    right: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    box-shadow: var(--shadow-md);
+    border-radius: var(--radius);
+    padding: var(--space-2);
+  }
+  .nav-links a { min-height: 48px; padding: var(--space-3) var(--space-3); }
+  .nav-toggle-input:checked ~ .nav-links { display: flex; }
+}
+@media (min-width: 761px) {
+  // display:none at desktop widths removes the checkbox from the tab order
+  // entirely, so keyboard users never hit a functionless mobile-menu toggle
+  // when the mobile menu isn't even in play.
+  .nav-toggle-input, .nav-toggle-label { display: none; }
+}
+
+// ---- content shell ------------------------------------------------------
+main { display: block; }
+
+.content-page {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: var(--space-7) var(--space-5) var(--space-9);
+}
+@media (max-width: 640px) {
+  .content-page { padding: var(--space-6) var(--space-4) var(--space-8); }
+}
+
+.breadcrumb {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: 0.9rem;
+  color: var(--muted-strong);
+  text-decoration: none;
+  margin-bottom: var(--space-5);
+}
+.breadcrumb:hover { opacity: 0.8; }
+
+// ---- hero (home only) -----------------------------------------------------
+// Text-only, centered — the product screenshot lives in its own full-width
+// .hero-visual band directly beneath it (see pages/index.md), so the single
+// real screenshot asset on the site isn't squeezed into a hero column.
+//
+// T92: a soft wash of the logo's own two card colors sits behind the hero
+// text — --lilac fading through --paper into a hint of --peach. This is the
+// "hero backdrop" surface use the brief calls for. color-mix() has broad
+// support but a solid var(--paper) fallback is declared first, same pattern
+// .site-header already uses for its own color-mix() background.
+.hero {
+  padding: var(--space-8) 0 var(--space-6);
+  text-align: center;
+  background: var(--paper);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--lilac) 30%, var(--paper)) 0%,
+    var(--paper) 60%,
+    color-mix(in srgb, var(--peach) 22%, var(--paper)) 100%
+  );
+}
+.hero .shell { max-width: 42rem; }
+.hero-copy h1 { margin-bottom: var(--space-4); }
+.hero-copy .lead { margin: 0 auto var(--space-6); }
+.hero-cta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-3);
+}
+
+// ---- screenshot frame ---------------------------------------------------
+// One convention for "here's a picture of the app's (dark) UI, on this
+// (light) page" — used by the hero screenshot AND the two features.md
+// inline shots (via the same .shot-frame div wrapper each time). A plain
+// hairline border around a dark screenshot dropped straight onto a much
+// lighter page reads as an accident, not a frame — so the frame itself is a
+// soft lilac-to-peach gradient card (padding + shadow), with the screenshot
+// sitting inside on its own deeper shadow so the light-to-dark jump feels
+// deliberate. NOT a second visual pattern: same tokens (--lilac/--peach
+// wash, --radius, --shadow-md, --space scale) the hero backdrop and
+// feature-card tints already use.
+.shot-frame {
+  background: var(--panel);
+  background: linear-gradient(
+    165deg,
+    color-mix(in srgb, var(--lilac) 20%, var(--panel)) 0%,
+    color-mix(in srgb, var(--peach) 16%, var(--panel)) 100%
+  );
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  box-shadow: var(--shadow-md);
+}
+.shot-frame img {
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 20px rgba(20, 16, 28, 0.28);
+}
+
+.hero-visual {
+  padding: 0 0 var(--space-8);
+  border-bottom: 1px solid var(--line);
+}
+.hero-visual .shell { max-width: 60rem; }
+.hero-visual img { width: 100%; }
+
+// ---- section rhythm -------------------------------------------------------
+.section { padding: var(--space-8) 0; }
+// T95 (ux-designer) — research-first craft pass, fixing "How it compares"
+// faults the user screenshotted, then the same underlying rhythm/measure/
+// alignment issues everywhere else .section-head is reused.
+//
+// Fault #1 was "two competing alignments": .section-head used to be
+// max-width + margin:0 AUTO (a centered block with left-aligned text
+// inside it), while the grid/table sitting directly below it in the same
+// .shell ran full width. Measured on the live page at a 1280px viewport:
+// the centered block's left edge sat at x=312, the table's left edge at
+// x=64 — a real, visible seam, not a rounding error.
+//
+// Fix: drop the auto-centering. margin's horizontal component goes to 0,
+// so the block starts flush at the SAME left edge as the shell content
+// beneath it (.shell already zeroes left/right via its own padding, so
+// this is just "don't re-center a sub-box inside it"). max-width is kept
+// so the paragraph doesn't stretch to an unreadable 1152px line length —
+// this is a measure control, not an alignment control, now that it isn't
+// also doing double duty as a centering box.
+//
+// Centering (text-align:center) was the other candidate and was rejected:
+// both of .section-head's two live usages (Why Clipnest?, How it compares)
+// carry a 2-5 line paragraph, and centering multi-line body copy produces
+// a ragged left edge that measurably hurts scanability versus a flush
+// left edge — a real readability cost, not just taste. It's also not what
+// the peer sites this task's research phase studied do for paragraph-
+// length intros: cleanshot.com's own section intros ("Always one drag
+// away", "Screen recordings worth sharing") are left-flush against the
+// same edge as the grid/tiles below them, not centered. .hero and
+// .cta-strip stay centered on purpose and are NOT changed here — both are
+// a single short headline + one sentence, never a paragraph, so centering
+// them doesn't fight readability the way it would on this class.
+.section-head { max-width: 62ch; margin: 0 0 var(--space-6); }
+.section-head h2 { margin-top: 0; }
+
+// ---- feature grid (home "Why Clipnest?") -------------------------------
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: var(--space-5);
+  margin: var(--space-6) 0;
+}
+.feature-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-5);
+}
+// T92: a gentle 3-way tint rotation (lilac wash / peach wash / plain panel)
+// so the two logo card colors show up as real surfaces here too, without
+// every card being colored (Nielsen #8 — restraint; --ink stays dark-on-
+// light regardless, so text contrast is unaffected by which tint a card
+// gets: --ink on a 20%-strength pastel wash is still >12:1).
+.feature-card:nth-child(3n+1) { background: color-mix(in srgb, var(--lilac) 20%, var(--panel)); }
+.feature-card:nth-child(3n+2) { background: color-mix(in srgb, var(--peach) 18%, var(--panel)); }
+.feature-card h3 { margin-top: 0; }
+.feature-card p:last-child { margin-bottom: 0; }
+
+// ---- "what's in the box" grid (existing <ul> restyled as an icon/card
+// grid) -------------------------------------------------------------------
+// T94: was a plain bullet list with a colored left-border stripe per item.
+// Promoted to a real icon-card grid (Nielsen #6 recognition, DB
+// icon-style-consistent guideline). Icons are hand-authored, consistent
+// 24x24 / 1.75px-stroke / round-cap outline glyphs (no emoji — DB
+// no-emoji-icons anti-pattern) in the Heroicons/Lucide visual language the
+// DB names for exactly this "SVG icon, not emoji" requirement. Literal path
+// reuse from assets/clipnest-icons/clipnest-color.svg wasn't honestly
+// possible here: that file is a single hand-traced 5-layer illustration
+// (VTracer output, hundreds of bezier control points fitted to one
+// specific composition), not a modular primitive kit — there's no way to
+// pull 5 conceptually distinct glyphs (history, search, pin, tag, eye) out
+// of it without visibly forcing the geometry. What IS carried over from the
+// master is the brand's *stroke-icon-free* convention for chrome (the nav
+// toggle + wordmark stay solid/currentColor, untouched) — this new set is a
+// clearly separate, self-consistent family for *content* iconography
+// (product-capability glyphs on a marketing page), not a second treatment
+// competing for the same job. The "Full clipboard history" glyph is
+// deliberately a card-with-lines (rounded rect + 3 bars, no clip/tab) —
+// never the banned generic-clipboard-with-a-clip silhouette — and the
+// bars themselves echo the master's own "text lines" layer shape family
+// (stacked rounded pill bars), so even that glyph nods at the brand
+// without tracing it.
+.box-grid ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-4);
+  list-style: none;
+  padding: 0;
+  margin: var(--space-5) 0;
+}
+.box-grid li {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-5);
+}
+.box-grid li h3 { margin: var(--space-3) 0 var(--space-2); font-size: 1.1rem; }
+.box-grid li p:last-child { margin-bottom: 0; }
+
+// Icon badge: a filled circle behind each glyph, same --space-7 (48px) size
+// the DB's Feature-Rich-Showcase preset calls out for icon containers.
+// Reuses the EXACT rotation this section already had (T92: purple/peach/
+// nest, in that order) — moved from the old left-border stripe onto the
+// badge fill instead of inventing a new color rule, and --nest stays in
+// its existing decorative-only, never-text/never-icon-stroke role (the
+// glyph stroke itself is always --accent, matching every other
+// interactive-adjacent mark on the site).
+.box-grid-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-7);
+  height: var(--space-7);
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--lilac) 22%, var(--panel)); // 5.09:1 for --accent on top
+}
+.box-grid-icon svg { width: 24px; height: 24px; color: var(--accent); }
+.box-grid li:nth-child(3n+2) .box-grid-icon { background: color-mix(in srgb, var(--peach) 20%, var(--panel)); } // 5.28:1
+.box-grid li:nth-child(3n+3) .box-grid-icon { background: color-mix(in srgb, var(--nest) 16%, var(--panel)); } // 4.75:1
+
+// T95: 5 cards in a repeat(auto-fit, minmax(240px,1fr)) grid. .shell caps
+// usable content width at 1152px, which deterministically yields exactly
+// 4 columns once the viewport is wide enough (4*240px + 3*16px gap =
+// 1008px, fits; a 5th column would need 1264px, which the shell can never
+// reach because of --shell-max) — so the 5th card was always alone on row
+// 2 with 3 empty column-widths beside it, read by the user as dead space
+// leading straight into "How it compares" below it. Centers that lone
+// card under the grid's middle two columns instead of stranding it at the
+// left edge. Gated to the viewport width where the grid is
+// deterministically 4-column (content width >= 1008px -> viewport >=
+// 1008px + 2*24px shell padding = 1056px; 1080px adds a small safety
+// margin for scrollbar-width variance across browsers/OSes) so it never
+// fires at 3-column tablet width, where a 3+2 wrap is already balanced
+// and needs no help.
+@media (min-width: 1080px) {
+  .box-grid li:last-child { grid-column: 2 / span 2; }
+}
+
+// ---- CTA strip (home "Get it" — moved directly under the hero, T94) -----
+// Was a bordered/panel `.cta-band` card sitting further down the page,
+// directly under the "How it compares" table. Relocated to right after the
+// hero screenshot per this pass's brief. A bordered panel box stacked
+// immediately under .shot-frame's own bordered gradient card read as two
+// heavy "framed box" treatments back to back, so this isn't just the old
+// card moved: it's now a full-bleed color band (the same construction as
+// .hero itself — background on the <section>, .shell for the readable
+// width inside) rather than a boxed panel, which is what actually resolves
+// the stacking. The wash continues the hero's own gradient logic (hero
+// fades lilac-to-paper-to-peach; this picks the gradient back up in peach)
+// so the two bands read as one continuous, deliberate opening sequence
+// instead of two unrelated blocks. The one shared component this still
+// reuses untouched is .install-card/.terminal-bar (also used bare, unwrapped,
+// on download.md and usage.md) — not modified here.
+.cta-strip {
+  background: var(--paper); // fallback for browsers without color-mix()
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--peach) 20%, var(--paper)) 0%,
+    var(--paper) 100%
+  );
+  padding: var(--space-7) 0 var(--space-8);
+  text-align: center;
+  border-bottom: 1px solid var(--line);
+}
+.cta-strip .shell { max-width: 40rem; }
+.cta-strip h2 { margin-top: 0; }
+.cta-strip .install-card { text-align: left; margin: var(--space-5) auto; }
+.cta-strip p { max-width: 34ch; margin-left: auto; margin-right: auto; }
+
+// Terminal-style frame around install/update commands — a small nod to the
+// native-dev audience without relying on color alone or any emoji glyphs
+// (DB anti-pattern flagged: "Emoji as icons").
+.install-card {
+  position: relative;   // containing block for the absolutely-placed .copy-btn
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  // Fixed dark background (not var(--ink)): --ink flips to a *light* color
+  // in dark mode (it's "primary text," which is light-on-dark there), so
+  // using it as this card's background would invert to a light terminal
+  // with light code text on top in dark mode. This stays a dark terminal
+  // in both modes on purpose — verified 13.9:1 against the code color below.
+  background: #221F27;
+  margin: var(--space-4) 0;
+}
+.install-card .terminal-bar {
+  display: flex;
+  gap: 6px;
+  padding: var(--space-3) var(--space-4);
+  background: rgba(0, 0, 0, 0.18);
+}
+.install-card .terminal-bar span {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.28);
+}
+.install-card pre {
+  margin: 0;
+  padding: var(--space-4);
+  background: transparent !important;
+  border: 0 !important;
+  // The install one-liner is longer than the card at every viewport. The card
+  // sets overflow:hidden (for its rounded corners), so without this the command
+  // was simply CUT — the reader could not see what they were about to pipe into
+  // bash, which matters more here than tidiness. Wrap instead of h-scroll: the
+  // whole command stays visible, and pre-wrap still honours the real newlines
+  // in the multi-line uninstall command.
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.install-card code {
+  background: transparent !important;
+  border: 0 !important;
+  color: #F1EDF5;
+}
+
+// ---- "learn more" link grid --------------------------------------------
+.learn-grid ul {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--space-4);
+  list-style: none;
+  padding: 0;
+  margin: var(--space-5) 0;
+}
+.learn-grid li {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-4);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.learn-grid li:hover { border-color: var(--accent); box-shadow: var(--shadow-sm); }
+.learn-grid a { font-weight: 700; }
+
+// ---- notice / disclosure callout (compare.md honesty note) ------------
+.notice {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4) var(--space-5);
+  margin: 0 0 var(--space-6);
+}
+.notice p:last-child { margin-bottom: 0; }
+
+// ---- inline end-of-page CTA callout (features.md / download.md closers) --
+.cta-inline {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-4) var(--space-5);
+  margin: var(--space-7) 0 0;
+}
+.cta-inline p:last-child { margin-bottom: 0; }
+
+// ---- wide-table responsive wrapper (compare.md "Side by side") --------
+// A contained horizontal-scroll region on a data table is the standard
+// accessible pattern for tabular content that can't reflow to narrow
+// viewports — as opposed to letting the whole page scroll horizontally,
+// which the DB flags as an anti-pattern.
+.table-scroll {
+  overflow-x: auto;
+  margin: var(--space-5) 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  -webkit-overflow-scrolling: touch;
+}
+.table-scroll table { margin: 0; border: 0; min-width: 640px; }
+
+// ---- comparison table (index.md "How it compares") — T95 craft pass ----
+// Scoped to this one table via the .compare-table modifier class added
+// alongside .table-scroll in pages/index.md (a structural class only —
+// zero copy change; the div already existed, this just names it so these
+// rules don't leak onto any future .table-scroll table elsewhere on the
+// site). Research: no site studied in T95 Phase 1 stretches a comparison
+// table across its full page width, and none left ticks unstyled in
+// oversized cells — rectangleapp.com/comparison is the closest real
+// analog (a genuine 4-column feature-matrix <table>, not a bento grid or
+// prose) and is the direct model for the fixes below: a table width
+// capped to a comfortable measure, deliberate column proportions, zebra
+// striping, and its own product's column visually called out.
+//
+// Fault #1 (alignment) — capped to --content-max, no horizontal margin
+// override needed: .table-scroll's own margin is already 0 left/right, so
+// with .section-head's auto-centering removed (see that rule) this table
+// starts at the exact same left edge as the heading/intro above it.
+// Leaving it unbounded-width would mean stretching a 4-column data table
+// across the full 1152px shell, which is what produced fault #2.
+//
+// Fault #2 (column widths) — table-layout:fixed with explicit percentages
+// (40/20/20/20) instead of the browser's auto layout, which had handed
+// ~54% of the table to the Feature column (its cells hold full sentences,
+// so auto-layout's intrinsic-width algorithm gave it most of the slack)
+// and squeezed three single-glyph tick columns into an uneven remainder.
+.compare-table { max-width: var(--content-max); }
+.compare-table table { table-layout: fixed; }
+.compare-table th:nth-child(1), .compare-table td:nth-child(1) { width: 40%; }
+.compare-table th:nth-child(2), .compare-table td:nth-child(2),
+.compare-table th:nth-child(3), .compare-table td:nth-child(3),
+.compare-table th:nth-child(4), .compare-table td:nth-child(4) {
+  width: 20%;
+  text-align: center;
+}
+
+// Zebra striping (scan-ability — same pattern rectangleapp.com/comparison
+// uses). Declared before the Clipnest-column rule below so that rule's
+// higher specificity (two class-level selector components vs. one) wins
+// on column 2 regardless of row parity — the highlighted column reads as
+// one continuous band down the table, not zebra-striped like the rest.
+.compare-table tbody tr:nth-child(even) td { background: var(--panel); }
+
+// Fault #3 (no emphasis on the Clipnest column) — a background wash +
+// bold accent header, so the table's actual subject reads differently
+// from Maccy/Deck at a glance (Nielsen #6, recognition not recall) the
+// same way rectangleapp.com underlines its own product's header. Reuses
+// the EXACT color-mix() recipe .box-grid-icon already uses (lilac 22% on
+// panel, verified 5.09:1 for --accent text above) instead of inventing a
+// new pair that needs its own contrast re-derivation. A plain border-top
+// won't work here — the generic `td, th { border: ... !important }` rule
+// below would win that fight — so the header-row callout uses an inset
+// box-shadow instead, which doesn't touch the `border` property at all.
+.compare-table th:nth-child(2), .compare-table td:nth-child(2) {
+  background: color-mix(in srgb, var(--lilac) 22%, var(--panel)); // 5.09:1 for --accent, same recipe as .box-grid-icon
+}
+.compare-table th:nth-child(2) {
+  color: var(--accent);
+  box-shadow: inset 0 3px 0 0 var(--accent); // 5.63:1 vs --panel — clears the 3:1 WCAG 1.4.11 non-text floor
+}
+
+// Fault #4 (ticks small/unstyled, floating in oversized cells) — centered
+// (via the width rule above), larger, bold, --accent-colored. Blank "no"
+// cells (a literal space character in the source markdown, per the
+// existing "a blank cell means it doesn't" copy) render nothing visible
+// either way, so this is safe to apply uniformly across the column rather
+// than needing to target the tick glyph specifically, which isn't
+// possible without wrapping it in markup (a copy-adjacent change this
+// pass avoids). --accent at 5.13:1+ is already verified safe on every
+// background this rule can sit on (--paper, --panel, and the lilac wash
+// above), so no new contrast pair needed.
+.compare-table tbody td:nth-child(2),
+.compare-table tbody td:nth-child(3),
+.compare-table tbody td:nth-child(4) {
+  font-size: 1.15em;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+// Sources citation directly under the table — a caption, not body copy:
+// smaller and muted, capped to the same measure as the table above it so
+// the whole section shares one left edge and one measure top to bottom.
+.compare-table + p {
+  max-width: var(--content-max);
+  font-size: 0.9rem;
+  color: var(--muted-strong); // 6.13:1 on --paper
+}
+
+// ---- content panel (T96 — inner-page section grouping) -----------------
+// The 5 inner pages (features/privacy/download/usage/faq) never got a
+// craft pass — features.md in particular was flagged as long bullet
+// walls under bare <h2>s, flat --paper throughout, "no cards, no
+// grouping, no icons... a wall of text where the home page has
+// structure." This extends the SAME card language the home page already
+// uses (.feature-card / .box-grid li: --panel bg, --line border,
+// --radius, consistent padding) to those inner-page H2 sections, so a
+// long page reads as a sequence of grouped topics instead of one
+// continuous scroll. Used on features.md (9 sections) and privacy.md (5
+// sections) — the two pages the audit named most directly for lacking
+// ANY structure. download.md/usage.md are NOT wrapped in this: they're
+// already anchored by other strong components (.install-card terminal
+// cards, tables, usage.md's own on-page nav) that a second full card
+// treatment on top would visually double up on, and usage.md at 300+
+// lines is a reference guide, not a showcase page — see the T96 handoff
+// note for the full reasoning on that split.
+//
+// Deliberately NOT a tinted-background rotation like .feature-card (9
+// panels on features.md would turn into a distracting rainbow if every
+// one carried its own colour wash — Nielsen #8, restraint). Background
+// stays one plain --panel tone throughout; the icon badge below carries
+// the rotation instead — the exact same restrained split .box-grid
+// already uses (plain card body, coloured badge only).
+.content-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-6) var(--space-6) var(--space-5);
+  margin: var(--space-6) 0;
+}
+.content-panel:first-of-type { margin-top: var(--space-5); }
+.content-panel h2 { margin-top: 0; }
+.content-panel > :last-child { margin-bottom: 0; }
+
+.content-panel-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.content-panel-head h2 { margin: 0; }
+
+// Same circular-badge recipe as .box-grid-icon (T94) and the same 3-way
+// lilac/peach/nest rotation as .box-grid-icon / .feature-card (T92) —
+// reused verbatim (same color-mix() values, same ratios), just scoped to
+// .content-panel's own sibling sequence instead of .box-grid li's.
+.panel-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-7);
+  height: var(--space-7);
+  flex: none;
+  border-radius: var(--radius-pill);
+  background: color-mix(in srgb, var(--lilac) 22%, var(--panel)); // 5.09:1, same recipe as .box-grid-icon
+}
+.panel-icon svg { width: 24px; height: 24px; color: var(--accent); }
+.content-panel:nth-of-type(3n+2) .panel-icon { background: color-mix(in srgb, var(--peach) 20%, var(--panel)); } // 5.28:1
+.content-panel:nth-of-type(3n+3) .panel-icon { background: color-mix(in srgb, var(--nest) 16%, var(--panel)); } // 4.75:1
+
+// ---- detail list (T96 — "**Bold lead-in** — description" bullet lists) --
+// features.md/download.md/usage.md all share one recurring pattern:
+// `- **Term** — long description.` The browser's default disc bullet
+// plus the UA stylesheet's tight <li> spacing is what read as a "dense
+// bullet wall" in the audit. Same fix applied everywhere the pattern
+// shows up: drop the disc, add a small --accent dot marker (purely
+// decorative rhythm, not a state indicator, so colour-alone is fine
+// here — WCAG 1.4.1 only restricts colour as the SOLE means of
+// conveying information), and give every item real breathing room via
+// grid `gap` instead of the UA default <li> margin.
+.detail-list {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-4) 0 0;
+  display: grid;
+  gap: var(--space-4);
+}
+.detail-list li {
+  position: relative;
+  padding-left: var(--space-5);
+  margin: 0;
+}
+.detail-list li::before {
+  content: "";
+  position: absolute;
+  left: 2px;
+  top: 0.6em;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+// ---- FAQ accordion (native <details>/<summary>, zero JS) ---------------
+.faq-item {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0 var(--space-5);
+  margin: 0 0 var(--space-3);
+  background: var(--panel);
+}
+.faq-item summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  padding: var(--space-4) 0;
+  cursor: pointer;
+  list-style: none;
+  font-weight: 600;
+}
+.faq-item summary::-webkit-details-marker { display: none; }
+.faq-item summary h2 { margin: 0; font-size: 1.05rem; }
+.faq-item summary::after {
+  content: "";
+  flex: 0 0 auto;
+  width: 10px; height: 10px;
+  border-right: 2px solid var(--accent);
+  border-bottom: 2px solid var(--accent);
+  transform: rotate(45deg);
+  transition: transform 200ms ease;
+}
+.faq-item[open] summary::after { transform: rotate(-135deg); }
+.faq-item .faq-answer { padding: 0 0 var(--space-5); }
+.faq-item .faq-answer > :last-child { margin-bottom: 0; }
 
 // ---- code / tables (used by the Compare page's feature table) -----------
 code, pre {
@@ -157,15 +1037,116 @@ code, pre {
   background: var(--panel);
   border: 1px solid var(--line);
 }
+code { padding: 0.15em 0.4em; border-radius: 4px; font-size: 0.92em; }
+pre { padding: var(--space-4); border-radius: var(--radius-sm); overflow-x: auto; }
+pre code { border: 0; padding: 0; }
 table {
+  width: 100%;
+  border-collapse: collapse;
   border-color: var(--line);
 }
 th {
   background: var(--panel);
   color: var(--ink);
+  text-align: left;
 }
-td, th { border-color: var(--line) !important; }
+td, th { border: 1px solid var(--line) !important; padding: var(--space-3) var(--space-4); }
+
+// ---- footer -------------------------------------------------------------
+.site-footer {
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  margin-top: var(--space-9);
+}
+// T96: on inner (article/page-layout) pages, .content-page's own bottom
+// padding (--space-9, 96px, below) and this margin-top (also --space-9,
+// 96px) stack — a real, measured dead void (~240px on faq.md, whose last
+// element is a hard-edged .faq-item border so the empty space right
+// after it is highly visible; user's audit named this the page's only
+// real fault). Halving just the footer side of that stack (to --space-7,
+// 48px) closes most of the gap while still leaving a clear, deliberate
+// section break before the footer. Scoped with :has() to ONLY the
+// content-page layout — home's own footer spacing (main's child is a
+// <section>, never .content-page) is untouched by this rule.
+main:has(> .content-page) + .site-footer {
+  margin-top: var(--space-7);
+}
+.footer-grid {
+  display: grid;
+  grid-template-columns: 1.3fr repeat(3, auto);
+  gap: var(--space-6);
+  padding: var(--space-7) 0 var(--space-6);
+}
+@media (max-width: 760px) {
+  .footer-grid { grid-template-columns: 1fr 1fr; }
+}
+@media (max-width: 480px) {
+  .footer-grid { grid-template-columns: 1fr; }
+}
+.footer-grid h2 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--muted-strong); // same fix as .eyebrow above — 0.8rem doesn't clear the "large text" bar
+  margin: 0 0 var(--space-3);
+}
+.footer-brand p { color: var(--muted-strong); max-width: 32ch; }
+.footer-col ul { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--space-2); }
+.footer-col a { color: var(--muted-strong); text-decoration: none; }
+.footer-col a:hover { color: var(--accent); }
+.footer-bottom {
+  border-top: 1px solid var(--line);
+  padding: var(--space-4) 0 var(--space-6);
+  color: var(--muted-strong);
+  font-size: 0.875rem;
+}
 
 // ---- misc -----------------------------------------------------------------
-hr { border-color: var(--line); }
-img { border-radius: var(--radius); }
+hr { border: none; border-top: 1px solid var(--line); margin: var(--space-6) 0; }
+
+// --- Copy-to-clipboard button on terminal command cards (injected by
+// assets/js/copy-command.js; never present without JS, so there is no
+// no-JS dead control to style). Sits in the .terminal-bar next to the dots.
+.install-card .terminal-bar {
+  align-items: center;
+  justify-content: flex-start;
+}
+.install-card.has-copy .terminal-bar {
+  min-height: 44px;                  // vertical room for the corner button
+  padding-right: 96px;               // keep the dots clear of it
+}
+.copy-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 1;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  font-family: inherit;
+  font-size: 0.78rem;
+  line-height: 1;
+  color: #E7E4EE;                    // 11.4:1 on the #221F27 terminal ground
+  background: rgba(255, 255, 255, 0.09);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+}
+.copy-btn:hover { background: rgba(255, 255, 255, 0.16); }
+.copy-btn:focus-visible {
+  outline: 2px solid var(--lilac);   // light ring; the ground here is dark
+  outline-offset: 2px;
+}
+.copy-btn.is-done {
+  color: var(--lilac);
+  border-color: rgba(198, 190, 220, 0.5);
+}
+.copy-btn-icon { width: 14px; height: 14px; flex: none; }
+.copy-btn-label { white-space: nowrap; }
+
+@media (prefers-reduced-motion: reduce) {
+  .copy-btn { transition: none; }
+}
