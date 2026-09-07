@@ -49,6 +49,12 @@ override_dh_auto_install:
 	install -Dm755 packaging/linux/scripts/clipnest-ctl debian/clipnest/usr/bin/clipnest-ctl
 	install -Dm755 packaging/linux/scripts/clipnest-grant-input debian/clipnest/usr/libexec/clipnest/clipnest-grant-input
 	install -Dm644 assets/clipnest-icons/clipnest-app-icon.svg debian/clipnest/usr/share/icons/hicolor/scalable/apps/app.clipnest.Clipnest.svg
+	# The tray icon (org.kde.StatusNotifierItem's IconName, see
+	# StatusNotifierNames.swift) — freedesktop's "symbolic" icon-theme size
+	# class, single-fill so non-recoloring SNI hosts (most legacy XEmbed
+	# trays) still render something readable. hicolor is every icon theme's
+	# guaranteed fallback, so no dependency on a specific desktop theme.
+	install -Dm644 assets/clipnest-icons/app.clipnest.Clipnest-symbolic.svg debian/clipnest/usr/share/icons/hicolor/symbolic/apps/app.clipnest.Clipnest-symbolic.svg
 	# clipnest-ocr-data cannot be meaningfully built without the real
 	# PP-OCRv5 model files — see packaging/linux/vendor/ppocr-models/README.md
 	# for exactly why this packaging task did not fetch/fabricate them.

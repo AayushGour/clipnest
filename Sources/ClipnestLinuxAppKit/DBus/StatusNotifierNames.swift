@@ -46,11 +46,16 @@ enum StatusNotifierItemValue {
   static let id = "app.clipnest.Clipnest"
   static let title = "Clipnest"
   static let status = "Active"
-  /// A generic, always-present icon name (the "edit-paste" action, per the
-  /// freedesktop icon-naming spec) — this task doesn't own icon-asset
-  /// packaging, so this is the safe, symbolic fallback every icon theme
-  /// ships rather than a Clipnest-branded name that might not resolve.
-  static let iconName = "edit-paste-symbolic"
+  /// The Clipnest-branded symbolic icon, derived from
+  /// `assets/clipnest-icons/clipnest-mono.svg` (never redrawn — see that
+  /// dir's README) and installed by `debian/rules` to
+  /// `/usr/share/icons/hicolor/symbolic/apps/app.clipnest.Clipnest-symbolic.svg`.
+  /// Per the freedesktop icon-naming convention (e.g. GNOME apps ship
+  /// "org.foo.Bar-symbolic"), the `-symbolic` suffix is part of the NAME,
+  /// not just the filename. `hicolor` is every icon theme's guaranteed
+  /// fallback search path, so this resolves as long as the package is
+  /// installed — no dependency on a specific desktop theme.
+  static let iconName = "app.clipnest.Clipnest-symbolic"
 }
 
 /// `com.canonical.dbusmenu` — the menu THIS app exposes at

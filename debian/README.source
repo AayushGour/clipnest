@@ -143,3 +143,70 @@ the two keys in `app.clipnest.Clipnest.Keybindings.gschema.xml`, but
 packaging pass (verified: both contain only a single `Placeholder.swift`),
 so this is a documented assumption for their authors to confirm, not a
 verified contract.
+
+Tray icon — `app.clipnest.Clipnest-symbolic.svg`
+-------------------------------------------------
+`debian/rules` now also installs `assets/clipnest-icons/app.clipnest.Clipnest-symbolic.svg`
+to `hicolor/symbolic/apps/`, matching the existing `clipnest-app-icon.svg` ->
+`hicolor/scalable/apps/` pattern. Derived from `clipnest-mono.svg` (same
+`<path>`/`<mask>` data, byte-for-byte diffed — never redrawn): only the root
+`style="color:..."` and the group's `fill="currentColor"` changed, to a
+hardcoded `fill="#bebebe"` (GTK's own documented default symbolic foreground
+— confirmed against GTK's source: `gtksymbolicpaintable.c`'s fallback
+foreground is `(0.745, 0.745, 0.745, 1.0)` == `#bebebe`). Hardcoded rather
+than `currentColor` because most real `org.kde.StatusNotifierItem` hosts
+(verified here: `indicator-application-service` + gnome-panel's
+`IndicatorAppletComplete`, real Ubuntu Flashback packages, not GTK4's newer
+class-based symbolic recolor path) render the raw SVG file as-is with no
+live theme recolor, so the fallback fill has to look right on its own —
+confirmed by rendering it directly (`rsvg-convert`) against both a light and
+a dark backdrop. `StatusNotifierNames.swift`'s `StatusNotifierItemValue
+.iconName` now points at `"app.clipnest.Clipnest-symbolic"` (freedesktop
+convention: the `-symbolic` suffix is part of the icon NAME the host looks
+up, not just the installed filename) instead of the previous generic
+`edit-paste-symbolic` fallback.
+
+Known gap #4 (real, verified, NOT fixed here — out of this task's file
+scope) — `StatusNotifierTray`'s D-Bus connections never send `Hello`, so
+the tray has never actually registered with any real watcher
+--------------------------------------------------------------------------
+Verified with `dbus-monitor` against a real `indicator-application-service`
+(Ubuntu's real `org.kde.StatusNotifierWatcher` implementation for GNOME
+Flashback/gnome-panel — installed and exercised for real in the scratchpad
+desktop image, not assumed): every message
+`LinuxAppLifecycle.startTray()`'s `ownConnection`/`watchConnection` send
+(`NameHasOwner`, `AddMatch`, `RegisterStatusNotifierItem`, and everything
+`StatusNotifierTray`'s receive loop would otherwise reply with) is rejected
+outright by the bus daemon with `org.freedesktop.DBus.Error.AccessDenied:
+"Client tried to send a message other than Hello without being registered"`.
+Root cause: `DBusConnection.connect()` (`Sources/ClipnestPlatformLinux/
+Accessibility/DBusConnection.swift`) performs the SASL `EXTERNAL` handshake
+but never sends the mandatory D-Bus `Hello` method afterward — every other
+call site either doesn't need to send anything else on that connection, or
+(only `SingleInstanceDecision.acquire`, for `controlConnection`) sends
+`Hello` itself before anything else. `startTray()`'s two connections do
+neither, so **the tray has never registered with a real watcher in ANY
+environment** — this is not a "no watcher in CI" gap, it is independent of
+platform. A second, narrower issue compounds it even with `Hello` fixed:
+`RegisterStatusNotifierItem` is called with `ClipnestControlName.busName`
+("app.clipnest.Clipnest", a well-known name owned by the SEPARATE
+`controlConnection`, per `SingleInstance.acquire`'s `RequestName` call) —
+so even a successful registration would tell the watcher to query a
+connection that never implements `org.kde.StatusNotifierItem` at all.
+Confirmed the icon/menu content itself is correct against a real host via a
+throwaway Python harness (not shipped) that performs `Hello` correctly and
+serves the exact property values and `com.canonical.dbusmenu` layout
+`StatusNotifierNames.swift`/`StatusNotifierProtocol.swift` define — see the
+senior-dev log/report for screenshots. That same harness surfaced a second,
+independent gap: real `libdbusmenu-glib` clients call `GetGroupProperties`
+(`com.canonical.dbusmenu`'s bulk property-fetch method) after `GetLayout`,
+which neither the harness originally nor `DBusMenuMember`/
+`DBusMenuLayoutBuilder` implements — logged by gnome-panel as
+`LIBDBUSMENU-GLIB-WARNING: ... GetGroupProperties is not a valid method`.
+Both gaps are real, reproducible, and unrelated to the icon-asset work this
+task owned; flagged for the connection/D-Bus-protocol owner rather than
+patched here (outside this task's assigned file scope, and `Hello` handling
+is cross-cutting — `ShellHelperClient`'s connections show the identical
+`AddMatch`-rejected-with-AccessDenied symptom in the same `dbus-monitor`
+capture, so a real fix likely belongs in `DBusConnection` itself, not a
+one-off patch inside `startTray()`).

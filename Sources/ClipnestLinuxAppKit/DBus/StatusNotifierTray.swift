@@ -23,6 +23,24 @@ import Foundation
 /// container this ships to; `StatusNotifierRequest.decode`/
 /// `StatusNotifierReplies`/`DBusMenuLayoutBuilder` (the pure logic this
 /// class is built from) are unit-tested directly instead.
+///
+/// **Verified against a real watcher (2026-09), with a real, NOT-YET-FIXED
+/// finding:** `ownConnection`/`watchConnection` never send the mandatory
+/// D-Bus `Hello` method, so a real bus daemon rejects every message they
+/// send (`AccessDenied: "Client tried to send a message other than Hello
+/// without being registered"`) — `registerIfWatcherPresent()` has never
+/// actually reached a real `org.kde.StatusNotifierWatcher`, in ANY
+/// environment, independent of whether one exists. Compounding it,
+/// `RegisterStatusNotifierItem` is called with `ClipnestControlName
+/// .busName`, a well-known name owned by the unrelated `controlConnection`
+/// (see `SingleInstance.acquire`) — not by either connection this class
+/// owns — so even with `Hello` fixed, a watcher would be told to query a
+/// connection that never serves `org.kde.StatusNotifierItem` at all. See
+/// `debian/README.source`'s "Known gap #4" for the full verification
+/// evidence (dbus-monitor capture + a throwaway harness proving the icon/
+/// menu content itself is correct against a real
+/// `indicator-application-service` + gnome-panel host once `Hello` +
+/// identity are right).
 public final class StatusNotifierTray: @unchecked Sendable {
   private static let logger = ClipnestLogger(
     subsystem: ClipnestLog.subsystem, category: "StatusNotifierTray")

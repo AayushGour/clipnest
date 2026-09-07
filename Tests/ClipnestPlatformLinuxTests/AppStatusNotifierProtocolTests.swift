@@ -72,6 +72,24 @@ struct AppStatusNotifierRepliesTests {
     #expect(StatusNotifierReplies.property(named: "NotARealProperty", replyingTo: request) == nil)
   }
 
+  @Test("IconName resolves to the Clipnest-branded symbolic icon debian/rules installs")
+  func iconNameIsTheClipnestBrandedSymbolicIcon() {
+    let request = call(interface: "org.freedesktop.DBus.Properties", member: "Get")
+    guard let reply = StatusNotifierReplies.property(named: "IconName", replyingTo: request),
+      case .variant(.string(let iconName))? = reply.body.first
+    else {
+      Issue.record("expected IconName to resolve to a string variant")
+      return
+    }
+    #expect(iconName == StatusNotifierItemValue.iconName)
+    // Freedesktop convention: "-symbolic" is part of the icon NAME (not just
+    // the installed filename) that hosts resolve via
+    // hicolor/symbolic/apps/<name>.svg — never the generic
+    // "edit-paste-symbolic" fallback this used to ship.
+    #expect(iconName.hasSuffix("-symbolic"))
+    #expect(iconName == "app.clipnest.Clipnest-symbolic")
+  }
+
   @Test("allProperties() includes an entry for every documented property")
   func allPropertiesIncludesEveryName() {
     let request = call(interface: "org.freedesktop.DBus.Properties", member: "GetAll")
