@@ -41,6 +41,26 @@ public final class DBusConnection: @unchecked Sendable {
   /// the write already happened-before that observation.
   public private(set) var supportsFileDescriptorPassing = false
 
+  /// This connection's OWN unique bus name (e.g. `":1.42"`), assigned by
+  /// the daemon in its reply to the mandatory `Hello` call `connect(
+  /// address:timeout:)` now sends before ever returning a connection to a
+  /// caller (see that method's doc comment). Needed whenever THIS
+  /// connection's own identity must be told to another service — e.g.
+  /// `org.kde.StatusNotifierWatcher.RegisterStatusNotifierItem`'s argument
+  /// must name whichever connection actually hosts the item, which for a
+  /// connection with no well-known name of its own (`StatusNotifierTray
+  /// .ownConnection`) can only be this. `nil` is not observable from
+  /// outside this file in practice — `init` is `private`, so the only way
+  /// to obtain a `DBusConnection` at all is through `connect`, which fails
+  /// the whole connection (returns `nil`) rather than a half-usable one if
+  /// `Hello` doesn't succeed — kept `String?` (not force-unwrapped) purely
+  /// to describe the brief in-construction window before that succeeds.
+  /// Same "written exactly once, entirely before `connect` returns, so no
+  /// other thread can ever observe the write racing" reasoning as
+  /// `supportsFileDescriptorPassing` above — not behind `state`'s `Mutex`
+  /// for the identical reason.
+  public private(set) var uniqueName: String?
+
   private struct State {
     var nextSerial: UInt32 = 1
     var receiveBuffer: [UInt8] = []
@@ -72,18 +92,47 @@ public final class DBusConnection: @unchecked Sendable {
   }
 
   /// Connects to `address` (a D-Bus server address string — see
-  /// `DBusAddress`), performs the `EXTERNAL` auth handshake, and returns a
-  /// ready-to-use connection, or `nil` on any failure (unreachable socket,
-  /// auth rejected, malformed address).
+  /// `DBusAddress`), performs the `EXTERNAL` auth handshake, sends the
+  /// mandatory `Hello` call, and returns a ready-to-use connection, or
+  /// `nil` on any failure (unreachable socket, auth rejected, malformed
+  /// address, or `Hello` itself failing/erroring).
+  ///
+  /// **`Hello` is sent HERE, unconditionally, for every connection this
+  /// method ever returns — not left to each caller to remember.** Per the
+  /// D-Bus Specification ("The Hello method"), a client MUST send `Hello`
+  /// before any other traffic; a real `dbus-daemon` rejects everything
+  /// else a connection sends with `AccessDenied: "Client tried to send a
+  /// message other than Hello ..."`. Before this fix, exactly ONE call
+  /// site in the whole app (`SingleInstance.acquire`, for the control
+  /// connection) sent it itself — every other connection this app ever
+  /// opened (the tray's `ownConnection`/`watchConnection`, the Shell-
+  /// extension helper's `callConnection`/`signalConnection`, the
+  /// `GlobalShortcuts` portal probe, both AT-SPI connections) was silently
+  /// dead on a real bus from the moment it connected, independent of
+  /// platform or of whether whatever it was trying to reach existed at
+  /// all. A required step a caller can forget is exactly how that class of
+  /// bug happens — see the `PickerViewModel.presentSnippetEditor` incident
+  /// this same codebase already hit — so it belongs where no caller CAN
+  /// forget it: inside `connect` itself.
+  ///
+  /// **A failed `Hello` fails the whole connection.** There is no
+  /// meaningful "half-connected" state to return instead: nothing this
+  /// app does over a connection the daemon won't register is going to
+  /// succeed either, so `nil` (matching every other failure this method
+  /// already reports the same way) is the only coherent contract.
   public static func connect(address: String, timeout: Duration) -> DBusConnection? {
     #if canImport(Glibc)
       guard let target = DBusAddress.parseFirstUnixTarget(address) else { return nil }
       guard let fd = openUnixSocket(target: target, timeout: timeout) else { return nil }
       let connection = DBusConnection(fileDescriptor: fd)
-      guard connection.performExternalAuth() else {
-        Glibc.close(fd)
-        return nil
-      }
+      // `connection` (not `fd` again) owns closing the socket on every
+      // failure path below via its own `deinit` once it falls out of
+      // scope here — deliberately NOT also `Glibc.close(fd)` inline (that
+      // would double-close the same fd number once ARC deallocates this
+      // local `let` right after, a real hazard if another thread's
+      // `socket()` call has already reused that number by then).
+      guard connection.performExternalAuth() else { return nil }
+      guard connection.sendHelloAndCaptureUniqueName(timeout: timeout) else { return nil }
       return connection
     #else
       return nil
@@ -193,6 +242,30 @@ public final class DBusConnection: @unchecked Sendable {
       }
 
       return writeRaw(Array(DBusAuthHandshake.beginLine.utf8))
+    }
+
+    /// Sends the mandatory `org.freedesktop.DBus.Hello` call (see
+    /// `connect(address:timeout:)`'s doc comment) and captures the unique
+    /// bus name (`":1.N"`) the daemon assigns this connection in its
+    /// reply — see `uniqueName`'s doc comment for why callers need it.
+    /// Uses `allocateSerial()`/`call(_:timeout:)` like any other request
+    /// this module sends; `Hello` is not special-cased at the wire level,
+    /// only in being sent unconditionally and first. Returns `false` if
+    /// the call times out, the daemon replies with an `ERROR` (e.g. a
+    /// SECOND `Hello` on an already-registered connection — exactly the
+    /// mistake this method's callers must never make now that it's
+    /// centralized here), or the reply body isn't the single string the
+    /// spec promises.
+    private func sendHelloAndCaptureUniqueName(timeout: Duration) -> Bool {
+      let hello = DBusMessage(
+        type: .methodCall, serial: allocateSerial(), path: ATSPIPath.dbusDaemon,
+        interface: ATSPIInterface.dbus, member: ATSPIMember.hello,
+        destination: ATSPIBusName.dbusDaemon)
+      guard let reply = call(hello, timeout: timeout), reply.type == .methodReturn,
+        case .string(let name)? = reply.body.first
+      else { return false }
+      uniqueName = name
+      return true
     }
 
     /// Reads raw bytes (outside the binary message protocol — used only

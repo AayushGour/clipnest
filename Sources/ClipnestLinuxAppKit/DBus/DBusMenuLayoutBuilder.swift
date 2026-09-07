@@ -53,9 +53,52 @@ enum DBusMenuLayoutBuilder {
   }
 
   private static func childVariant(_ item: DBusMenuItem) -> DBusValue {
-    let properties: [DBusValue] = [
-      .dictEntry(.string(DBusMenuProperty.label), .variant(.string(item.label)))
-    ]
+    let properties = propertyEntries(for: item, matching: [])
     return .variant(.structure([.int32(item.id), .array(properties), .array([])]))
+  }
+
+  /// `GetGroupProperties(ids, propertyNames) -> a(ia{sv})`'s full reply
+  /// body: one `(id, properties)` entry per item `ids` selects. Per the
+  /// `com.canonical.dbusmenu` spec, an empty `ids` means "every item" —
+  /// same "empty means everything" convention `propertyNames` uses too
+  /// (see `propertyEntries(for:matching:)`).
+  ///
+  /// Shares `propertyEntries(for:matching:)` with `GetLayout`'s own
+  /// `childVariant` so the two interfaces can never disagree about what an
+  /// item's properties are (coding-standards.md's DRY rule) — real
+  /// `libdbusmenu-glib` clients (this method's whole reason for existing:
+  /// see `DBusMenuMember.getGroupProperties`'s doc comment) call BOTH for
+  /// the same items and expect consistent answers.
+  ///
+  /// Shares the SAME known wire-marshalling gap `layout(items:)`'s doc
+  /// comment above flags for an empty `array([])`: if `ids` selects zero
+  /// items, this degrades to the empty-array case (`"ay"` instead of
+  /// `"a(ia{sv})"`) for the identical, already-documented reason — every
+  /// real caller this app has been verified against always selects at
+  /// least the items `GetLayout` just returned, so this is unreachable in
+  /// practice, not silently swept under the rug.
+  static func getGroupPropertiesReply(
+    items: [DBusMenuItem], ids: [Int32], propertyNames: [String]
+  ) -> [DBusValue] {
+    let selected = ids.isEmpty ? items : items.filter { ids.contains($0.id) }
+    let entries = selected.map { item in
+      DBusValue.structure([
+        .int32(item.id), .array(propertyEntries(for: item, matching: propertyNames)),
+      ])
+    }
+    return [.array(entries)]
+  }
+
+  /// `label`'s `a{sv}` dict entries for one item — this app's menu has
+  /// exactly one property, so `propertyNames.isEmpty` (the spec's "return
+  /// everything" convention) and `propertyNames.contains("label")` are the
+  /// only two ways this ever returns non-empty; anything else (a real
+  /// client asking only for some OTHER property this menu doesn't have)
+  /// correctly returns no entries rather than fabricating one.
+  private static func propertyEntries(
+    for item: DBusMenuItem, matching propertyNames: [String]
+  ) -> [DBusValue] {
+    guard propertyNames.isEmpty || propertyNames.contains(DBusMenuProperty.label) else { return [] }
+    return [.dictEntry(.string(DBusMenuProperty.label), .variant(.string(item.label)))]
   }
 }

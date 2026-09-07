@@ -15,7 +15,6 @@ enum DBusStandardName {
 }
 
 enum DBusStandardMember {
-  static let hello = "Hello"
   static let requestName = "RequestName"
   static let releaseName = "ReleaseName"
   static let nameHasOwner = "NameHasOwner"

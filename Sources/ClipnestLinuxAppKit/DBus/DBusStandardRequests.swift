@@ -6,19 +6,15 @@ import Foundation
 /// `ClipnestPlatformLinux.ATSPIRequests`'s exact split (message
 /// construction separated from the connection that sends it) so the wire
 /// shape is directly unit-testable without a real bus.
+///
+/// **No `hello()` builder here, deliberately.** `Hello` used to be built
+/// and sent from this module (`SingleInstance.acquire`, the only call site
+/// that remembered to) — it now lives in `ClipnestPlatformLinux
+/// .DBusConnection.connect(address:timeout:)`, sent unconditionally for
+/// EVERY connection before it's ever returned to a caller, so no caller in
+/// this module (or any other) can forget it again. See that method's doc
+/// comment for why it moved and what a caller can now assume.
 enum DBusStandardRequests {
-  /// Every D-Bus client MUST send this immediately after the SASL
-  /// handshake and before any other traffic — the bus daemon assigns this
-  /// connection its unique `:1.N` name in the reply and otherwise
-  /// disconnects a connection that sends anything else first (D-Bus
-  /// Specification, "Message Bus Starting Services"/"The Hello method").
-  static func hello(serial: UInt32) -> DBusMessage {
-    DBusMessage(
-      type: .methodCall, serial: serial, path: DBusStandardName.busObjectPath,
-      interface: DBusStandardName.busInterface, member: DBusStandardMember.hello,
-      destination: DBusStandardName.busServiceName)
-  }
-
   static func requestName(_ name: String, flags: UInt32, serial: UInt32) -> DBusMessage {
     DBusMessage(
       type: .methodCall, serial: serial, path: DBusStandardName.busObjectPath,

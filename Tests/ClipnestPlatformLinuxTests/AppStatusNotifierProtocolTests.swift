@@ -52,6 +52,45 @@ struct AppStatusNotifierProtocolTests {
       body: [.string("org.kde.StatusNotifierItem"), .string("Title")])
     #expect(StatusNotifierRequest.decode(message) == .getProperty("Title"))
   }
+
+  @Test("GetGroupProperties(ids, propertyNames) decodes both arrays")
+  func getGroupPropertiesDecodesIdsAndPropertyNames() {
+    let message = call(
+      interface: "com.canonical.dbusmenu", member: "GetGroupProperties",
+      body: [.array([.int32(1), .int32(2)]), .array([.string("label")])])
+    #expect(
+      StatusNotifierRequest.decode(message)
+        == .menuGetGroupProperties(ids: [1, 2], propertyNames: ["label"]))
+  }
+
+  @Test("GetGroupProperties with empty arrays decodes to empty ids/propertyNames, not unknown")
+  func getGroupPropertiesDecodesEmptyArrays() {
+    let message = call(
+      interface: "com.canonical.dbusmenu", member: "GetGroupProperties",
+      body: [.array([]), .array([])])
+    #expect(
+      StatusNotifierRequest.decode(message) == .menuGetGroupProperties(ids: [], propertyNames: []))
+  }
+}
+
+@Suite("StatusNotifierRequests")
+struct AppStatusNotifierRequestsTests {
+  @Test(
+    "registerStatusNotifierItem(itemBusName:) carries the CALLER-GIVEN bus name, not a hardcoded one"
+  )
+  func registerStatusNotifierItemCarriesGivenBusName() {
+    let message = StatusNotifierRequests.registerStatusNotifierItem(
+      itemBusName: ":1.87", serial: 1)
+    #expect(message.destination == "org.kde.StatusNotifierWatcher")
+    #expect(message.member == "RegisterStatusNotifierItem")
+    #expect(message.body == [.string(":1.87")])
+    // Regression guard for the bug this fixes: the argument must be
+    // whatever identity the CALLER passes (a real connection's own unique
+    // name), never a literal this module invents — see this function's
+    // doc comment for why hardcoding `ClipnestControlName.busName` here
+    // was wrong (a well-known name owned by an unrelated connection).
+    #expect(message.body != [.string("app.clipnest.Clipnest")])
+  }
 }
 
 @Suite("StatusNotifierReplies")
@@ -134,5 +173,52 @@ struct AppDBusMenuLayoutBuilderTests {
     }
     #expect(key == "label")
     #expect(label == "Open Clipnest")
+  }
+
+  private static let threeItems = [
+    DBusMenuItem(id: 1, label: "Open Clipnest"), DBusMenuItem(id: 2, label: "Settings…"),
+    DBusMenuItem(id: 3, label: "Quit Clipnest"),
+  ]
+
+  @Test("getGroupPropertiesReply with empty ids returns every item (spec's 'empty means all')")
+  func getGroupPropertiesReplyEmptyIdsReturnsEveryItem() {
+    let reply = DBusMenuLayoutBuilder.getGroupPropertiesReply(
+      items: Self.threeItems, ids: [], propertyNames: [])
+    guard reply.count == 1, case .array(let entries) = reply[0] else {
+      Issue.record("expected a single a(ia{sv}) array")
+      return
+    }
+    #expect(entries.count == 3)
+  }
+
+  @Test("getGroupPropertiesReply with explicit ids returns only those items, each with its label")
+  func getGroupPropertiesReplyFiltersByIds() {
+    let reply = DBusMenuLayoutBuilder.getGroupPropertiesReply(
+      items: Self.threeItems, ids: [2], propertyNames: [])
+    guard reply.count == 1, case .array(let entries) = reply[0], entries.count == 1,
+      case .structure(let entry) = entries[0], entry.count == 2, case .int32(let id) = entry[0],
+      case .array(let properties) = entry[1],
+      case .dictEntry(.string(let key), .variant(.string(let label)))? = properties.first
+    else {
+      Issue.record("expected exactly one (id, {label: ...}) entry for id 2")
+      return
+    }
+    #expect(id == 2)
+    #expect(key == "label")
+    #expect(label == "Settings…")
+  }
+
+  @Test("getGroupPropertiesReply with a non-'label' propertyNames filter returns empty properties")
+  func getGroupPropertiesReplyFiltersOutUnrequestedProperties() {
+    let reply = DBusMenuLayoutBuilder.getGroupPropertiesReply(
+      items: Self.threeItems, ids: [1], propertyNames: ["icon-name"])
+    guard reply.count == 1, case .array(let entries) = reply[0], entries.count == 1,
+      case .structure(let entry) = entries[0], entry.count == 2,
+      case .array(let properties) = entry[1]
+    else {
+      Issue.record("expected exactly one (id, properties) entry")
+      return
+    }
+    #expect(properties.isEmpty)
   }
 }

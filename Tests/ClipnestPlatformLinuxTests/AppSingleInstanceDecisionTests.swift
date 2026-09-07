@@ -35,31 +35,37 @@ struct AppSingleInstanceDecisionTests {
 
 @Suite("SingleInstance.acquire / forwardArguments")
 struct AppSingleInstanceTests {
-  @Test("acquire sends Hello then RequestName with DO_NOT_QUEUE, and decodes primaryOwner")
-  func acquireSendsHelloThenRequestName() {
-    let fake = FakeDBusCalling(scriptedReplies: [
-      fakeMethodReturn(), fakeMethodReturn(body: [.uint32(1)]),
-    ])
+  @Test("acquire sends RequestName with DO_NOT_QUEUE and decodes primaryOwner")
+  func acquireSendsRequestNameWithDoNotQueue() {
+    let fake = FakeDBusCalling(scriptedReplies: [fakeMethodReturn(body: [.uint32(1)])])
     let decision = SingleInstance.acquire(on: fake, timeout: .milliseconds(50))
 
     #expect(decision == .becomePrimary)
-    #expect(fake.sentMessages.count == 2)
-    #expect(fake.sentMessages[0].member == "Hello")
-    #expect(fake.sentMessages[1].member == "RequestName")
-    guard case .string(let name) = fake.sentMessages[1].body[0] else {
+    #expect(fake.sentMessages.count == 1)
+    #expect(fake.sentMessages[0].member == "RequestName")
+    guard case .string(let name) = fake.sentMessages[0].body[0] else {
       Issue.record("expected the bus name as the first RequestName argument")
       return
     }
     #expect(name == "app.clipnest.Clipnest")
-    guard case .uint32(let flags) = fake.sentMessages[1].body[1] else {
+    guard case .uint32(let flags) = fake.sentMessages[0].body[1] else {
       Issue.record("expected flags as the second RequestName argument")
       return
     }
     #expect(flags == 0x4, "DO_NOT_QUEUE must always be set — see SingleInstance's doc comment")
   }
 
-  @Test("acquire never sends RequestName if Hello itself fails")
-  func acquireStopsAfterFailedHello() {
+  @Test(
+    "acquire never sends Hello itself — DBusConnection.connect already did before this ever sees the connection"
+  )
+  func acquireNeverResendsHello() {
+    let fake = FakeDBusCalling(scriptedReplies: [fakeMethodReturn(body: [.uint32(1)])])
+    _ = SingleInstance.acquire(on: fake, timeout: .milliseconds(50))
+    #expect(fake.sentMessages.allSatisfy { $0.member != "Hello" })
+  }
+
+  @Test("acquire is bus-unavailable when RequestName itself fails/times out")
+  func acquireIsBusUnavailableWhenRequestNameFails() {
     let fake = FakeDBusCalling(scriptedReplies: [])
     let decision = SingleInstance.acquire(on: fake, timeout: .milliseconds(50))
     #expect(decision == .busUnavailable)

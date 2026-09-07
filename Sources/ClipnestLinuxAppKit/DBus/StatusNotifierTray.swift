@@ -24,23 +24,55 @@ import Foundation
 /// `StatusNotifierReplies`/`DBusMenuLayoutBuilder` (the pure logic this
 /// class is built from) are unit-tested directly instead.
 ///
-/// **Verified against a real watcher (2026-09), with a real, NOT-YET-FIXED
-/// finding:** `ownConnection`/`watchConnection` never send the mandatory
-/// D-Bus `Hello` method, so a real bus daemon rejects every message they
-/// send (`AccessDenied: "Client tried to send a message other than Hello
-/// without being registered"`) — `registerIfWatcherPresent()` has never
+/// **FIXED and re-verified against a real watcher (2026-09).** Two real,
+/// previously-shipped bugs meant `registerIfWatcherPresent()` had NEVER
 /// actually reached a real `org.kde.StatusNotifierWatcher`, in ANY
-/// environment, independent of whether one exists. Compounding it,
-/// `RegisterStatusNotifierItem` is called with `ClipnestControlName
-/// .busName`, a well-known name owned by the unrelated `controlConnection`
-/// (see `SingleInstance.acquire`) — not by either connection this class
-/// owns — so even with `Hello` fixed, a watcher would be told to query a
-/// connection that never serves `org.kde.StatusNotifierItem` at all. See
-/// `debian/README.source`'s "Known gap #4" for the full verification
-/// evidence (dbus-monitor capture + a throwaway harness proving the icon/
-/// menu content itself is correct against a real
-/// `indicator-application-service` + gnome-panel host once `Hello` +
-/// identity are right).
+/// environment, independent of whether one existed:
+/// 1. `ownConnection`/`watchConnection` (like every connection this app
+///    ever opened) never sent the mandatory D-Bus `Hello` method, so a real
+///    bus daemon rejected everything they sent with `AccessDenied`. Fixed
+///    centrally, for every connection at once, inside
+///    `ClipnestPlatformLinux.DBusConnection.connect(address:timeout:)` —
+///    see that method's doc comment.
+/// 2. `RegisterStatusNotifierItem` was called with `ClipnestControlName
+///    .busName`, a well-known name owned by the unrelated `controlConnection`
+///    (`SingleInstance.acquire`) — not by either connection this class
+///    owns. Fixed: `registerIfWatcherPresent()`/the re-registration path in
+///    `receiveLoop()` now pass `ownConnection.uniqueName` (the `":1.N"` the
+///    daemon assigned `ownConnection` itself in reply to `Hello`) — see
+///    `StatusNotifierRequests.registerStatusNotifierItem`'s doc comment.
+///
+/// Re-verified with BOTH fixed, against the real Ubuntu-Flashback tray
+/// stack (`indicator-application-service` + `gnome-panel`, installed and
+/// exercised for real, not assumed): `dbus-monitor` shows every connection
+/// sending `Hello` and getting a real unique name; `RegisterStatusNotifierItem`
+/// now carries `ownConnection`'s own name; the watcher accepts it (clean
+/// `METHOD_RETURN`, no error) and its OWN live `RegisteredStatusNotifierItems`
+/// property lists our item; a real client's `org.freedesktop.DBus
+/// .Properties.GetAll` sent DIRECTLY to `ownConnection` succeeds with the
+/// correct data (`Category`/`Id`/`Title`/`Status`/`IconName` =
+/// `"app.clipnest.Clipnest-symbolic"`/`Menu`); a real client's
+/// `com.canonical.dbusmenu.GetGroupProperties` call also succeeds, returning
+/// the correct 3-item menu with correct labels end to end over a real bus.
+///
+/// **New finding from this same verification, NOT fixed here (pre-existing,
+/// outside this task's scope — see `debian/README.source`'s "Known gap #4"
+/// for the full write-up):** a real client's `com.canonical.dbusmenu
+/// .GetLayout` call reliably and immediately disconnects `ownConnection`
+/// (`dbus-monitor`/`dbus-send` both show `NoReply: "Message recipient
+/// disconnected from message bus without replying"`, confirmed
+/// reproducible on demand) — root cause is the wire-marshalling gap
+/// `DBusMenuLayoutBuilder.layout(items:)`'s own doc comment already
+/// flagged (an empty `properties: a{sv}`/`children: av` degrading to `"ay"`
+/// via `DBusValue.array([]).signatureCode`), now confirmed to be
+/// CONNECTION-FATAL against a real client, not just a theoretical
+/// marshalling nit. This is very likely why the tray icon's pixels never
+/// actually appear in `gnome-panel`'s `IndicatorAppletComplete` widget in
+/// this harness even once registration is proven live and correct: the
+/// widget's own menu-building step calls `GetLayout` and the connection
+/// answering it dies mid-flight. Belongs to `ClipnestPlatformLinux`
+/// (`DBusValue`/`DBusMessage`), same file-ownership boundary
+/// `DBusMenuLayoutBuilder.swift`'s own doc comment already draws.
 public final class StatusNotifierTray: @unchecked Sendable {
   private static let logger = ClipnestLogger(
     subsystem: ClipnestLog.subsystem, category: "StatusNotifierTray")
@@ -85,13 +117,20 @@ public final class StatusNotifierTray: @unchecked Sendable {
   }
 
   private func registerIfWatcherPresent() {
-    guard let watchConnection else { return }
+    // `ownConnection.uniqueName` is set unconditionally by
+    // `DBusConnection.connect(address:timeout:)`'s mandatory `Hello` — see
+    // that property's doc comment for why this is effectively never `nil`
+    // in practice; guarded anyway so a future connection-construction path
+    // that somehow bypassed `connect` degrades to "no tray" rather than
+    // registering an unidentifiable item.
+    guard let watchConnection, let itemBusName = ownConnection.uniqueName else { return }
     let hasOwnerReply = watchConnection.call(
       DBusStandardRequests.nameHasOwner(StatusNotifierWatcherName.busName, serial: 41),
       timeout: .milliseconds(250))
     guard hasOwnerReply.flatMap(DBusStandardResponses.parseBooleanReply) == true else { return }
     _ = watchConnection.call(
-      StatusNotifierRequests.registerStatusNotifierItem(serial: 42), timeout: .milliseconds(250))
+      StatusNotifierRequests.registerStatusNotifierItem(itemBusName: itemBusName, serial: 42),
+      timeout: .milliseconds(250))
   }
 
   private func receiveLoop() {
@@ -101,14 +140,14 @@ public final class StatusNotifierTray: @unchecked Sendable {
     // why this class needed the identical retention fix.
     Self.logger.info("tray D-Bus receive loop started")
     while true {
-      if let watchConnection,
+      if let watchConnection, let itemBusName = ownConnection.uniqueName,
         let ownerChange = watchConnection.receiveOneMessage(timeout: .milliseconds(50)),
         DBusStandardResponses.parseNameOwnerChanged(ownerChange)?.name
           == StatusNotifierWatcherName.busName,
         DBusStandardResponses.parseNameOwnerChanged(ownerChange)?.newOwner.isEmpty == false
       {
         _ = watchConnection.call(
-          StatusNotifierRequests.registerStatusNotifierItem(serial: 43),
+          StatusNotifierRequests.registerStatusNotifierItem(itemBusName: itemBusName, serial: 43),
           timeout: .milliseconds(250))
       }
 
@@ -135,6 +174,9 @@ public final class StatusNotifierTray: @unchecked Sendable {
       return StatusNotifierReplies.allProperties(replyingTo: message)
     case .menuGetLayout:
       return StatusNotifierReplies.menuLayout(items: menuItems, replyingTo: message)
+    case .menuGetGroupProperties(let ids, let propertyNames):
+      return StatusNotifierReplies.menuGroupProperties(
+        items: menuItems, ids: ids, propertyNames: propertyNames, replyingTo: message)
     case .menuAboutToShow:
       return StatusNotifierReplies.menuAboutToShowResult(needsUpdate: false, replyingTo: message)
     case .menuEvent(let itemID, let eventID):

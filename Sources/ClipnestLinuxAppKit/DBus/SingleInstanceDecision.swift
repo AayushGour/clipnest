@@ -41,22 +41,31 @@ public enum SingleInstanceDecision: Equatable, Sendable {
 }
 
 /// Real, bus-connected single-instance acquisition + argv forwarding.
-/// Wraps the pure `SingleInstanceDecision.decide` with the actual `Hello`/
+/// Wraps the pure `SingleInstanceDecision.decide` with the actual
 /// `RequestName`/`Open` calls — manual-verify only (needs a real session
 /// bus), same "pure decision extracted, real I/O kept thin and separate"
 /// split as every other D-Bus-driven type in this module.
 enum SingleInstance {
-  /// Sends `Hello` (required before any other traffic — see
-  /// `DBusStandardRequests.hello`'s doc comment) then
-  /// `RequestName(app.clipnest.Clipnest, DO_NOT_QUEUE)`, and returns the
-  /// resulting decision.
+  /// Sends `RequestName(app.clipnest.Clipnest, DO_NOT_QUEUE)` and returns
+  /// the resulting decision.
+  ///
+  /// **Does NOT send `Hello` itself anymore.** `DBusConnection.connect(
+  /// address:timeout:)` now sends the mandatory `Hello` unconditionally
+  /// for every connection it returns (see that method's doc comment) —
+  /// this used to be the ONE call site in the whole app that remembered
+  /// to send it, hardcoding serial `1` for `Hello` and `2` for
+  /// `RequestName` right after. Now that `connect` already consumes
+  /// serial `1` for its own `Hello`, resending it here would get an
+  /// `ERROR` reply from the daemon (a connection only gets to register
+  /// once), and hardcoding `2` for `RequestName` would just be
+  /// coincidentally correct rather than actually derived — so this now
+  /// allocates its own serial via `allocateSerialOrFallback()` instead of
+  /// assuming a specific number.
   static func acquire(on connection: any DBusCalling, timeout: Duration) -> SingleInstanceDecision {
-    guard connection.call(DBusStandardRequests.hello(serial: 1), timeout: timeout) != nil else {
-      return .busUnavailable
-    }
     let reply = connection.call(
       DBusStandardRequests.requestName(
-        ClipnestControlName.busName, flags: DBusRequestNameFlag.doNotQueue, serial: 2),
+        ClipnestControlName.busName, flags: DBusRequestNameFlag.doNotQueue,
+        serial: connection.allocateSerialOrFallback()),
       timeout: timeout)
     let code = reply.flatMap(DBusStandardResponses.parseRequestNameReply)
     return SingleInstanceDecision.decide(requestNameReply: code)
@@ -98,9 +107,9 @@ extension DBusCalling {
   /// tests use has no serial counter at all) — real callers always have a
   /// real `DBusConnection` in hand and should call `allocateSerial()`
   /// directly; this fallback (a fixed, spec-legal non-zero serial) only
-  /// exists so `SingleInstance.forwardArguments` can be written against
-  /// the narrow `DBusCalling` seam without every test double implementing
-  /// serial bookkeeping it doesn't need.
+  /// exists so `SingleInstance.acquire`/`.forwardArguments` can be written
+  /// against the narrow `DBusCalling` seam without every test double
+  /// implementing serial bookkeeping it doesn't need.
   fileprivate func allocateSerialOrFallback() -> UInt32 {
     (self as? DBusConnection)?.allocateSerial() ?? 1
   }

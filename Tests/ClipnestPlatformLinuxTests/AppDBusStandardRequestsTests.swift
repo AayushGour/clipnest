@@ -6,16 +6,6 @@ import Testing
 
 @Suite("DBusStandardRequests / DBusStandardResponses")
 struct AppDBusStandardRequestsTests {
-  @Test("hello() targets org.freedesktop.DBus.Hello with no body")
-  func helloMessageShape() {
-    let message = DBusStandardRequests.hello(serial: 1)
-    #expect(message.destination == "org.freedesktop.DBus")
-    #expect(message.path == "/org/freedesktop/DBus")
-    #expect(message.interface == "org.freedesktop.DBus")
-    #expect(message.member == "Hello")
-    #expect(message.body.isEmpty)
-  }
-
   @Test("requestName() carries the name and flags verbatim")
   func requestNameMessageShape() {
     let message = DBusStandardRequests.requestName(

@@ -69,6 +69,13 @@ enum DBusMenuMember {
   static let getLayout = "GetLayout"
   static let aboutToShow = "AboutToShow"
   static let event = "Event"
+  /// `GetGroupProperties(in ai ids, in as propertyNames, out a(ia{sv})
+  /// properties)` — real `libdbusmenu-glib` clients (gnome-panel's
+  /// `IndicatorAppletComplete` among them) call this right after
+  /// `GetLayout`/`AboutToShow` to bulk-fetch item properties; leaving it
+  /// unimplemented logs `LIBDBUSMENU-GLIB-WARNING: ... GetGroupProperties
+  /// is not a valid method` on a real host and the menu renders empty.
+  static let getGroupProperties = "GetGroupProperties"
 }
 
 enum DBusMenuProperty {

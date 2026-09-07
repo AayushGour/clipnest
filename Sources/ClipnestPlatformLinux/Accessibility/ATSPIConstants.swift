@@ -43,6 +43,19 @@ enum ATSPIMember {
   static let addMatch = "AddMatch"
   static let stateChanged = "StateChanged"
   static let propertiesGet = "Get"
+  /// `org.freedesktop.DBus.Hello` — every D-Bus client MUST send this,
+  /// unconditionally, before any other traffic (D-Bus Specification, "The
+  /// Hello method"); a real `dbus-daemon` rejects everything else with
+  /// `AccessDenied` otherwise. Used by `DBusConnection.connect(address:
+  /// timeout:)` (the ONE place this app ever sends it — see that method's
+  /// doc comment for why it's centralized there and not per-caller), which
+  /// reuses `ATSPIBusName.dbusDaemon`/`ATSPIPath.dbusDaemon`/
+  /// `ATSPIInterface.dbus` below the exact same way `ATSPIRequests
+  /// .addFocusMatch` already does — this trio names the bus daemon's own
+  /// always-present `org.freedesktop.DBus` interface, not anything AT-SPI-
+  /// specific, despite the `ATSPI*` prefix (this module's established home
+  /// for it — see that enum's own doc comment).
+  static let hello = "Hello"
 }
 
 /// The legacy AT-SPI `interface:signal:detail` event-name string this

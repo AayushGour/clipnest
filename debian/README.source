@@ -166,47 +166,86 @@ convention: the `-symbolic` suffix is part of the icon NAME the host looks
 up, not just the installed filename) instead of the previous generic
 `edit-paste-symbolic` fallback.
 
-Known gap #4 (real, verified, NOT fixed here — out of this task's file
-scope) — `StatusNotifierTray`'s D-Bus connections never send `Hello`, so
-the tray has never actually registered with any real watcher
---------------------------------------------------------------------------
-Verified with `dbus-monitor` against a real `indicator-application-service`
-(Ubuntu's real `org.kde.StatusNotifierWatcher` implementation for GNOME
-Flashback/gnome-panel — installed and exercised for real in the scratchpad
-desktop image, not assumed): every message
-`LinuxAppLifecycle.startTray()`'s `ownConnection`/`watchConnection` send
-(`NameHasOwner`, `AddMatch`, `RegisterStatusNotifierItem`, and everything
-`StatusNotifierTray`'s receive loop would otherwise reply with) is rejected
-outright by the bus daemon with `org.freedesktop.DBus.Error.AccessDenied:
-"Client tried to send a message other than Hello without being registered"`.
-Root cause: `DBusConnection.connect()` (`Sources/ClipnestPlatformLinux/
-Accessibility/DBusConnection.swift`) performs the SASL `EXTERNAL` handshake
-but never sends the mandatory D-Bus `Hello` method afterward — every other
-call site either doesn't need to send anything else on that connection, or
-(only `SingleInstanceDecision.acquire`, for `controlConnection`) sends
-`Hello` itself before anything else. `startTray()`'s two connections do
-neither, so **the tray has never registered with a real watcher in ANY
-environment** — this is not a "no watcher in CI" gap, it is independent of
-platform. A second, narrower issue compounds it even with `Hello` fixed:
-`RegisterStatusNotifierItem` is called with `ClipnestControlName.busName`
-("app.clipnest.Clipnest", a well-known name owned by the SEPARATE
-`controlConnection`, per `SingleInstance.acquire`'s `RequestName` call) —
-so even a successful registration would tell the watcher to query a
-connection that never implements `org.kde.StatusNotifierItem` at all.
-Confirmed the icon/menu content itself is correct against a real host via a
-throwaway Python harness (not shipped) that performs `Hello` correctly and
-serves the exact property values and `com.canonical.dbusmenu` layout
-`StatusNotifierNames.swift`/`StatusNotifierProtocol.swift` define — see the
-senior-dev log/report for screenshots. That same harness surfaced a second,
-independent gap: real `libdbusmenu-glib` clients call `GetGroupProperties`
-(`com.canonical.dbusmenu`'s bulk property-fetch method) after `GetLayout`,
-which neither the harness originally nor `DBusMenuMember`/
-`DBusMenuLayoutBuilder` implements — logged by gnome-panel as
-`LIBDBUSMENU-GLIB-WARNING: ... GetGroupProperties is not a valid method`.
-Both gaps are real, reproducible, and unrelated to the icon-asset work this
-task owned; flagged for the connection/D-Bus-protocol owner rather than
-patched here (outside this task's assigned file scope, and `Hello` handling
-is cross-cutting — `ShellHelperClient`'s connections show the identical
-`AddMatch`-rejected-with-AccessDenied symptom in the same `dbus-monitor`
-capture, so a real fix likely belongs in `DBusConnection` itself, not a
-one-off patch inside `startTray()`).
+Known gap #4 — UPDATE (2026-09, senior-dev): Hello + RegisterStatusNotifierItem
+identity FIXED and re-verified against a real watcher; one new gap found
+------------------------------------------------------------------------------
+The two root causes originally described in this section are now fixed,
+centrally, not per-caller:
+
+1. **`Hello` is now sent unconditionally by `DBusConnection.connect(address:
+   timeout:)`** (`Sources/ClipnestPlatformLinux/Accessibility/
+   DBusConnection.swift`) — every connection this app EVER opens completes
+   the mandatory D-Bus `Hello` handshake before it's ever handed to a
+   caller, and captures the unique name (`":1.N"`) the daemon assigns in
+   its `uniqueName` property. A failed `Hello` fails the whole connection
+   (`connect` returns `nil`), matching every other failure this method
+   already reports the same way. `SingleInstance.acquire` (the one caller
+   that used to send `Hello` itself, hardcoding serial `1` then `2` for
+   `RequestName`) no longer sends it — resending `Hello` on an
+   already-registered connection gets an `ERROR` reply, not a no-op — and
+   now allocates its `RequestName` serial via `allocateSerialOrFallback()`
+   instead of a hardcoded number that happened to be correct only by
+   coincidence.
+2. **`RegisterStatusNotifierItem`'s argument is now the CALLER-GIVEN
+   identity**, not a hardcoded well-known name — `StatusNotifierTray`
+   passes `ownConnection.uniqueName` (its own `":1.N"`, obtained from
+   `Hello`'s reply), since `ownConnection` owns no well-known bus name of
+   its own. Previously hardcoded to `ClipnestControlName.busName`, a name
+   owned by the unrelated `controlConnection`.
+
+**Re-verified with both fixes, against the same real Ubuntu-Flashback tray
+stack** (`indicator-application-service` + `gnome-panel`'s
+`IndicatorAppletComplete`, installed and exercised for real, not assumed —
+see this session's `logs/senior-dev.md` entry for the full `dbus-monitor`
+capture): every one of this app's connections (control, both Shell-helper,
+both tray, the `GlobalShortcuts` portal probe) now sends `Hello` and gets a
+real unique name; `RegisterStatusNotifierItem` carries `ownConnection`'s own
+name; the watcher accepts it with a clean `METHOD_RETURN` and its own live
+`RegisteredStatusNotifierItems` property lists our item; a real client's
+`org.freedesktop.DBus.Properties.GetAll` sent directly to `ownConnection`
+succeeds with the correct data (`Category`/`Id`/`Title`/`Status`/`IconName`
+= `"app.clipnest.Clipnest-symbolic"`/`Menu`). **`GetGroupProperties`
+(`com.canonical.dbusmenu`'s bulk property-fetch method, the second gap this
+section used to describe) is now implemented** (`DBusMenuMember
+.getGroupProperties`, `DBusMenuLayoutBuilder.getGroupPropertiesReply`,
+`StatusNotifierRequest.menuGetGroupProperties`) and confirmed working
+end-to-end: a real `dbus-send` call against the real, now-`Hello`-fixed
+`ownConnection` returns the correct 3-item menu (`Open Clipnest`/
+`Settings…`/`Quit Clipnest`) with correct labels.
+
+**New gap found by this same verification, NOT fixed here (pre-existing,
+independent of the `Hello`/identity work above, out of this task's assigned
+scope) — `GetLayout` is CONNECTION-FATAL against a real client.** A real
+client's `com.canonical.dbusmenu.GetLayout` call (confirmed with both
+`gnome-panel`'s real `IndicatorAppletComplete` widget and, isolated and
+reproduced on demand, plain `dbus-send`) reliably disconnects `ownConnection`
+mid-reply — `dbus-monitor` shows `NoReply: "Message recipient disconnected
+from message bus without replying"` every time, and `gnome-panel`'s own log
+independently confirms it: `LIBDBUSMENU-GLIB-WARNING: Getting layout failed:
+Operation was cancelled`. `Properties.GetAll` and `GetGroupProperties`
+against the exact same connection do NOT reproduce this — it is specific to
+`GetLayout`'s reply. Root cause: the wire-marshalling gap
+`DBusMenuLayoutBuilder.layout(items:)`'s own doc comment already flagged
+(`DBusValue.array([]).signatureCode` degrading an EMPTY array to `"ay"`
+instead of the semantically-correct `"a{sv}"`/`"av"` — `GetLayout`'s root
+item always has empty `properties`/leaf `children`, `GetGroupProperties`'s
+reply never does for a real, populated menu, which is exactly why one
+reproduces this and the other doesn't) — previously flagged as a
+theoretical marshalling nit with "no real bus in CI to catch it either
+way"; now CONFIRMED to actually kill the connection against a real
+`dbus-daemon`, and very likely why the tray icon's pixels never visibly
+appear in `gnome-panel`'s widget even once registration is proven live and
+correct (the widget's own menu-building step calls `GetLayout`, and the
+connection answering it dies mid-flight). Belongs to `ClipnestPlatformLinux`
+(`DBusValue`/`DBusMessage`), same file-ownership boundary this file's own
+doc comment already drew — flagged for that owner, not patched here.
+
+A second, smaller gap found the same way: `StatusNotifierRequest.decode`'s
+`org.freedesktop.DBus.Properties` case never checks `message.path`, so a
+`Properties.GetAll` aimed at `/app/clipnest/TrayMenu` (which should answer
+`com.canonical.dbusmenu`'s OWN properties — `Version`/`TextDirection`/
+`Status`/`IconThemePath`) is answered with the `StatusNotifierItem`'s SNI
+properties instead (confirmed live: `gnome-panel`'s widget receives
+`Category`/`Id`/`Title`/... where it asked for the menu's own properties).
+Not fixed here either — out of this task's assigned scope
+(`Hello`/identity/`GetGroupProperties`).
