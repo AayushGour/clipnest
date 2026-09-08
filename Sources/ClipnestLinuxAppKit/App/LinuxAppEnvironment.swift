@@ -432,7 +432,20 @@ final class LinuxAppEnvironment {
       performLinuxAppUpdate: { onStep in
         await LinuxAppUpdater.performUpdate(installedVersion: Self.installedVersion, onStep: onStep)
       },
-      aptUpgradeCommand: LinuxAppUpdater.aptUpgradeCommand())
+      aptUpgradeCommand: LinuxAppUpdater.aptUpgradeCommand(),
+      // T-WB1-GTKBUMP (P0 mitigation, decision D81): resolved ONCE here,
+      // same "one-shot machine-capability fact, read at the composition
+      // root" shape as `isTextRecognitionAvailable`/`eventSynthesizerKind`
+      // above — `GTKClipboardCrashNoticeDetection.detectCurrent()`
+      // (`ClipnestGTK`'s own real GTK-version/`GDK_IS_X11_DISPLAY` FFI
+      // read) must run AFTER `ClipnestGTKApplication.initializeGTK()`
+      // (`gtk_init()`) has already opened the default display — true here,
+      // since `LinuxAppLifecycle.run()` calls `initializeGTK()` before
+      // constructing this environment. No default value on this parameter
+      // — see `reinstallToggleHotkeyFloor`'s doc comment for why a
+      // defaulted cross-platform seam is a build-time-invisible way to
+      // ship a dead feature.
+      gtkClipboardCrashNoticeInfo: GTKClipboardCrashNoticeDetection.detectCurrent())
 
     // Keyboard-parity pass (routed follow-up): `PickerViewModel.openSettings`
     // (used by `openSettingsFromPicker()`, now reachable via the picker's own

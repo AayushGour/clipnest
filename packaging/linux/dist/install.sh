@@ -30,6 +30,30 @@ echo "Installing Clipnest ($deb_arch)..."
 sudo apt-get update -qq
 sudo apt-get install -y ./clipnest_*.deb ./clipnest-ocr_*.deb ./clipnest-ocr-data_*.deb
 
+# T-WB1-MITIGATE: GTK 4 versions before 4.10 have a rare, upstream bug (not
+# in Clipnest) that can crash Clipnest when another app interacts with the
+# clipboard in an unusual way — see README.md in this folder and
+# debian/README.source's "Known gap #5" in the source repo for the full
+# root cause. `dpkg --compare-versions` (not a hand-rolled string parse) is
+# the correct tool here: it implements Debian's own version-ordering rules,
+# so it compares "4.6.9+ds-0ubuntu0.22.04.2"-shaped strings correctly.
+# Clipnest itself repeats this same check at every startup, with the exact
+# detected version, in Settings > Permissions — this is a heads-up at
+# install time, not the only place it's surfaced.
+gtk_version="$(dpkg-query -W -f='${Version}' libgtk-4-1 2>/dev/null || true)"
+if [ -n "$gtk_version" ] && dpkg --compare-versions "$gtk_version" lt "4.10~"; then
+  cat <<EOF
+
+Note: your system's GTK 4 library ($gtk_version) predates version 4.10,
+which fixed a rare upstream bug that can make Clipnest quit unexpectedly
+if another running app interacts with the clipboard in an unusual way.
+This is a bug in GTK, not in Clipnest, and your clipboard history is
+never affected - if it happens, just reopen Clipnest. Ubuntu 24.04 and
+newer already ship a fixed GTK 4; see this folder's README.md for
+details.
+EOF
+fi
+
 cat <<'DONE'
 
 Clipnest is installed.

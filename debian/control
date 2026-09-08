@@ -47,6 +47,16 @@ Description: clipboard history, snippets, and on-device OCR
  Recommends it, so `apt install --no-install-recommends clipnest` skips
  it for a lighter install) to recognize text in copied images, entirely
  on-device.
+ .
+ Known limitation on Ubuntu 22.04 (and any system whose GTK 4 runtime
+ predates 4.10): a rare upstream GTK bug can make Clipnest quit
+ unexpectedly if another running application interacts with the clipboard
+ in an unusual way. This is a bug in the system's GTK library, not in
+ Clipnest, already fixed upstream in GTK 4.10 — Ubuntu 24.04 and newer are
+ unaffected, and clipboard history is never lost. Clipnest detects this at
+ startup and explains it under Settings > Permissions; see
+ debian/README.source's "Known gap #5" in this package's source for the
+ full root cause.
 
 Package: clipnest-ocr
 Architecture: any

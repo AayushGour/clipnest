@@ -66,4 +66,27 @@ static inline int clipnest_gtk_window_set_x11_utility_type_hint(GtkWidget *windo
 #endif
 }
 
+/// T-WB1-GTKBUMP (X11 CLIPBOARD-ownership SIGSEGV mitigation, decision D81):
+/// true iff `display` is GDK's X11 backend (`GdkX11Display`) — the ONLY
+/// backend that ever calls into `gdk/x11/gdkclipboard-x11.c`, where the
+/// NULL-unsafe `g_str_equal` crash lives (fixed upstream in GTK 4.10, commit
+/// `0212291a`). Queries the REAL, already-opened `GdkDisplay` at runtime
+/// rather than inferring from `XDG_SESSION_TYPE`/`WAYLAND_DISPLAY` — a
+/// Wayland session can still end up on the X11 backend if the Wayland
+/// backend fails to initialize, or if `GDK_BACKEND=x11` is forced
+/// (`gdk_display_manager_open_display`'s documented fallback behavior), so
+/// an env-var heuristic alone would be a real, if rare, false negative for
+/// exactly the sessions this check exists to catch.
+///
+/// A pure no-op (returns 0) on `display == NULL` or the compile-time `#else`
+/// branch — mirrors `clipnest_gtk_window_set_x11_utility_type_hint` above.
+static inline int clipnest_gdk_display_is_x11(GdkDisplay *display) {
+#ifdef GDK_WINDOWING_X11
+  return display != NULL && GDK_IS_X11_DISPLAY(display) ? 1 : 0;
+#else
+  (void)display;
+  return 0;
+#endif
+}
+
 #endif

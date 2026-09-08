@@ -192,7 +192,56 @@ extension SettingsWindow {
     }
     permissionsGrantButton = grantButton
 
+    // T-WB1-GTKBUMP: the clipboard-stability notice — see
+    // `GTKClipboardCrashNoticePresentation`'s doc comment for the full
+    // root-cause/scope. Resolved once, here, from the composition-root-
+    // supplied `gtkClipboardCrashNoticeInfo`, which cannot change for this
+    // process's lifetime — unlike the uinput grant state above, there is
+    // nothing here for `refreshPermissionsStatus()` to ever re-check, so
+    // this section is built (or not built at all) exactly once, rather
+    // than built-and-toggled on every `show()`.
+    if GTKClipboardCrashNoticePresentation.shouldShow(for: gtkClipboardCrashNoticeInfo) {
+      buildGTKClipboardCrashNoticeSection(in: box)
+    }
+
     refreshPermissionsStatus()
+  }
+
+  /// Builds the clipboard-stability notice's title + wrapped body label,
+  /// appended after every other Permissions-tab control — a distinct,
+  /// visually separated section (its own bold-ish title line) rather than
+  /// blended into the uinput-grant copy above, since the two are unrelated
+  /// Linux-specific limitations that happen to share this tab. Only ever
+  /// called when `GTKClipboardCrashNoticePresentation.shouldShow(for:)` is
+  /// true (see `buildPermissionsTab()`), so every widget it creates is
+  /// unconditionally shown — there is no runtime state transition that
+  /// would need this section to later hide itself.
+  @MainActor
+  private func buildGTKClipboardCrashNoticeSection(in box: OpaquePointer) {
+    let titleLabel: OpaquePointer = gtk_label_new(nil)
+    gtk_label_set_xalign(titleLabel, 0)
+    // Bold via Pango markup, not a `heading`/`title` CSS class — GTK4's own
+    // documented style classes (`.dim-label`/`.flat`/`.destructive-action`/
+    // `.suggested-action`, all already in use elsewhere in this file/
+    // module) don't include one for "bold label text"; `SnippetEditorWindow
+    // .swift`'s `headingLabel` uses this exact `<b>` + `PangoMarkup.escape`
+    // pattern for the identical need, escaped even though this particular
+    // string is a compile-time constant (matches that call site's
+    // discipline rather than assuming a literal can never need escaping).
+    gtk_label_set_markup(
+      titleLabel, "<b>\(PangoMarkup.escape(GTKClipboardCrashNoticePresentation.title))</b>")
+    gtk_box_append(box, titleLabel)
+    gtkClipboardCrashNoticeTitleLabel = titleLabel
+
+    // No `dim-label` here (unlike `reloginNoteLabel` above): that class is
+    // for a de-emphasized aside once a task is already mostly done; this
+    // notice is safety-relevant information that should read with the same
+    // full-contrast weight as `explanationText`/`securityExplanationText`
+    // above, not look like a disabled/secondary hint.
+    let bodyLabel = addWrappedLabel(
+      to: box,
+      text: GTKClipboardCrashNoticePresentation.bodyText(for: gtkClipboardCrashNoticeInfo))
+    gtkClipboardCrashNoticeBodyLabel = bodyLabel
   }
 
   /// A wrapped, left-aligned label — the shared shape every explanatory

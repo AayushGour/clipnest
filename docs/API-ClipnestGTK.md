@@ -13,6 +13,7 @@ which constructs `PickerViewModel`/`SettingsStore` and owns their lifetime.
 - [Row actions and the right-click context menu](#row-actions-and-the-right-click-context-menu)
 - [`SnippetEditorWindow`](#snippeteditorwindow)
 - [`SettingsWindow`](#settingswindow)
+- [`GTKClipboardCrashNoticeInfo` and detection](#gtkclipboardcrashnoticeinfo-and-detection)
 - [Actor isolation](#actor-isolation)
 - [Window placement](#window-placement)
 - [Working example](#working-example)
@@ -353,6 +354,86 @@ public final class SettingsWindow: @unchecked Sendable {
   as `uinputPermissionStatusProvider`/`requestUInputGrant` above. The pure
   copy/gating decisions (`UpdateSettingsPresentation`,
   `SettingsWindow+General.swift`) are unit-tested directly.
+- The Permissions tab also carries a **clipboard-stability notice**
+  (T-WB1-GTKBUMP/T-WB1-MITIGATE, decision D81) — see
+  [`GTKClipboardCrashNoticeInfo`](#gtkclipboardcrashnoticeinfo-and-detection)
+  below for the full mechanism. It appears ONLY when both are true: the
+  running process's real GTK 4 runtime predates 4.10, AND the currently
+  open `GdkDisplay` is genuinely backed by GDK's X11 backend (checked live
+  via `GDK_IS_X11_DISPLAY`, never inferred from `XDG_SESSION_TYPE`/
+  `WAYLAND_DISPLAY`). Built (or not built at all) exactly once, in
+  `buildPermissionsTab()` — unlike the uinput-grant section above it, this
+  fact cannot change during the process's lifetime, so there is nothing
+  for `refreshPermissionsStatus()` to ever re-check here.
+
+## `GTKClipboardCrashNoticeInfo` and detection
+
+The X11 CLIPBOARD-ownership SIGSEGV this notice warns about (task T-WB1,
+decision D81 in `.claude/project-context.md`): GTK 4 runtimes before
+4.10 crash the whole `clipnest` process if another X11 client claims a
+`TARGETS` reply that never actually lands — a NULL-unsafe `g_str_equal`
+inside `gdk_x11_clipboard_request_targets_got_stream`
+(`gdk/x11/gdkclipboard-x11.c`), fixed upstream by switching to the
+NULL-safe `g_strcmp0` (GNOME/gtk commit `0212291a`, GTK 4.10.0). There is
+no opt-out — GDK creates this tracking unconditionally inside
+`gtk_init()`, before any of this app's code runs — so this API is a
+**mitigation** (detect + explain), not a fix; the real fix needs a
+`libgtk-4-1` version bump, and no credible backport exists for Ubuntu
+22.04 today (checked directly against Launchpad — see
+`debian/README.source`'s "Known gap #5").
+
+```swift
+public struct GTKRuntimeVersion: Equatable, Sendable, CustomStringConvertible {
+  public let major: Int
+  public let minor: Int
+  public let micro: Int
+  public init(major: Int, minor: Int, micro: Int)
+  public var isAffectedByX11ClipboardCrash: Bool   // (major, minor) < (4, 10)
+}
+
+public struct GTKClipboardCrashNoticeInfo: Equatable, Sendable {
+  public let runtimeVersion: GTKRuntimeVersion
+  public let isX11Backend: Bool
+  public init(runtimeVersion: GTKRuntimeVersion, isX11Backend: Bool)
+}
+
+public enum GTKClipboardCrashNoticePresentation {
+  public static func shouldShow(for info: GTKClipboardCrashNoticeInfo) -> Bool
+  public static let title: String
+  public static func bodyText(for info: GTKClipboardCrashNoticeInfo) -> String
+}
+
+// The live FFI read — call only after ClipnestGTKApplication.initializeGTK()
+// has run (gtk_init() must have already opened the default display).
+public enum GTKClipboardCrashNoticeDetection {
+  public static func detectCurrent() -> GTKClipboardCrashNoticeInfo
+}
+```
+
+- `GTKRuntimeVersion`/`GTKClipboardCrashNoticePresentation`
+  (`Support/GTKClipboardCrashNotice.swift`) are the pure decision layer,
+  unit-tested directly with injected version numbers (both the real
+  Ubuntu 22.04 case, 4.6.9, and the real Ubuntu 24.04 case, 4.14.5) —
+  mirrors `PermissionsTabPresentation`'s identical split.
+- `GTKClipboardCrashNoticeDetection.detectCurrent()`
+  (`Interop/GTKClipboardCrashNoticeDetection.swift`) is the untestable
+  live counterpart: reads the RUNTIME GTK version via
+  `gtk_get_major_version()`/`_minor_version()`/`_micro_version()` (never
+  the compile-time `GTK_MAJOR_VERSION` macros — those describe the
+  headers this binary was built against, not the `libgtk-4-1` actually
+  installed on the machine running it) and queries the real, already-open
+  default `GdkDisplay`'s backend via `clipnest_gdk_display_is_x11`
+  (`Sources/CGdkX11/shim.h`, a `GDK_IS_X11_DISPLAY` check mirroring that
+  file's existing `clipnest_gtk_window_set_x11_utility_type_hint`). The
+  live query is deliberate, not an env-var shortcut: a Wayland session can
+  still end up on GDK's X11 backend if the Wayland backend fails to
+  initialize, or `GDK_BACKEND=x11` is forced.
+- Resolved exactly ONCE, at the composition root
+  (`LinuxAppEnvironment.init`, `ClipnestLinuxAppKit`), and passed into
+  `SettingsWindow.init` as a required `gtkClipboardCrashNoticeInfo:
+  GTKClipboardCrashNoticeInfo` parameter — no default value, same
+  "a defaulted cross-platform seam ships a silently-dead feature"
+  reasoning as every other injected `SettingsWindow.init` closure.
 
 ## Actor isolation
 

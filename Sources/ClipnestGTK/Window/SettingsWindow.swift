@@ -149,6 +149,22 @@ public final class SettingsWindow: @unchecked Sendable {
   /// changes at runtime.
   let aptUpgradeCommand: String
 
+  /// T-WB1-GTKBUMP: the live GTK-version/X11-backend facts behind the
+  /// Permissions tab's clipboard-stability notice (`GTKClipboardCrashNoticePresentation
+  /// .shouldShow(for:)`) — resolved ONCE at the composition root
+  /// (`LinuxAppEnvironment.init`, via `GTKClipboardCrashNoticeDetection
+  /// .detectCurrent()`, `ClipnestGTK`'s own real FFI read) and passed in as
+  /// a plain value, same "one-shot fact resolved at launch" shape as
+  /// `isTextRecognitionAvailable` above. Deliberately NOT resolved here
+  /// (e.g. inside `buildPermissionsTab()`) despite `ClipnestGTK` being able
+  /// to reach `CGtk4`/`CGdkX11` directly — the composition root is where
+  /// every other one-shot machine-capability check in this app is
+  /// resolved, and keeping this one there too avoids a second, inconsistent
+  /// pattern for "read once, never changes" facts. Deliberately NOT given a
+  /// default value — see `reinstallToggleHotkeyFloor`'s doc comment for why
+  /// a defaulted seam is a build-time-invisible way to ship a dead feature.
+  let gtkClipboardCrashNoticeInfo: GTKClipboardCrashNoticeInfo
+
   let window: OpaquePointer
   let notebook: OpaquePointer
 
@@ -192,6 +208,13 @@ public final class SettingsWindow: @unchecked Sendable {
   var permissionsReloginNoteLabel: OpaquePointer?
   var permissionsResultLabel: OpaquePointer?
   var permissionsGrantButton: OpaquePointer?
+  /// T-WB1-GTKBUMP: the clipboard-stability notice's title/body labels —
+  /// `nil` (never built) whenever `gtkClipboardCrashNoticeInfo` says it
+  /// doesn't apply (GTK 4.10+, or a non-X11 backend), matching this whole
+  /// window's "no widget for a state that can't occur" convention rather
+  /// than a built-but-hidden one.
+  var gtkClipboardCrashNoticeTitleLabel: OpaquePointer?
+  var gtkClipboardCrashNoticeBodyLabel: OpaquePointer?
 
   /// General tab's update section (`SettingsWindow+General.swift`, T-LXUPD)
   /// — every widget `refreshUpdateAvailabilityUI()`/`startInstallUpdate()`
@@ -220,7 +243,8 @@ public final class SettingsWindow: @unchecked Sendable {
       @escaping (
         _ onStep: @escaping @Sendable (LinuxUpdateStep) -> Void
       ) async -> LinuxUpdateOutcome,
-    aptUpgradeCommand: String
+    aptUpgradeCommand: String,
+    gtkClipboardCrashNoticeInfo: GTKClipboardCrashNoticeInfo
   ) {
     self.settings = settings
     self.updateChecker = updateChecker
@@ -236,6 +260,7 @@ public final class SettingsWindow: @unchecked Sendable {
     self.detectUpdateProvenance = detectUpdateProvenance
     self.performLinuxAppUpdate = performLinuxAppUpdate
     self.aptUpgradeCommand = aptUpgradeCommand
+    self.gtkClipboardCrashNoticeInfo = gtkClipboardCrashNoticeInfo
     window = gtk_window_new()
     notebook = gtk_notebook_new()
 

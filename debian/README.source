@@ -523,3 +523,75 @@ stage (and eventually `debian/control`'s `Build-Depends`/generated
 decision D81 has the full root-cause trail (source line numbers + the exact
 core-dump backtrace). Not fixed in this file/session — packaging-level,
 outside a Swift source change's reach.
+
+**UPDATE (2026-09-08, senior-dev, routed follow-up, task T-WB1-MITIGATE) —
+mitigated (detect + explain), since no real GTK bump is available for
+jammy today:**
+
+1. **Detection is live and runtime-accurate, not an env-var guess.**
+   `GTKRuntimeVersion`/`GTKClipboardCrashNoticePresentation`
+   (`Sources/ClipnestGTK/Support/GTKClipboardCrashNotice.swift`) decide
+   `isAffectedByX11ClipboardCrash` as `(major, minor) < (4, 10)` — pure,
+   unit-tested with injected version numbers for both the real jammy
+   (4.6.9) and noble (4.14.5) cases. The live read
+   (`Sources/ClipnestGTK/Interop/GTKClipboardCrashNoticeDetection.swift`)
+   calls `gtk_get_major_version()`/`_minor_version()`/`_micro_version()`
+   (the RUNTIME version actually loaded, never the compile-time
+   `GTK_MAJOR_VERSION` macros) and a real `GDK_IS_X11_DISPLAY(gdk_display
+   _get_default())` query (`clipnest_gdk_display_is_x11`, new in
+   `Sources/CGdkX11/shim.h`, mirroring that file's existing
+   `clipnest_gtk_window_set_x11_utility_type_hint`) — deliberately NOT the
+   `XDG_SESSION_TYPE`/`WAYLAND_DISPLAY` env-var heuristic `SessionType`
+   uses for XTEST gating elsewhere, because `deepwiki` against
+   `GNOME/gtk` confirmed a Wayland session can still end up on the X11
+   backend if the Wayland backend fails to initialize or `GDK_BACKEND=x11`
+   is forced — an env-var-only check would be a real, if rare, false
+   negative for exactly the sessions this notice exists to catch. Surfaced
+   in Settings > Permissions (`SettingsWindow+Permissions.swift`) — see
+   `docs/API-ClipnestGTK.md` for the full contract.
+2. **Live-verified both ways in a real container** (`clipnest-gtkbump-dev`,
+   this task's own): the real jammy `libgtk-4-1` 4.6.9 under a real Xvfb
+   X11 session shows the notice with the correct detected version; the
+   IDENTICAL binary relaunched under a real Wayland session (`weston
+   --backend=x11-backend.so`, confirmed genuinely Wayland via the paste
+   backend log switching from `xtest` to `clipboardOnly`) shows no notice
+   at all. The one cell that could not be live-verified — a real GTK
+   ≥4.10 on X11 — has no obtainable runtime on jammy (see point 3 below);
+   covered by injected-version unit tests instead and disclosed as
+   unverified live, not assumed.
+3. **No credible backport exists for jammy — checked directly against
+   Launchpad's API, not blog hearsay.** The official archive's `Updates`/
+   `Security`/`Backports` pockets top out at `4.6.9+ds-0ubuntu0.22.04.2`
+   with nothing in `Backports`; `~ricotz/+archive/ubuntu/staging` (the
+   most reputable long-standing GNOME-stack PPA maintainer for Ubuntu)
+   carries no `gtk4` source at all; `~gnome3-team/+archive/ubuntu
+   /gnome3-staging` (3779 published sources) has zero `gtk4` entries in
+   any status — that PPA predates GTK4. No other credible, currently
+   maintained PPA was found. GTK4's own dependency chain (newer
+   glib2.0/mesa/pango/graphene/wayland-protocols) makes a clean
+   point-release backport onto an LTS's frozen stack a much bigger
+   undertaking than a typical app backport — plausibly why none of the
+   usual maintainers have done it. Ubuntu 24.04+ is the only real
+   remediation today.
+4. **`debian/control`: `Depends` left alone, on purpose — documented in
+   the package Description instead.** A versioned `Depends: libgtk-4-1
+   (>= 4.10)` would make `clipnest` UNINSTALLABLE on jammy outright
+   (point 3: nothing in jammy's archives or any backport satisfies it),
+   strictly worse than a working install that can rarely crash from an
+   adversarial/buggy peer and self-heals on reopen (SQLite store survives
+   intact, per T-WB1's own container verification). `Breaks: libgtk-4-1
+   (<< 4.10)` has the identical uninstallability effect via a different
+   mechanism, rejected for the same reason. `Recommends: libgtk-4-1 (>=
+   4.10)` was also rejected — apt would report it permanently unsatisfied
+   on jammy too, pure noise with no path forward. `Depends:
+   ${shlibs:Depends}` stays exactly as `dpkg-shlibdeps` derives it
+   (correctly reflects the real, already-linked-against minimum ABI); a
+   new paragraph in `clipnest`'s long Description states the caveat in
+   plain language instead, visible via `apt show clipnest` before install
+   — the runtime Settings notice (point 1) is still the primary,
+   always-current mitigation.
+
+T-WB1 itself stays open — the SIGSEGV is still reachable, just now
+explained rather than silent — pending either a real GTK4 ≥4.10 backport
+for jammy or that series aging out. Tracked as `T-WB1-MITIGATE` in
+`.claude/task-board.md`.
