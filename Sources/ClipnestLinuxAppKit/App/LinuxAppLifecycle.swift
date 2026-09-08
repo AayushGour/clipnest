@@ -43,11 +43,32 @@ public enum LinuxAppLifecycle {
     ClipnestControlCapability.settings,
   ]
 
-  /// The single named GSettings-floor keybinding segment this app installs
-  /// (see `GSettingsKeybindingPath`'s doc comment on why it must be
-  /// named, never `customN`).
-  private static let toggleKeybindingSegment = "clipnest-toggle"
+  /// The two named GSettings-floor keybinding segments this app installs
+  /// (see `GSettingsKeybindingPath`'s doc comment on why each must be
+  /// named, never `customN`) live on `ToggleHotkeyFloorBinding.segment`/
+  /// `ExpandSnippetHotkeyFloorBinding.segment` themselves — not duplicated
+  /// here as a second, separately-literal copy (T-HOTKEY1: that used to be
+  /// exactly the drift risk `ToggleHotkeyFloorBinding.swift`'s own doc
+  /// comment flagged as a "recommended follow-up"). Only each binding's
+  /// DEFAULT accelerator is this file's own decision, so only that lives
+  /// here.
   private static let defaultToggleAccelerator = "<Super><Shift>v"
+  /// Pairs with `defaultToggleAccelerator` above the same way macOS pairs
+  /// `⌥⌘V`/`⌥⌘E` (`ClipnestApp/Sources/System/HotkeyManager.swift`).
+  /// Verified free on a real GNOME Shell 42.9 session (T-HOTKEY1;
+  /// `packaging/linux/gnome-shell-test/`), not assumed: enumerated every
+  /// key bound in `org.gnome.desktop.wm.keybindings`,
+  /// `org.gnome.shell.keybindings`, and
+  /// `org.gnome.settings-daemon.plugins.media-keys` — none use
+  /// `<Super><Shift>e` (or `<Super><Shift>v`, confirming the existing
+  /// toggle default was already collision-free too) — then installed a
+  /// real custom keybinding at this exact accelerator and confirmed via a
+  /// real `xdotool key --clearmodifiers super+shift+e` press that it fires
+  /// through `gsd-media-keys` with no collision, alongside the toggle
+  /// binding's own `<Super><Shift>v` continuing to fire correctly too. See
+  /// `ExpandSnippetHotkeyFloorBinding`'s own doc comment for the full
+  /// writeup.
+  private static let defaultExpandSnippetAccelerator = "<Super><Shift>e"
 
   // MARK: - Process-lifetime ownership (T-LX1 fix, then generalized)
   //
@@ -524,16 +545,28 @@ public enum LinuxAppLifecycle {
     thread.start()
   }
 
-  /// The `command` written here is executed later by gnome-settings-daemon,
-  /// which inherits neither this process's `$PATH` resolution nor its working
-  /// directory — see `OwnExecutablePath` for why `CommandLine.arguments.first`
-  /// (used here previously) silently produced a non-existent `//clipnest` for
-  /// the packaged bare-command launch this app actually ships as, disabling
-  /// the universal hotkey floor.
+  /// Installs BOTH global-hotkey GSettings-floor bindings — toggle-picker
+  /// (unchanged) and, as of T-HOTKEY1, expand-snippet (new: previously the
+  /// only way to reach `SnippetExpander` without the GNOME Shell extension
+  /// was `clipnest --expand-snippet`/`clipnest-ctl expand-snippet` typed in
+  /// a terminal, which defeats the point of a global hotkey). Each delegates
+  /// to its own binding type's `reinstallFloor(withAccelerator:)`
+  /// (`ToggleHotkeyFloorBinding`/`ExpandSnippetHotkeyFloorBinding`, this
+  /// directory) — the SAME function a Settings > Shortcuts rebind calls —
+  /// rather than a second, separately-literal `GSettingsCustomKeybinding
+  /// .install` call per binding here, so `segment`/`bindingLabel`/the
+  /// `OwnExecutablePath.resolve()`-based command-building logic each have
+  /// exactly one owner.
+  ///
+  /// `OwnExecutablePath.resolve()` (used inside both `reinstallFloor`
+  /// implementations) exists because the command gnome-settings-daemon
+  /// executes later inherits neither this process's `$PATH` resolution nor
+  /// its working directory — see that type's own doc comment for why
+  /// `CommandLine.arguments.first` (used here previously) silently produced
+  /// a non-existent `//clipnest` for the packaged bare-command launch this
+  /// app actually ships as, disabling the universal hotkey floor.
   private static func installGSettingsFloor() {
-    GSettingsCustomKeybinding.install(
-      name: "Clipnest — Toggle Picker",
-      command: "\(OwnExecutablePath.resolve()) \(LinuxAppCLIFlag.togglePicker)",
-      binding: defaultToggleAccelerator, segment: toggleKeybindingSegment)
+    ToggleHotkeyFloorBinding.reinstallFloor(withAccelerator: defaultToggleAccelerator)
+    ExpandSnippetHotkeyFloorBinding.reinstallFloor(withAccelerator: defaultExpandSnippetAccelerator)
   }
 }

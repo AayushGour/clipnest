@@ -88,9 +88,27 @@ enum ATSPIResponses {
     return value
   }
 
+  /// `Text.GetSelection(selectionNum: i) -> (startOffset: i, endOffset: i)` —
+  /// TWO separate top-level `out` arguments, per the interface's own
+  /// introspection XML (`at-spi2-core`'s `xml/Text.xml`, confirmed against
+  /// the real GNOME source), NOT one `(ii)` STRUCT. This distinction is
+  /// real on the wire, not just cosmetic: a D-Bus reply body is the ordered
+  /// list of its `out` arguments' values; a struct is a single value that
+  /// happens to CONTAIN two ints, an entirely different marshalled shape
+  /// (`ii` vs `(ii)`). A prior version of this parser assumed the struct
+  /// shape and was never caught, because its own unit test encoded the same
+  /// wrong assumption as a canned reply — this is exactly why this whole
+  /// D-Bus layer is "manual-verify only" and gets exercised against a REAL
+  /// accessibility bus rather than trusted from reasoning alone: captured
+  /// directly off a real `dbus-monitor` tap against a live GTK4
+  /// `Text.GetSelection` call, the actual reply body is `int32 7` followed
+  /// by a SEPARATE top-level `int32 13` — never a nested structure — which
+  /// made the old parser return `nil` on every real call, silently
+  /// collapsing `SnippetExpander`'s whole Accessibility-first tier to the
+  /// clipboard fallback for every single app, always.
   static func parseSelectionReply(_ message: DBusMessage) -> (start: Int32, end: Int32)? {
-    guard message.type == .methodReturn, case .structure(let fields)? = message.body.first,
-      fields.count == 2, case .int32(let start) = fields[0], case .int32(let end) = fields[1]
+    guard message.type == .methodReturn, message.body.count >= 2,
+      case .int32(let start) = message.body[0], case .int32(let end) = message.body[1]
     else { return nil }
     return (start, end)
   }

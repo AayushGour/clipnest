@@ -1,16 +1,26 @@
 // GlobalHotkeyAccelerator.swift
 //
 // T-OPT2 (Linux port, GTK4 view layer): reads/writes the
-// `app.clipnest.Clipnest.Keybindings` GSettings schema's `toggle-picker`
-// key (type `as`) directly — the ONE schema both this app and the GNOME
-// Shell extension read (`extension/src/core/keybindings.js`), so rebinding
-// from Settings is a single `g_settings_set_strv()` with no IPC to the
-// extension at all: `Main.wm.addKeybinding()` is already watching this SAME
-// key via its own `Gio.Settings` `'changed'` signal and re-grabs
-// immediately. See `packaging/linux/schemas/app.clipnest.Clipnest.
-// Keybindings.gschema.xml`'s own header comment for the full contract.
+// `app.clipnest.Clipnest.Keybindings` GSettings schema's `toggle-picker`/
+// `expand-snippet` keys (type `as`) directly — the ONE schema both this app
+// and the GNOME Shell extension read (`extension/src/core/keybindings.js`),
+// so rebinding from Settings is a single `g_settings_set_strv()` with no
+// IPC to the extension at all: `Main.wm.addKeybinding()` is already
+// watching these SAME keys via its own `Gio.Settings` `'changed'` signal
+// and re-grabs immediately. See `packaging/linux/schemas/app.clipnest.
+// Clipnest.Keybindings.gschema.xml`'s own header comment for the full
+// contract.
 //
-// Schema ID + key name are DELIBERATELY duplicated from
+// T-HOTKEY1: generalized from a toggle-picker-only type to a `Key`-
+// parameterized one — Settings > Shortcuts now shows and rebinds BOTH
+// global hotkeys, and this is the one place that reads/writes either. Both
+// keys share the exact same schema/GSettings-I/O shape (an `as` array,
+// "usually zero or one entry" convention, same missing-schema failure
+// mode) — a `Key` parameter avoids two near-identical copies of
+// `current`/`write`/the C-string marshalling, per coding-standards.md's DRY
+// rule.
+//
+// Schema ID + key names are DELIBERATELY duplicated from
 // `ShellExtensionKeybindingSchema` (`ClipnestLinuxAppKit/DBus/
 // ShellHelperNames.swift`) rather than shared — `ClipnestGTK` does not (and
 // per `Package.swift`'s dependency graph, must not: `ClipnestLinuxAppKit`
@@ -30,16 +40,33 @@ import CGtk4
 
 public enum GlobalHotkeyAccelerator {
   static let schemaID = "app.clipnest.Clipnest.Keybindings"
-  static let togglePickerKey = "toggle-picker"
 
-  /// Reads the current accelerator, or `nil` if unbound (an empty list —
-  /// the schema's own documented "unbound" convention) or if the schema
+  /// Which of the two global hotkeys in the shared schema to read/write.
+  /// Mirrors `ShellExtensionKeybindingSchema`'s `togglePickerKey`/
+  /// `expandSnippetKey` constants exactly (see this file's top doc comment
+  /// on why they're duplicated here rather than imported).
+  public enum Key: Sendable {
+    case togglePicker
+    case expandSnippet
+
+    var settingsKeyName: String {
+      switch self {
+      case .togglePicker: return "toggle-picker"
+      case .expandSnippet: return "expand-snippet"
+      }
+    }
+  }
+
+  /// Reads `key`'s current accelerator, or `nil` if unbound (an empty list
+  /// — the schema's own documented "unbound" convention) or if the schema
   /// isn't installed at all (see `schemaIsInstalled()`'s doc comment for
   /// why that check runs first, always).
-  public static func current() -> String? {
+  public static func current(_ key: Key) -> String? {
     guard schemaIsInstalled() else { return nil }
     guard let settings = schemaID.withCString({ g_settings_new($0) }) else { return nil }
-    guard let cArray = togglePickerKey.withCString({ g_settings_get_strv(settings, $0) }) else {
+    guard
+      let cArray = key.settingsKeyName.withCString({ g_settings_get_strv(settings, $0) })
+    else {
       return nil
     }
     defer { g_strfreev(cArray) }
@@ -47,15 +74,15 @@ public enum GlobalHotkeyAccelerator {
     return String(cString: first)
   }
 
-  /// Writes `accelerator` as the toggle-picker key's SOLE binding (replacing
-  /// whatever was there — this schema's convention is "usually zero or one
-  /// entry," see the schema XML's own header comment). Returns `false` (no
-  /// write attempted) for an empty string or a missing schema — every
-  /// caller is expected to have already run `GlobalHotkeyAcceleratorValidation
+  /// Writes `accelerator` as `key`'s SOLE binding (replacing whatever was
+  /// there — this schema's convention is "usually zero or one entry," see
+  /// the schema XML's own header comment). Returns `false` (no write
+  /// attempted) for an empty string or a missing schema — every caller is
+  /// expected to have already run `GlobalHotkeyAcceleratorValidation
   /// .validate(keyval:state:)` on the captured chord before calling this, so
   /// an empty string reaching here would be a caller bug, not a normal path.
   @discardableResult
-  public static func write(_ accelerator: String) -> Bool {
+  public static func write(_ accelerator: String, for key: Key) -> Bool {
     guard !accelerator.isEmpty else { return false }
     guard schemaIsInstalled() else { return false }
     guard let settings = schemaID.withCString({ g_settings_new($0) }) else { return false }
@@ -70,7 +97,7 @@ public enum GlobalHotkeyAccelerator {
         buffer.baseAddress!.withMemoryRebound(
           to: UnsafePointer<CChar>?.self, capacity: buffer.count
         ) { rebound in
-          togglePickerKey.withCString { g_settings_set_strv(settings, $0, rebound) != 0 }
+          key.settingsKeyName.withCString { g_settings_set_strv(settings, $0, rebound) != 0 }
         }
       }
     #else

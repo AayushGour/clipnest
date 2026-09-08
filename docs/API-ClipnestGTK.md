@@ -269,25 +269,46 @@ public final class SettingsWindow: @unchecked Sendable {
   state from `settings`.
 - `show()` — presents the window. Clicking its native close button hides
   (not destroys) it — `gtk_window_set_hide_on_close`.
-- The Shortcuts tab (`SettingsWindow+Shortcuts.swift`) has two sections.
-  The GLOBAL toggle-picker shortcut is shown with its live value (read from
-  the shared `app.clipnest.Clipnest.Keybindings` GSettings schema via
-  `Hotkeys/GlobalHotkeyAccelerator.swift` — the SAME schema the GNOME Shell
-  extension reads, see that schema's own header comment) and can be
-  rebound with the "Record New Shortcut…" button: it captures the next key
-  combination via a `GtkEventControllerKey`, validates it
-  (`Support/GlobalHotkeyAcceleratorValidation.swift` — requires at least one
-  of Control/Alt/Shift/Super, on top of GTK's own `gtk_accelerator_valid`),
-  persists it, and re-installs the GSettings custom-keybinding floor
-  (`ToggleHotkeyFloorBinding`, `ClipnestLinuxAppKit`) so the new chord also
-  works without the Shell extension. An empty/unmodified/reserved capture is
-  rejected with an inline error and recording stays open for another
-  attempt. The eight in-picker chords below it stay a **read-only**
-  reference list — macOS's own `ShortcutsSettingsView` has no rebind (or
-  listing) UI for those either, only its two `KeyboardShortcuts.Recorder`s
-  for the global hotkeys, so there is no parity gap to close there. See
-  `LinuxShortcutDescriptions.swift`'s doc comment for that list's own
-  scope.
+- The Shortcuts tab (`SettingsWindow+Shortcuts.swift`) has three sections.
+  **Both** GLOBAL shortcuts — toggle-picker AND (T-HOTKEY1) expand-snippet —
+  are shown with their live values (read from the shared
+  `app.clipnest.Clipnest.Keybindings` GSettings schema via
+  `Hotkeys/GlobalHotkeyAccelerator.swift`, now `Key`-parameterized over
+  `.togglePicker`/`.expandSnippet` — the SAME schema the GNOME Shell
+  extension reads, see that schema's own header comment) and each can be
+  rebound independently with its own "Record New Shortcut…" button: it
+  captures the next key combination via a `GtkEventControllerKey`, validates
+  it (`Support/GlobalHotkeyAcceleratorValidation.swift` — requires at least
+  one of Control/Alt/Shift/Super, on top of GTK's own
+  `gtk_accelerator_valid`; shared, key-agnostic logic reused by both rows),
+  persists it, and re-installs THAT key's own GSettings custom-keybinding
+  floor binding (`ToggleHotkeyFloorBinding`/`ExpandSnippetHotkeyFloorBinding`,
+  `ClipnestLinuxAppKit`) so the new chord also works without the Shell
+  extension — rebinding one never touches the other's GSettings key or floor
+  binding. An empty/unmodified/reserved capture is rejected with an inline
+  error and recording stays open for another attempt; starting a recording
+  on one row cancels an in-progress recording on the other, so at most one
+  can be actively capturing the next keypress at a time. Both rows are built
+  from the one shared `buildGlobalHotkeyRow(...)` helper — see that
+  function's doc comment for why it exists (avoiding a second copy-pasted
+  row when expand-snippet was added). The eight in-picker chords below stay
+  a **read-only** reference list, UNCHANGED — macOS's own
+  `ShortcutsSettingsView` has no rebind (or listing) UI for those either,
+  only its two `KeyboardShortcuts.Recorder`s for the global hotkeys, so
+  there is no parity gap to close there. See
+  `LinuxShortcutDescriptions.swift`'s doc comment for that list's own scope.
+  Before T-HOTKEY1, `LinuxAppLifecycle.installGSettingsFloor()` only
+  installed the toggle-picker floor binding — the GNOME Shell extension
+  already dispatched expand-snippet, but with no extension installed the
+  only way to reach `SnippetExpander` was `clipnest --expand-snippet`/
+  `clipnest-ctl expand-snippet` typed in a terminal. Both floor bindings are
+  now installed unconditionally at startup (`<Super><Shift>v`/
+  `<Super><Shift>e` by default — verified free against a real GNOME Shell
+  42.9 session's `org.gnome.desktop.wm.keybindings`,
+  `org.gnome.shell.keybindings`, and
+  `org.gnome.settings-daemon.plugins.media-keys`, not assumed), same as the
+  toggle binding always was, regardless of which hotkey tier
+  (`HotkeyBackendResolver`) is actually selected for delivery.
 - The Apps tab's "excluded app" identifier is platform-agnostic free text
   (a bundle ID on macOS; whatever the platform layer's focused-app lookup
   reports on Linux, e.g. a `.desktop` file ID or WM class) — `SettingsStore`
@@ -473,6 +494,24 @@ over D-Bus (see `extension/src/core/iface.js`) with `pickerWindow
 extension (`extension/src/core/placement.js`) finds the window by title and
 moves/raises/stickies it directly through Mutter. This is
 `ClipnestLinuxApp`'s responsibility, not `ClipnestGTK`'s.
+
+**`PlaceWindow`'s `(x, y)` is a request, not a guarantee** — a real bug
+found against a live GNOME Shell (`packaging/linux/gnome-shell-test
+/README.md`'s Findings): the picker could be placed with its 420px height
+running past the bottom of a 900px screen when shown near the pointer's
+own position (e.g. `y=600`). Fixed in `placement.js`'s `_place()`: before
+calling `move_frame`, it now clamps `(x, y)` into the work area of the
+monitor the TARGET point falls in (`getMonitorWorkArea`, already exposed
+for this reason), using the window's real `get_frame_rect()` size — the
+same min/max formula as the shared macOS/Linux `WindowPlacement
+.clampedOrigin` (`Sources/ClipnestViewModels/UI/Picker/WindowPlacement
+.swift`), ported to JS since a Wayland client cannot itself query its
+on-screen position or run that Swift code. A caller can rely on the
+window always landing fully on-screen, anchored as close to `(x, y)` as
+the screen allows — never partially off it. See `extension/test
+/placement.test.js` for the exhaustive clamp cases (inside bounds,
+below/left, above/right, negative coordinates, oversized window, and
+per-monitor work area selection).
 
 ## Working example
 

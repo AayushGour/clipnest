@@ -42,7 +42,9 @@ struct DBusMarshallingRoundTripTests {
     #expect(roundTrip(.signature("(ii)"), as: .signature) == .signature("(ii)"))
   }
 
-  @Test("a struct of two int32s round-trips (GetSelection's (ii) reply shape)")
+  @Test(
+    "a struct of two int32s round-trips -- generic (ii) STRUCT capability, NOT GetSelection's actual reply shape (that's two separate top-level int32 args, verified against a real bus; see ATSPIRequestsResponsesTests.parsesSelectionReply)"
+  )
   func structRoundTrips() {
     let value = DBusValue.structure([.int32(3), .int32(9)])
     #expect(roundTrip(value, as: .structure([.int32, .int32])) == value)

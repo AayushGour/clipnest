@@ -5,13 +5,28 @@
 // T-OPT2 fix: this tab used to be a fully read-only reference list, and
 // never showed the global toggle-picker hotkey at all — a user could
 // neither discover nor change the single most important shortcut in the
-// product. It now has two sections:
+// product.
+//
+// T-HOTKEY1: extended to a SECOND global hotkey, expand-snippet.
+// `LinuxAppLifecycle.installGSettingsFloor()` used to register only the
+// toggle-picker floor binding — `SnippetExpander`'s expansion machinery
+// was fully working (verified via `clipnest-ctl expand-snippet`), but
+// without the GNOME Shell extension the only way to reach it was that CLI
+// command typed in a terminal, which defeats the point of a global
+// hotkey. `Sources/ClipnestLinuxAppKit/Hotkeys/
+// ExpandSnippetHotkeyFloorBinding.swift` (a different task's owned files)
+// closes that gap on the floor side; this file closes it on the discovery/
+// rebind side, so a user with no extension installed can both find AND
+// change the key that expands a snippet, the same as the toggle hotkey
+// already could.
+//
+// This tab now has three sections:
 //
 //  1. The GLOBAL toggle-picker shortcut — shown with its CURRENT value
-//     (`GlobalHotkeyAccelerator.current()`, read straight from the shared
-//     `app.clipnest.Clipnest.Keybindings` GSettings schema, never a
-//     hardcoded string) and a "Record New Shortcut…" button that captures
-//     the next valid key combination via a `GtkEventControllerKey`
+//     (`GlobalHotkeyAccelerator.current(.togglePicker)`, read straight from
+//     the shared `app.clipnest.Clipnest.Keybindings` GSettings schema,
+//     never a hardcoded string) and a "Record New Shortcut…" button that
+//     captures the next valid key combination via a `GtkEventControllerKey`
 //     (`GlobalHotkeyRecorder` below), validates it
 //     (`Support/GlobalHotkeyAcceleratorValidation.swift`), persists it
 //     (`Hotkeys/GlobalHotkeyAccelerator.swift`), and re-installs the
@@ -20,7 +35,16 @@
 //     `ClipnestLinuxAppKit` — see that property's doc comment on
 //     `SettingsWindow` for why this one crosses the module boundary as a
 //     closure while the read/validate/persist steps above do not).
-//  2. The eight in-picker chords (Up/Down, Enter, Ctrl+F, ...) — still a
+//  2. The GLOBAL expand-snippet shortcut (T-HOTKEY1, new) — identical shape
+//     to (1), reusing the SAME `GlobalHotkeyRecorder`/validation/recording
+//     machinery rather than a second copy (`buildGlobalHotkeyRow(...)`
+//     below is the one place both rows are built from), parameterized by
+//     `GlobalHotkeyAccelerator.Key.expandSnippet` and a second injected
+//     closure, `reinstallExpandSnippetHotkeyFloor` (mirrors
+//     `reinstallToggleHotkeyFloor` exactly — see that property's own doc
+//     comment on `SettingsWindow` for why it's a SEPARATE closure rather
+//     than widening the existing one's signature).
+//  3. The eight in-picker chords (Up/Down, Enter, Ctrl+F, ...) — still a
 //     read-only reference list, UNCHANGED from before this task.
 //     `ShortcutsSettingsView.swift` (macOS) has no equivalent list at all
 //     (only its two `KeyboardShortcuts.Recorder`s for the GLOBAL hotkeys,
@@ -32,9 +56,9 @@
 // `SettingsStore` state (`LinuxShortcutDescriptions.swift`'s doc comment
 // explains why the in-picker half is separate/display-only) — but IS now
 // `@MainActor`, matching every other tab builder, since `GlobalHotkeyAccelerator
-// .current()`/`.write(_:)` run real GSettings I/O on the same GTK/main thread
-// as every other control here (see `SettingsWindow.swift`'s top doc comment
-// for why that's the correct isolation for this whole window).
+// .current(_:)`/`.write(_:for:)` run real GSettings I/O on the same GTK/main
+// thread as every other control here (see `SettingsWindow.swift`'s top doc
+// comment for why that's the correct isolation for this whole window).
 import CGtk4
 
 extension SettingsWindow {
@@ -42,13 +66,72 @@ extension SettingsWindow {
   func buildShortcutsTab() {
     let box = appendTab(title: "Shortcuts")
 
+    // Two independent `GlobalHotkeyRecorder`s — one per global hotkey. Each
+    // is cross-linked to the other (`otherRecorder`) purely so starting a
+    // NEW recording session cancels an already-in-progress one on the
+    // sibling row, rather than leaving two window-level key controllers
+    // both trying to capture the same next keypress (see
+    // `GlobalHotkeyRecorder.handleRecordButtonClicked`'s doc comment).
+    let toggleRecorder = buildGlobalHotkeyRow(
+      in: box, labelText: "Open Clipnest (global shortcut)", key: .togglePicker,
+      reinstallFloor: reinstallToggleHotkeyFloor)
+    let expandSnippetRecorder = buildGlobalHotkeyRow(
+      in: box, labelText: "Expand snippet (global shortcut)", key: .expandSnippet,
+      reinstallFloor: reinstallExpandSnippetHotkeyFloor)
+    toggleRecorder.otherRecorder = expandSnippetRecorder
+    expandSnippetRecorder.otherRecorder = toggleRecorder
+
+    let note: OpaquePointer = gtk_label_new("These shortcuts work while the picker is open.")
+    gtk_label_set_xalign(note, 0)
+    gtk_widget_add_css_class(note, "dim-label")
+    gtk_box_append(box, note)
+
+    for entry in LinuxShortcutDescriptions.all {
+      let entryRow: OpaquePointer = gtk_box_new(
+        GTK_ORIENTATION_HORIZONTAL, SettingsWindow.controlSpacing)
+      let comboLabel: OpaquePointer = gtk_label_new(entry.combo)
+      gtk_label_set_xalign(comboLabel, 0)
+      gtk_widget_set_size_request(entryRow, -1, -1)
+      gtk_widget_add_css_class(comboLabel, "dim-label")
+      gtk_box_append(entryRow, comboLabel)
+      let descriptionLabel: OpaquePointer = gtk_label_new(entry.description)
+      gtk_label_set_xalign(descriptionLabel, 0)
+      gtk_box_append(entryRow, descriptionLabel)
+      gtk_box_append(box, entryRow)
+    }
+  }
+
+  /// Builds one global-hotkey row — label + current value + "Record New
+  /// Shortcut…" button + its own inline error/status labels + a
+  /// window-level key controller gated on that row's own recorder — and
+  /// returns the `GlobalHotkeyRecorder` driving it.
+  ///
+  /// T-HOTKEY1: extracted out of `buildShortcutsTab()` (which used to build
+  /// exactly one such row inline) so the SECOND global hotkey didn't need a
+  /// copy-pasted duplicate of this whole block — per coding-standards.md's
+  /// DRY rule, the second real instance of this shape is exactly the
+  /// trigger to extract it, not before.
+  ///
+  /// `GlobalHotkeyRecorder` is never stored on `self` — see its own doc
+  /// comment: it lives entirely as `gtkConnect`'s retained `user_data` for
+  /// the two connections made below, which (like every control in this
+  /// permanent, app-lifetime window) are never disconnected. The caller
+  /// (`buildShortcutsTab()`) holds the RETURN VALUE only long enough to
+  /// cross-link the two recorders' `otherRecorder` — after that, neither
+  /// local variable is needed again.
+  @MainActor
+  private func buildGlobalHotkeyRow(
+    in box: OpaquePointer, labelText: String, key: GlobalHotkeyAccelerator.Key,
+    reinstallFloor: @escaping (String) -> Void
+  ) -> GlobalHotkeyRecorder {
     let row: OpaquePointer = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, SettingsWindow.controlSpacing)
-    let openLabel: OpaquePointer = gtk_label_new("Open Clipnest (global shortcut)")
+    let openLabel: OpaquePointer = gtk_label_new(labelText)
     gtk_label_set_xalign(openLabel, 0)
     gtk_widget_set_hexpand(openLabel, 1)
     gtk_box_append(row, openLabel)
 
-    let valueLabel: OpaquePointer = gtk_label_new(GlobalHotkeyRecorder.currentDisplayValue())
+    let valueLabel: OpaquePointer = gtk_label_new(
+      GlobalHotkeyRecorder.currentDisplayValue(for: key))
     gtk_widget_add_css_class(valueLabel, "dim-label")
     gtk_box_append(row, valueLabel)
     gtk_box_append(box, row)
@@ -72,13 +155,9 @@ extension SettingsWindow {
       gtk_label_set_max_width_chars(label, 46)
     }
 
-    // `GlobalHotkeyRecorder` is never stored on `self` — see its own doc
-    // comment: it lives entirely as `gtkConnect`'s retained `user_data` for
-    // the two connections made below, which (like every control in this
-    // permanent, app-lifetime window) are never disconnected.
     let recorder = GlobalHotkeyRecorder(
-      valueLabel: valueLabel, errorLabel: errorLabel, statusLabel: statusLabel,
-      reinstallFloor: reinstallToggleHotkeyFloor)
+      key: key, valueLabel: valueLabel, errorLabel: errorLabel, statusLabel: statusLabel,
+      reinstallFloor: reinstallFloor)
 
     gtkConnect(
       recordButton, signal: "clicked", context: recorder,
@@ -93,7 +172,12 @@ extension SettingsWindow {
     // complete no-op (returns `GDK_EVENT_PROPAGATE`) for every key press
     // outside an active recording session — every other control in this
     // window (Tab navigation, mnemonics, the notebook's own tab switching,
-    // closing the window) is unaffected.
+    // closing the window) is unaffected. Two of these controllers now exist
+    // (one per row) — each only ever acts when ITS OWN recorder is the one
+    // recording, and `handleRecordButtonClicked`'s mutual-exclusion call
+    // guarantees at most one recorder has `isRecording == true` at a time,
+    // so which controller GTK happens to invoke first for a given key press
+    // is never ambiguous in practice.
     let keyController: OpaquePointer = gtk_event_controller_key_new()
     gtk_event_controller_set_propagation_phase(keyController, GTK_PHASE_CAPTURE)
     gtkConnect(
@@ -101,71 +185,87 @@ extension SettingsWindow {
       callback: unsafeBitCast(shortcutsRecorderKeyPressedTrampoline, to: GCallback.self))
     gtk_widget_add_controller(window, keyController)
 
-    let note: OpaquePointer = gtk_label_new("These shortcuts work while the picker is open.")
-    gtk_label_set_xalign(note, 0)
-    gtk_widget_add_css_class(note, "dim-label")
-    gtk_box_append(box, note)
-
-    for entry in LinuxShortcutDescriptions.all {
-      let entryRow: OpaquePointer = gtk_box_new(
-        GTK_ORIENTATION_HORIZONTAL, SettingsWindow.controlSpacing)
-      let comboLabel: OpaquePointer = gtk_label_new(entry.combo)
-      gtk_label_set_xalign(comboLabel, 0)
-      gtk_widget_set_size_request(entryRow, -1, -1)
-      gtk_widget_add_css_class(comboLabel, "dim-label")
-      gtk_box_append(entryRow, comboLabel)
-      let descriptionLabel: OpaquePointer = gtk_label_new(entry.description)
-      gtk_label_set_xalign(descriptionLabel, 0)
-      gtk_box_append(entryRow, descriptionLabel)
-      gtk_box_append(box, entryRow)
-    }
+    return recorder
   }
 }
 
-/// Owns the "record a new global toggle accelerator" flow end to end:
-/// capture (via the caller-attached `GtkEventControllerKey`), validate
-/// (`GlobalHotkeyAcceleratorValidation`), persist
-/// (`GlobalHotkeyAccelerator`), and re-install the GSettings floor
-/// (`reinstallFloor`, `ClipnestLinuxAppKit.ToggleHotkeyFloorBinding` on the
-/// other side of that closure). Deliberately NOT an extension of
-/// `SettingsWindow` (a Swift extension cannot add stored properties, and
-/// this needs several: `isRecording` plus four widget handles) — see
-/// `buildShortcutsTab()`'s call site for why it never needs to be stored on
-/// `SettingsWindow` either.
+/// Owns the "record a new global accelerator" flow end to end for ONE
+/// global hotkey (`key`): capture (via the caller-attached
+/// `GtkEventControllerKey`), validate (`GlobalHotkeyAcceleratorValidation`
+/// — shared, key-agnostic pure logic), persist (`GlobalHotkeyAccelerator`,
+/// also `Key`-parameterized), and re-install that key's GSettings floor
+/// (`reinstallFloor`, `ClipnestLinuxAppKit.ToggleHotkeyFloorBinding`/
+/// `ExpandSnippetHotkeyFloorBinding` on the other side of that closure).
+/// Deliberately NOT an extension of `SettingsWindow` (a Swift extension
+/// cannot add stored properties, and this needs several: `isRecording`
+/// plus four widget handles) — see `buildGlobalHotkeyRow(...)`'s call site
+/// for why it never needs to be stored on `SettingsWindow` either.
+///
+/// T-HOTKEY1: this type used to exist as a single, toggle-picker-only
+/// instance. It is now instantiated ONCE PER global hotkey
+/// (`buildGlobalHotkeyRow(...)`, two call sites in `buildShortcutsTab()`)
+/// rather than duplicated — `key`/`reinstallFloor` are the only things that
+/// differ between the two rows' behavior.
 private final class GlobalHotkeyRecorder {
+  private let key: GlobalHotkeyAccelerator.Key
   private let valueLabel: OpaquePointer
   private let errorLabel: OpaquePointer
   private let statusLabel: OpaquePointer
   private let reinstallFloor: (String) -> Void
   private var isRecording = false
 
+  /// The OTHER global hotkey's recorder — set once, right after both are
+  /// constructed (`buildShortcutsTab()`, immediately after its two
+  /// `buildGlobalHotkeyRow(...)` calls, since neither recorder exists yet
+  /// when the other is built). Used ONLY to cancel an in-progress
+  /// recording on the sibling row when this one starts a new one — see
+  /// `handleRecordButtonClicked` below. `weak`: ownership runs the other
+  /// way (each recorder is kept alive by its OWN `gtkConnect` `user_data`,
+  /// not by its sibling), so this back-reference must never keep either
+  /// instance alive past its own controllers' lifetime.
+  weak var otherRecorder: GlobalHotkeyRecorder?
+
   init(
-    valueLabel: OpaquePointer, errorLabel: OpaquePointer, statusLabel: OpaquePointer,
-    reinstallFloor: @escaping (String) -> Void
+    key: GlobalHotkeyAccelerator.Key, valueLabel: OpaquePointer, errorLabel: OpaquePointer,
+    statusLabel: OpaquePointer, reinstallFloor: @escaping (String) -> Void
   ) {
+    self.key = key
     self.valueLabel = valueLabel
     self.errorLabel = errorLabel
     self.statusLabel = statusLabel
     self.reinstallFloor = reinstallFloor
   }
 
-  /// The GLOBAL toggle-picker accelerator's initial display value, read at
-  /// tab-build time — a `static` so `buildShortcutsTab()` can seed
-  /// `valueLabel`'s initial text before a `GlobalHotkeyRecorder` instance
-  /// (which owns updating that SAME label on every later successful
-  /// rebind) even exists yet.
-  static func currentDisplayValue() -> String {
-    guard let accelerator = GlobalHotkeyAccelerator.current() else { return "Not set" }
+  /// `key`'s current accelerator's display value, read at row-build time —
+  /// a `static` so `buildGlobalHotkeyRow(...)` can seed `valueLabel`'s
+  /// initial text before a `GlobalHotkeyRecorder` instance (which owns
+  /// updating that SAME label on every later successful rebind) even
+  /// exists yet.
+  static func currentDisplayValue(for key: GlobalHotkeyAccelerator.Key) -> String {
+    guard let accelerator = GlobalHotkeyAccelerator.current(key) else { return "Not set" }
     return GlobalHotkeyAcceleratorValidation.displayLabel(for: accelerator) ?? accelerator
   }
 
   /// `GtkButton::clicked` on "Record New Shortcut…" — a plain toggle:
   /// click once to start recording, click again to cancel (mirrors pressing
   /// Escape mid-recording, see `handleKeyPressed` below).
+  ///
+  /// T-HOTKEY1: starting a NEW recording session first cancels the sibling
+  /// row's recording if one is in progress (`otherRecorder
+  /// ?.cancelRecordingIfActive()`) — with two rows now sharing the same
+  /// "one window-level key controller per row, gated on its own
+  /// `isRecording`" shape, leaving both `true` at once would mean the next
+  /// keypress is captured by whichever controller GTK happens to invoke
+  /// first, silently discarding the user's OTHER in-progress attempt with
+  /// no explanation. Enforcing "at most one recording session at a time"
+  /// here removes that ambiguity entirely, rather than relying on GTK's
+  /// (unspecified, for two controllers on the same widget/phase) dispatch
+  /// order for correctness.
   func handleRecordButtonClicked() {
     if isRecording {
       cancelRecording()
     } else {
+      otherRecorder?.cancelRecordingIfActive()
       beginRecording()
     }
   }
@@ -185,6 +285,16 @@ private final class GlobalHotkeyRecorder {
     // otherwise a stale "no modifier key" error stays visible next to an
     // otherwise-normal, non-recording button.
     setLabel(errorLabel, text: nil)
+  }
+
+  /// Called on the OTHER recorder when THIS one is about to start a new
+  /// recording session — see `handleRecordButtonClicked`'s doc comment for
+  /// why. A no-op when that recorder isn't currently recording (the common
+  /// case), so starting the FIRST recording of a Settings session never
+  /// touches the sibling row's labels at all.
+  func cancelRecordingIfActive() {
+    guard isRecording else { return }
+    cancelRecording()
   }
 
   /// `GtkEventControllerKey::key-pressed` — returns `1` (`GDK_EVENT_STOP`,
@@ -219,7 +329,7 @@ private final class GlobalHotkeyRecorder {
   private func commit(_ accelerator: String) {
     isRecording = false
     setLabel(statusLabel, text: nil)
-    guard GlobalHotkeyAccelerator.write(accelerator) else {
+    guard GlobalHotkeyAccelerator.write(accelerator, for: key) else {
       setLabel(
         errorLabel,
         text:
@@ -267,7 +377,10 @@ private final class GlobalHotkeyRecorder {
 /// `buttonClickedTrampoline` (that one is `private` to its own file, hence
 /// unreachable here) — identical shape, but this tab's click handler needs
 /// `GlobalHotkeyRecorder`'s own method directly rather than a generic
-/// `ClosureContext<Void>`.
+/// `ClosureContext<Void>`. Shared by BOTH rows' record buttons (T-HOTKEY1)
+/// — `data` resolves to whichever `GlobalHotkeyRecorder` that particular
+/// button's `gtkConnect` call retained, so one trampoline correctly serves
+/// both.
 private let shortcutsRecorderButtonClickedTrampoline:
   @convention(c) (OpaquePointer?, UnsafeMutableRawPointer?) -> Void = { _, data in
     guard let recorder = unretainedContext(data, as: GlobalHotkeyRecorder.self) else { return }
@@ -280,7 +393,8 @@ private let shortcutsRecorderButtonClickedTrampoline:
 /// (that one is `private` to its own file too) — see
 /// `Interop/GTKCallbackTrampoline.swift`'s top doc comment for why every
 /// parameter here is a plain ABI-compatible Swift type rather than an
-/// imported enum name.
+/// imported enum name. Shared by both rows' key controllers (T-HOTKEY1),
+/// same reasoning as the button trampoline above.
 private let shortcutsRecorderKeyPressedTrampoline:
   @convention(c) (
     OpaquePointer?, UInt32, UInt32, UInt32, UnsafeMutableRawPointer?

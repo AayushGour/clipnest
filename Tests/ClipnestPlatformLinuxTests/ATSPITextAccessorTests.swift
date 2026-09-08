@@ -50,7 +50,7 @@ struct ATSPITextAccessorTests {
   func readChainsThreeCalls() {
     let fake = FakeATSPIObjectCalling()
     fake.repliesByMember["GetNSelections"] = methodReturn([.int32(1)])
-    fake.repliesByMember["GetSelection"] = methodReturn([.structure([.int32(2), .int32(7)])])
+    fake.repliesByMember["GetSelection"] = methodReturn([.int32(2), .int32(7)])
     fake.repliesByMember["GetText"] = methodReturn([.string("lipnes")])
     let accessor = ATSPITextAccessor(
       caller: fake, focusedObject: { testTarget }, timeout: .milliseconds(1), nextSerial: { 1 })
@@ -67,7 +67,7 @@ struct ATSPITextAccessorTests {
   func readReturnsNilOnMidChainFailure() {
     let fake = FakeATSPIObjectCalling()
     fake.repliesByMember["GetNSelections"] = methodReturn([.int32(1)])
-    fake.repliesByMember["GetSelection"] = methodReturn([.structure([.int32(0), .int32(3)])])
+    fake.repliesByMember["GetSelection"] = methodReturn([.int32(0), .int32(3)])
     // GetText deliberately left unanswered — simulates a timeout.
     let accessor = ATSPITextAccessor(
       caller: fake, focusedObject: { testTarget }, timeout: .milliseconds(1), nextSerial: { 1 })
@@ -75,12 +75,13 @@ struct ATSPITextAccessorTests {
   }
 
   @Test(
-    "replaceSelectedText deletes the selection then inserts, using DeleteText+InsertText — never SetTextContents"
+    "replaceSelectedText reads the original text, then deletes the selection then inserts, using DeleteText+InsertText — never SetTextContents"
   )
   func replaceDeletesThenInserts() {
     let fake = FakeATSPIObjectCalling()
     fake.repliesByMember["GetNSelections"] = methodReturn([.int32(1)])
-    fake.repliesByMember["GetSelection"] = methodReturn([.structure([.int32(4), .int32(10)])])
+    fake.repliesByMember["GetSelection"] = methodReturn([.int32(4), .int32(10)])
+    fake.repliesByMember["GetText"] = methodReturn([.string("KEYWORD")])
     fake.repliesByMember["DeleteText"] = methodReturn([.boolean(true)])
     fake.repliesByMember["InsertText"] = methodReturn([.boolean(true)])
     let accessor = ATSPITextAccessor(
@@ -88,34 +89,82 @@ struct ATSPITextAccessorTests {
 
     #expect(accessor.replaceSelectedText(with: "héllo") == true)
     #expect(
-      fake.calls.map(\.member) == ["GetNSelections", "GetSelection", "DeleteText", "InsertText"])
+      fake.calls.map(\.member)
+        == ["GetNSelections", "GetSelection", "GetText", "DeleteText", "InsertText"])
     #expect(
       fake.calls.allSatisfy {
         $0.interface != "org.a11y.atspi.EditableText" || $0.member != "SetTextContents"
       })
 
-    let deleteCall = fake.calls[2]
+    let deleteCall = fake.calls[3]
     #expect(deleteCall.body == [.int32(4), .int32(10)])
 
     // "héllo" is 5 characters but 6 UTF-8 bytes ('é' is 2 bytes) — the
     // InsertText length argument must be the BYTE count, and position must
     // be the selection's original character/scalar START offset (4), not
     // its end.
-    let insertCall = fake.calls[3]
+    let insertCall = fake.calls[4]
     #expect(insertCall.body == [.int32(4), .string("héllo"), .int32(6)])
+  }
+
+  @Test(
+    "replaceSelectedText returns false and never calls DeleteText/InsertText when the original text can't be read"
+  )
+  func replaceFailsFastWhenOriginalTextUnreadable() {
+    let fake = FakeATSPIObjectCalling()
+    fake.repliesByMember["GetNSelections"] = methodReturn([.int32(1)])
+    fake.repliesByMember["GetSelection"] = methodReturn([.int32(0), .int32(2)])
+    // GetText deliberately left unanswered — simulates a timeout. Reading
+    // the original text is deliberately the FIRST D-Bus call this method
+    // makes (before the destructive DeleteText), so a broken accessible
+    // fails fast without ever touching the document.
+    let accessor = ATSPITextAccessor(
+      caller: fake, focusedObject: { testTarget }, timeout: .milliseconds(1), nextSerial: { 1 })
+
+    #expect(accessor.replaceSelectedText(with: "x") == false)
+    #expect(!fake.calls.map(\.member).contains("DeleteText"))
+    #expect(!fake.calls.map(\.member).contains("InsertText"))
   }
 
   @Test("replaceSelectedText returns false and never calls InsertText when DeleteText fails")
   func replaceStopsWhenDeleteFails() {
     let fake = FakeATSPIObjectCalling()
     fake.repliesByMember["GetNSelections"] = methodReturn([.int32(1)])
-    fake.repliesByMember["GetSelection"] = methodReturn([.structure([.int32(0), .int32(2)])])
+    fake.repliesByMember["GetSelection"] = methodReturn([.int32(0), .int32(2)])
+    fake.repliesByMember["GetText"] = methodReturn([.string("hi")])
     fake.repliesByMember["DeleteText"] = methodReturn([.boolean(false)])
     let accessor = ATSPITextAccessor(
       caller: fake, focusedObject: { testTarget }, timeout: .milliseconds(1), nextSerial: { 1 })
 
     #expect(accessor.replaceSelectedText(with: "x") == false)
     #expect(!fake.calls.map(\.member).contains("InsertText"))
+  }
+
+  @Test(
+    "replaceSelectedText attempts a best-effort rollback (re-inserting the ORIGINAL text at the same position) when InsertText fails after DeleteText already succeeded — a partially-applied edit must never silently erase the user's text"
+  )
+  func replaceAttemptsRollbackWhenInsertFailsAfterDelete() {
+    let fake = FakeATSPIObjectCalling()
+    fake.repliesByMember["GetNSelections"] = methodReturn([.int32(1)])
+    fake.repliesByMember["GetSelection"] = methodReturn([.int32(4), .int32(11)])
+    fake.repliesByMember["GetText"] = methodReturn([.string("KEYWORD")])
+    fake.repliesByMember["DeleteText"] = methodReturn([.boolean(true)])
+    // InsertText deliberately unanswered (both the real attempt AND the
+    // rollback attempt hit this same member name on this fake) — simulates
+    // the real insert timing out. This test only asserts the rollback is
+    // ATTEMPTED with the right arguments, not that it always succeeds
+    // (nothing can guarantee that over two independent D-Bus calls).
+    let accessor = ATSPITextAccessor(
+      caller: fake, focusedObject: { testTarget }, timeout: .milliseconds(1), nextSerial: { 1 })
+
+    #expect(accessor.replaceSelectedText(with: "NEW") == false)
+
+    let insertCalls = fake.calls.filter { $0.member == "InsertText" }
+    #expect(insertCalls.count == 2)
+    // The requested replacement...
+    #expect(insertCalls[0].body == [.int32(4), .string("NEW"), .int32(3)])
+    // ...then the rollback: the ORIGINAL text, back at the same position.
+    #expect(insertCalls[1].body == [.int32(4), .string("KEYWORD"), .int32(7)])
   }
 
   @Test("replaceSelectedText returns false when there is no selection to replace")

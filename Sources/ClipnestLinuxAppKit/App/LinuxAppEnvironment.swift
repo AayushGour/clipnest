@@ -405,6 +405,9 @@ final class LinuxAppEnvironment {
       reinstallToggleHotkeyFloor: { accelerator in
         ToggleHotkeyFloorBinding.reinstallFloor(withAccelerator: accelerator)
       },
+      reinstallExpandSnippetHotkeyFloor: { accelerator in
+        ExpandSnippetHotkeyFloorBinding.reinstallFloor(withAccelerator: accelerator)
+      },
       // T-OPT3: the uinput auto-paste grant seam — `UInputPermissionChecker`/
       // `GrantInputHelperClient` (this module, new files) are the real,
       // side-effect-having implementations `SettingsWindow+Permissions.swift`

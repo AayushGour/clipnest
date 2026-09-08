@@ -12,21 +12,28 @@
 // `ClipnestLinuxAppKit`; `Package.swift`'s dependency edge runs the other
 // way).
 //
-// `segment`/`bindingLabel` below MUST match `LinuxAppLifecycle`'s own
-// (currently `private`, file-scoped) `toggleKeybindingSegment`/`"Clipnest —
-// Toggle Picker"` literal exactly — both ultimately call
-// `GSettingsCustomKeybinding.install`, keyed by `segment`
-// (`GSettingsKeybindingPath.path(forSegment:)`), for the SAME logical
-// binding. A mismatch would silently create a second, orphaned custom
-// keybinding at a different GSettings path instead of updating the one the
-// app installed at first launch, rather than erroring. Recommended
-// follow-up (reported to the task's coordinator, not applied here —
-// `LinuxAppLifecycle.swift` is outside this task's owned-files scope):
-// change that `private` constant to reference `ToggleHotkeyFloorBinding
-// .segment`/`.bindingLabel` instead of keeping its own copy, so the two can
-// never drift apart. `AppToggleHotkeyFloorBindingTests.swift` pins today's
-// literal value (`"clipnest-toggle"`) against `GSettingsKeybindingPath` as
-// a regression guard until that consolidation happens.
+// `segment`/`bindingLabel` below are the single source of truth for this
+// binding's identity — `GSettingsCustomKeybinding.install`, keyed by
+// `segment` (`GSettingsKeybindingPath.path(forSegment:)`), is how both
+// `LinuxAppLifecycle.installGSettingsFloor()` (startup) and this file's own
+// `reinstallFloor(withAccelerator:)` (a Settings > Shortcuts rebind) locate
+// the SAME logical GSettings entry. A mismatch between the two call sites
+// would silently create a second, orphaned custom keybinding at a
+// different GSettings path instead of updating the one installed at first
+// launch, rather than erroring.
+//
+// **T-HOTKEY1 consolidation:** `LinuxAppLifecycle` previously kept its own
+// separate, `private`, file-scoped copy of this exact literal
+// (`toggleKeybindingSegment = "clipnest-toggle"`) rather than referencing
+// this type — flagged here as a "recommended follow-up" but not applied,
+// since that file was outside the task that found it. Now fixed:
+// `installGSettingsFloor()` calls `ToggleHotkeyFloorBinding
+// .reinstallFloor(withAccelerator:)` directly (the same function this
+// file's own rebind call site uses), so there is exactly one copy of
+// `segment`/`bindingLabel` for this binding, not two that could drift.
+// `AppToggleHotkeyFloorBindingTests.swift` still pins the literal value
+// (`"clipnest-toggle"`) against `GSettingsKeybindingPath` as a regression
+// guard on this type's own identity.
 public enum ToggleHotkeyFloorBinding {
   public static let segment = "clipnest-toggle"
   public static let bindingLabel = "Clipnest — Toggle Picker"

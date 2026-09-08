@@ -88,6 +88,15 @@ public final class SettingsWindow: @unchecked Sendable {
   /// A required parameter turns the same mistake into a build error.
   let reinstallToggleHotkeyFloor: (_ accelerator: String) -> Void
 
+  /// The expand-snippet counterpart of `reinstallToggleHotkeyFloor` above,
+  /// and required for the same reason: Linux now installs TWO GSettings
+  /// custom keybindings (toggle-picker and expand-snippet), mirroring
+  /// macOS's two global hotkeys, and each must be re-installed when its own
+  /// accelerator is rebound. No default value, deliberately — see the doc
+  /// comment above for the four features that silently did nothing on Linux
+  /// because an injected closure defaulted to a no-op nobody filled.
+  let reinstallExpandSnippetHotkeyFloor: (_ accelerator: String) -> Void
+
   /// T-OPT3: reads the CURRENT, real uinput auto-paste grant state (see
   /// `UInputPermissionStatus`'s doc comment for why it's two independent
   /// booleans) — called at tab-build time and again every `show()`, never
@@ -235,6 +244,7 @@ public final class SettingsWindow: @unchecked Sendable {
     launchAtLoginProvider: @escaping () -> Bool,
     setLaunchAtLogin: @escaping (Bool) throws -> Void,
     reinstallToggleHotkeyFloor: @escaping (_ accelerator: String) -> Void,
+    reinstallExpandSnippetHotkeyFloor: @escaping (_ accelerator: String) -> Void,
     uinputPermissionStatusProvider: @escaping () -> UInputPermissionStatus,
     requestUInputGrant: @escaping (_ completion: @escaping UInputGrantCompletion) -> Void,
     installedVersionText: String,
@@ -254,6 +264,7 @@ public final class SettingsWindow: @unchecked Sendable {
     self.launchAtLoginProvider = launchAtLoginProvider
     self.setLaunchAtLogin = setLaunchAtLogin
     self.reinstallToggleHotkeyFloor = reinstallToggleHotkeyFloor
+    self.reinstallExpandSnippetHotkeyFloor = reinstallExpandSnippetHotkeyFloor
     self.uinputPermissionStatusProvider = uinputPermissionStatusProvider
     self.requestUInputGrant = requestUInputGrant
     self.installedVersionText = installedVersionText

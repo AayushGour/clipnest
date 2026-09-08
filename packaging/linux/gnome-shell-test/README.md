@@ -300,3 +300,62 @@ screen); a second hotkey press while the picker was already open (during an
 earlier, Activities-Overview-obscured test, not the clean repro above) did
 not toggle it closed. Full trial data: `.claude/logs/devops.md`; decision
 record: `.claude/project-context.md` D91.
+
+## Update 2026-09-08 (senior-dev, picker-placement follow-up): clamp bug FIXED and verified; toggle bug CONFIRMED REAL (not the Overview artifact it looked like)
+
+**Clamp bug — fixed.** `extension/src/core/placement.js`'s `_place()` now
+clamps `(x, y)` into the target point's own monitor work area (via the
+already-exposed `getMonitorWorkArea`) using the window's real
+`get_frame_rect()` size, before ever calling `move_frame` — same min/max
+formula as the shared `WindowPlacement.clampedOrigin` (macOS/Linux shared
+math, `Sources/ClipnestViewModels/UI/Picker/WindowPlacement.swift`), ported
+to JS since a Wayland client can't run that Swift code itself. Verified
+against this exact real GNOME Shell 42.9 harness, both via a throwaway
+probe (`Placement`'s own identity contract, WM_CLASS `clipnest` + title
+`Clipnest`) and — more importantly — via the REAL `clipnest` binary's
+`ShowPicker` D-Bus call end-to-end: placed at the exact devops repro
+(300,600 on this container's 1440x900/work-area-868-tall screen), the
+picker now lands at `(300, 480)` (`xwininfo`-confirmed), fully on-screen,
+still anchored to the cursor's X. Same clean result at all 4 edges
+(top/bottom/left/right) and for a genuinely negative X. 21/21 gjs unit
+tests in `extension/test/placement.test.js` (16 new, 5 pre-existing,
+1 pre-existing case's expectation updated to reflect the new clamp).
+`docs/API-ClipnestGTK.md`'s "Window placement" section updated to document
+the guarantee. Full screenshots + trial log: `.claude/logs/senior-dev.md`.
+
+**Toggle bug — CONFIRMED REAL, root-caused, NOT fixed here (root cause is
+outside this task's owned files).** Re-tested from a genuinely clean
+desktop (no Activities Overview) by driving the real running `clipnest`
+binary's own `app.clipnest.Control.TogglePicker` D-Bus method directly —
+the same call a real hotkey press ultimately triggers, with the
+extension's own hotkey-resolution race (see `HotkeyBackendResolver`
+above) sidestepped entirely. Two `TogglePicker` calls sent back-to-back
+with **zero** explicit delay left the picker **stuck open** in 3 of 6
+trials (should always net back to closed); inserting *any* explicit delay
+between the two calls (10ms, 50ms, 100ms, 200ms) reproduced it **0 times
+in 4 trials**. That delay-dependence is the signature of a genuine race in
+how each D-Bus/hotkey action is dispatched onto `@MainActor`, not a GTK-
+level re-entrancy bug: `PickerWindow.dismiss()`'s `isDismissing` guard and
+`LinuxAppEnvironment`'s `isPickerVisibleBox`/`onDismiss` wiring were read
+in full and are internally consistent (a plain, order-independent
+show/hide toggle on a boxed `Bool`) — read-only, not touched, per this
+task's file-ownership constraints. The actual suspect: `LinuxAppLifecycle
+.swift`'s `startControlService`/`wireShellHelper` dispatch EVERY D-Bus
+control call and EVERY real `ShortcutActivated` hotkey signal via a
+fire-and-forget, unstructured `Task { @MainActor in environment
+.togglePicker() } }` from a background thread, with no ordering guarantee
+enforced end-to-end, into a `@MainActor` whose executor on this platform
+is itself an emulation (`GTKMainActorBridge`/`DispatchMainQueuePump`'s 8ms
+`RunLoop.main.run(mode:before:)` pump, already flagged as a real latency
+risk by an earlier, unrelated task on this same board — see T-BB5). Two
+toggles racing past each other in that pump (rather than draining strictly
+FIFO) is consistent with everything observed: order-independent-looking
+logic, yet a result that depends on inter-arrival timing. **Not fixed
+here**: the fix belongs in `LinuxAppLifecycle.swift` (replace the
+fire-and-forget `Task {}` with an ordering-safe hand-off — e.g. the same
+`g_idle_add_full` deferral-with-ordering pattern `PickerWindow
+.refocusAfterEditorClose()` already uses for an analogous need — or a
+single serialized dispatch point), a file three other agents were working
+in concurrently with this task; reported for the owner of that file /
+architect to pick up, not patched piecemeal. Decision + full trial log:
+`.claude/project-context.md` (new decision) and `.claude/logs/senior-dev.md`.

@@ -26,7 +26,9 @@ struct DBusMessageTests {
     #expect(decoded.body == [.int32(0)])
   }
 
-  @Test("round-trips a method return with a struct body ((ii) — GetSelection's reply shape)")
+  @Test(
+    "round-trips a method return with a generic (ii) STRUCT body -- NOT GetSelection's real reply shape (that's two separate top-level int32 args; see ATSPIRequestsResponsesTests.parsesSelectionReply), just a generic struct-marshalling capability check"
+  )
   func roundTripsStructBody() {
     let message = DBusMessage(
       type: .methodReturn, serial: 12, replySerial: 7, body: [.structure([.int32(3), .int32(9)])])

@@ -13,15 +13,17 @@
 // how macOS's `ShortcutHints` is likewise a separate display-string
 // mapping from the actual key-handling switch in `PickerView`.
 //
-// The GLOBAL show/hide hotkey itself is deliberately out of THIS list — it
-// is shown and made reconfigurable separately, in `SettingsWindow
-// +Shortcuts.swift`'s own dedicated section (T-OPT2), since (unlike every
-// entry below) it is rebindable: it's read/written directly against the
-// shared `app.clipnest.Clipnest.Keybindings` GSettings schema (see
-// `Hotkeys/GlobalHotkeyAccelerator.swift`), the SAME schema the GNOME Shell
-// extension reads (`extension/src/core/iface.js`'s doc comment) — not
-// registered by anything in `ClipnestGTK` itself, but no longer merely
-// undiscoverable/unchangeable from Settings either.
+// The two GLOBAL hotkeys (show/hide the picker, and — T-HOTKEY1 — expand
+// the current selection as a snippet) are deliberately out of THIS list —
+// each is shown and made reconfigurable separately, in `SettingsWindow
+// +Shortcuts.swift`'s own dedicated section (T-OPT2, extended by
+// T-HOTKEY1), since (unlike every entry below) both are rebindable: each is
+// read/written directly against the shared `app.clipnest.Clipnest.
+// Keybindings` GSettings schema (see `Hotkeys/GlobalHotkeyAccelerator.swift`),
+// the SAME schema the GNOME Shell extension reads (`extension/src/core/
+// iface.js`'s doc comment) — not registered by anything in `ClipnestGTK`
+// itself, but no longer merely undiscoverable/unchangeable from Settings
+// either.
 public enum LinuxShortcutDescriptions {
   public struct Entry: Equatable, Sendable {
     public let combo: String

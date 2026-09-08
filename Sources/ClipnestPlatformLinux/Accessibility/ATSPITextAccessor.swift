@@ -70,11 +70,38 @@ public struct ATSPITextAccessor: SelectedTextAccessing {
   /// start — never `SetTextContents`, whose documented semantics replace
   /// the ENTIRE contents of the text object, which in a multi-line
   /// document would destroy everything outside the selection.
+  ///
+  /// `DeleteText` and `InsertText` are two SEPARATE D-Bus calls with no
+  /// transaction wrapping them — if the delete succeeds but the insert
+  /// then fails (a timeout, the app hanging, focus moving away mid-
+  /// operation), the naive version of this method would report plain
+  /// `false` while having ALREADY erased the user's original text, and
+  /// `SnippetExpander` falls through to its clipboard tier on `false` —
+  /// which would then try to copy whatever is (by then) selected, almost
+  /// certainly nothing, permanently losing the text with no recovery. This
+  /// is exactly the failure mode this feature's own hard constraint names:
+  /// "a partially-applied edit is far worse than a clipboard round trip."
+  /// So the original selected text is read FIRST (cheap, non-destructive —
+  /// also fails this method fast, before the risky delete, if the
+  /// accessible can't even answer a plain read) and, if `InsertText` fails
+  /// after a successful `DeleteText`, this method makes an unconditional
+  /// best-effort attempt to re-insert that original text at the same
+  /// position before reporting failure. Not a full guarantee (the recovery
+  /// insert is itself a D-Bus call that can also fail) but strictly better
+  /// than never trying.
   @discardableResult
   public func replaceSelectedText(with text: String) -> Bool {
     guard let target = focusedObject(), let selection = currentSelection(target) else {
       return false
     }
+    guard
+      let originalTextReply = caller.call(
+        ATSPIRequests.getText(
+          busName: target.busName, objectPath: target.objectPath, start: selection.start,
+          end: selection.end, serial: nextSerial()), timeout: timeout),
+      let originalText = ATSPIResponses.parseStringReply(originalTextReply)
+    else { return false }
+
     guard
       let deleteReply = caller.call(
         ATSPIRequests.deleteText(
@@ -87,9 +114,20 @@ public struct ATSPITextAccessor: SelectedTextAccessing {
       let insertReply = caller.call(
         ATSPIRequests.insertText(
           busName: target.busName, objectPath: target.objectPath, position: selection.start,
-          text: text, serial: nextSerial()), timeout: timeout)
-    else { return false }
-    return ATSPIResponses.parseBooleanReply(insertReply) == true
+          text: text, serial: nextSerial()), timeout: timeout),
+      ATSPIResponses.parseBooleanReply(insertReply) == true
+    else {
+      // Best-effort rollback -- see this method's doc comment. Its own
+      // result is deliberately not inspected: there is no better outcome
+      // to report through this method's plain `Bool` contract than "the
+      // requested replace failed," whether or not the rollback landed.
+      _ = caller.call(
+        ATSPIRequests.insertText(
+          busName: target.busName, objectPath: target.objectPath, position: selection.start,
+          text: originalText, serial: nextSerial()), timeout: timeout)
+      return false
+    }
+    return true
   }
 
   private func currentSelection(

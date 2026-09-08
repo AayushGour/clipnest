@@ -99,8 +99,56 @@ var Placement = class Placement {
     this._place(win, req);
   }
 
+  /// Clamps `(x, y)` (for a window of `width`x`height`) into the monitor
+  /// work area the point falls in before ever calling `move_frame` — a
+  /// real, reported bug (`packaging/linux/gnome-shell-test/README.md`'s
+  /// "Findings"): placed at the raw cursor position with no clamp, the
+  /// picker's height/width could run past the screen edge (e.g. y=600 on
+  /// a 900px-tall monitor with the picker's 420px height). The clamp
+  /// formula itself is a direct, deliberate PORT of
+  /// `WindowPlacement.clampedOrigin` (`Sources/ClipnestViewModels/UI/
+  /// Picker/WindowPlacement.swift`, the ~16-test-covered macOS/Linux
+  /// SHARED placement math `PickerPanel` already calls on macOS via
+  /// `NSScreen.visibleFrame`) — not a new design. That Swift type cannot
+  /// run here: a Wayland client can't query its own on-screen position or
+  /// the monitor work area, which is this whole extension's reason to
+  /// exist (see this file's header comment), so the identical min/max
+  /// formula is duplicated here in JS rather than shared across the
+  /// language boundary, mirroring how this same file already mirrors
+  /// Swift-side constants (e.g. `flags & 1` above documented as "==
+  /// NSWindow level .popUpMenu"). Kept as a plain, dependency-free
+  /// function (no `this`/`Meta`/`global`) so it's directly unit-tested
+  /// under a bare `gjs`, same as the rest of this module's pure logic —
+  /// see `placement.test.js`.
+  _clampOrigin(x, y, width, height, workArea) {
+    const maxX = Math.max(workArea.x + workArea.width - width, workArea.x);
+    const maxY = Math.max(workArea.y + workArea.height - height, workArea.y);
+    return [
+      Math.min(Math.max(x, workArea.x), maxX),
+      Math.min(Math.max(y, workArea.y), maxY),
+    ];
+  }
+
   _place(win, { x, y, flags }) {
-    win.move_frame(true, x, y);          // user_op = true: honoured unconditionally
+    // The monitor the TARGET point falls in, not whichever monitor the
+    // window currently happens to occupy (its pre-move position, possibly
+    // still the default GTK placement or a prior show) — mirrors
+    // `getPointer()`'s own `get_monitor_index_for_rect` use immediately
+    // below for the identical reason: the point being placed at is the
+    // authority on which monitor's work area applies, not the window's
+    // stale current position.
+    const monitor = this._d.global.display.get_monitor_index_for_rect(
+      new this._d.Meta.Rectangle({ x, y, width: 1, height: 1 }));
+    const [wx, wy, wwidth, wheight] = this.getMonitorWorkArea(monitor);
+    // `get_frame_rect()`, not a hardcoded picker size: this module places
+    // any Clipnest toplevel by token (today just `'picker'`), and the
+    // window's REAL on-screen size (GTK4 can grow a window past its
+    // `gtk_window_set_default_size` request to fit its content's natural
+    // size) is what actually needs to fit, not an assumed constant.
+    const frame = win.get_frame_rect();
+    const [clampedX, clampedY] = this._clampOrigin(
+      x, y, frame.width, frame.height, { x: wx, y: wy, width: wwidth, height: wheight });
+    win.move_frame(true, clampedX, clampedY);  // user_op = true: honoured unconditionally
     if (flags & 1) win.make_above();     // == NSWindow level .popUpMenu
     if (flags & 2) win.stick();          // == .canJoinAllSpaces
     return true;

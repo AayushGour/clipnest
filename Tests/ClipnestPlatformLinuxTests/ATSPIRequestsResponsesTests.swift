@@ -70,13 +70,24 @@ struct ATSPIResponsesTests {
     #expect(ATSPIResponses.parseInt32Reply(reply) == 1)
   }
 
-  @Test("parses a (ii) struct reply (GetSelection's shape)")
+  @Test(
+    "parses GetSelection's REAL shape: two separate top-level int32 args, not an (ii) struct -- verified against a real GTK4 accessible over a live a11y bus (dbus-monitor: `int32 7` then a separate `int32 13`, never nested)"
+  )
   func parsesSelectionReply() {
     let reply = DBusMessage(
-      type: .methodReturn, serial: 2, replySerial: 1, body: [.structure([.int32(3), .int32(9)])])
+      type: .methodReturn, serial: 2, replySerial: 1, body: [.int32(3), .int32(9)])
     let result = ATSPIResponses.parseSelectionReply(reply)
     #expect(result?.start == 3)
     #expect(result?.end == 9)
+  }
+
+  @Test(
+    "regression guard: the OLD wrong assumption (a single (ii) STRUCT) must never parse again -- this exact canned shape is what let the real bug ship undetected"
+  )
+  func selectionReplyNeverAcceptsTheOldWrongStructShape() {
+    let reply = DBusMessage(
+      type: .methodReturn, serial: 2, replySerial: 1, body: [.structure([.int32(3), .int32(9)])])
+    #expect(ATSPIResponses.parseSelectionReply(reply) == nil)
   }
 
   @Test("parses a string reply (GetText/GetAddress's shape)")
