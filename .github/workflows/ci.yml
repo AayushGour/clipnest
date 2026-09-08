@@ -59,8 +59,20 @@ jobs:
         run: swift test
 
       - name: swift format lint --strict
-        # Matches coding-standards.md's Core/Tests lint command exactly —
-        # deliberately NOT `ClipnestApp/Sources` (that's the XcodeGen macOS
-        # app target; it isn't part of this SPM package graph at all and
-        # doesn't build outside Xcode — see Package.swift's own top comment).
-        run: swift format lint --recursive --strict Sources Tests
+        # scripts/lint.sh (T-LINT2), not the raw `swift format lint` command
+        # directly, so this job and a developer's own machine are certified
+        # by the exact same script and the exact same reasoning: it checks
+        # `swift format --version` against the version this same image is
+        # known to bundle ("main" — a swift-format `main`-branch build, not
+        # a tagged release) and fails loudly on any drift instead of
+        # silently trusting whatever's on PATH. Inside this container the
+        # version already matches, so it runs natively with no extra
+        # overhead — the docker-re-exec path in lint.sh is for a developer's
+        # own machine, which normally does NOT match (see the script's own
+        # header for why: Apple's swift-format 6.3.0 and this image's `main`
+        # build disagree on real code, verified). Matches
+        # coding-standards.md's Core/Tests lint scope exactly — deliberately
+        # NOT `ClipnestApp/Sources` (that's the XcodeGen macOS app target;
+        # it isn't part of this SPM package graph at all and doesn't build
+        # outside Xcode — see Package.swift's own top comment).
+        run: scripts/lint.sh Sources Tests

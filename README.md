@@ -262,6 +262,8 @@ None of this requires an Apple Developer account to build, run, or even distribu
 
 Issues, ideas, and pull requests are welcome. Clipnest is a small, readable codebase built to be hacked on — clone it, run `swift test`, and dive in. The core logic has no Xcode dependency, so most contributions can be developed and tested from the command line.
 
+Before opening a PR, run `scripts/lint.sh` (needs Docker on most machines — see the script's header for why: it runs the exact swift-format build CI trusts, not whatever version happens to be on your PATH, since those two can and do disagree).
+
 ## License
 
 Clipnest is released under the [MIT License](LICENSE) — free to use, modify, and share.
