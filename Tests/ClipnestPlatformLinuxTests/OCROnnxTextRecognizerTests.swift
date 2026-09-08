@@ -31,7 +31,7 @@ struct OCROnnxTextRecognizerTests {
     cgroupCPUQuota: nil)
 
   @Test("should_return_nil_for_image_bytes_over_the_size_ceiling")
-  func recognizeText_returnsNilOverByteCeiling() async {
+  func recognizeTextReturnsNilOverByteCeiling() async {
     let recognizer = OnnxTextRecognizer(
       modelLocator: StandardOCRModelLocator(fileExists: { _ in true }),
       capacityProber: FixedMachineCapacityProber(capacity: Self.midRangeCapacity))
@@ -41,7 +41,7 @@ struct OCROnnxTextRecognizerTests {
   }
 
   @Test("should_return_nil_when_no_model_files_are_installed")
-  func recognizeText_returnsNilWhenModelsMissing() async {
+  func recognizeTextReturnsNilWhenModelsMissing() async {
     // Simulates a machine with `clipnest-ocr` (models) NOT installed —
     // `OCRModelLocating.locate()` returning `nil` per its own documented
     // contract. `recognizeText` checks `OrtRuntimeAvailability.isAvailable`
@@ -59,7 +59,7 @@ struct OCROnnxTextRecognizerTests {
   }
 
   @Test("should_return_nil_for_bytes_that_are_not_a_valid_PNG_header")
-  func recognizeText_returnsNilForInvalidPNGHeader() async {
+  func recognizeTextReturnsNilForInvalidPNGHeader() async {
     let recognizer = OnnxTextRecognizer(
       modelLocator: StandardOCRModelLocator(fileExists: { _ in true }),
       capacityProber: FixedMachineCapacityProber(capacity: Self.midRangeCapacity))
@@ -69,7 +69,7 @@ struct OCROnnxTextRecognizerTests {
   }
 
   @Test("should_never_crash_regardless_of_OrtRuntimeAvailability_on_this_machine")
-  func recognizeText_neverCrashesEitherWay() async {
+  func recognizeTextNeverCrashesEitherWay() async {
     // `OrtRuntimeAvailability.isAvailable` reflects whatever is actually
     // installed on the machine running `swift test` (false on a bare CI
     // runner, true inside the packaging verification container) — this

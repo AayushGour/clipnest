@@ -18,20 +18,20 @@ import Testing
 struct OCROrtLibraryTests {
 
   @Test("should_build_one_candidate_path_per_search_directory_in_order")
-  func candidatePaths_joinsEachDirectoryWithLibraryName() {
+  func candidatePathsJoinsEachDirectoryWithLibraryName() {
     let paths = OrtLibrary.candidatePaths(
       libraryName: "libexample.so.1", searchDirectories: ["/usr/lib/clipnest", "/usr/local/lib"])
     #expect(paths == ["/usr/lib/clipnest/libexample.so.1", "/usr/local/lib/libexample.so.1"])
   }
 
   @Test("should_return_empty_candidate_list_for_empty_search_directories")
-  func candidatePaths_emptySearchDirectories() {
+  func candidatePathsEmptySearchDirectories() {
     let paths = OrtLibrary.candidatePaths(libraryName: "libexample.so.1", searchDirectories: [])
     #expect(paths.isEmpty)
   }
 
   @Test("should_return_nil_when_no_matching_library_exists_anywhere")
-  func open_returnsNilWhenLibraryIsNotInstalledAnywhere() {
+  func openReturnsNilWhenLibraryIsNotInstalledAnywhere() {
     // A name guaranteed never to exist on any real filesystem, searched in
     // directories guaranteed to exist but never contain it (or not exist
     // at all) — deterministic regardless of whether the CI/dev machine
@@ -43,7 +43,7 @@ struct OCROrtLibraryTests {
   }
 
   @Test("should_report_apiBase_as_nil_when_the_library_never_loaded")
-  func apiBase_isNilWhenLibraryUnavailable() {
+  func apiBaseIsNilWhenLibraryUnavailable() {
     // `OrtLibrary.apiBase()` always resolves against the process-wide
     // cached handle (real search paths, real SONAME) — on a machine
     // without `clipnest-ocr` installed (the common case for `swift test`
@@ -55,7 +55,7 @@ struct OCROrtLibraryTests {
   }
 
   @Test("should_expose_isLoaded_as_a_plain_bool_without_crashing")
-  func isLoaded_neverCrashes() {
+  func isLoadedNeverCrashes() {
     // Whether ONNX Runtime happens to be installed on the machine running
     // this test is environment-dependent (true inside the packaging
     // verification container, false on a bare CI runner) — this test only
@@ -66,7 +66,7 @@ struct OCROrtLibraryTests {
   }
 
   @Test("should_create_a_real_OrtEnv_end_to_end_when_ONNX_Runtime_is_actually_installed")
-  func createEnvironment_succeedsWhenRealLibraryIsInstalled() {
+  func createEnvironmentSucceedsWhenRealLibraryIsInstalled() {
     // Deliberately conditional, not skipped: on a bare CI runner (no
     // `clipnest-ocr` installed), `OrtLibrary.isLoaded` is `false` and this
     // test asserts nothing beyond "no crash" — the real, unconditional

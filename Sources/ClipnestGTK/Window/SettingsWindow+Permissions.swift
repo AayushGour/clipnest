@@ -67,6 +67,18 @@ public struct UInputPermissionStatus: Equatable, Sendable {
 /// reaching that distinction) — `message` carries whatever `pkexec`/the
 /// helper actually said on stderr (or stdout on success), which is already
 /// the more specific and honest text in every case.
+/// Completion handed to `SettingsWindow.requestUInputGrant`.
+///
+/// Named rather than spelled inline because the inline form pushed
+/// `SettingsWindow.init`'s parameter past 100 columns, and the two
+/// swift-format versions in use disagree about how to wrap an `@escaping`
+/// closure-type parameter: swift-format `main` (the CI image,
+/// `swift:6.0-jammy`) accepted the wrapped form that Apple's 6.3.0 on macOS
+/// rejected with `[LineLength]`. Two reviewers reached opposite verdicts on
+/// the same line for exactly that reason. A typealias keeps the declaration
+/// short enough that neither version has to wrap it.
+public typealias UInputGrantCompletion = @Sendable (UInputGrantOutcome) -> Void
+
 public enum UInputGrantOutcome: Equatable, Sendable {
   case succeeded(message: String)
   case failed(message: String)

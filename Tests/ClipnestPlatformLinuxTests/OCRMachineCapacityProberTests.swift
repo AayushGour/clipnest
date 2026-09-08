@@ -9,7 +9,7 @@ struct OCRMachineCapacityProberTests {
   // MARK: - parseAvailableRAMMB tests
 
   @Test("should_parse_MemAvailable_correctly_and_convert_KB_to_MB_floored")
-  func parseAvailableRAMMB_convertsKBtoMBFloored() {
+  func parseAvailableRAMMBConvertsKBtoMBFloored() {
     let meminfoContent = """
       MemTotal:        8167852 kB
       MemFree:         307200 kB
@@ -21,7 +21,7 @@ struct OCRMachineCapacityProberTests {
   }
 
   @Test("should_return_nil_when_MemAvailable_line_is_missing")
-  func parseAvailableRAMMB_returnsNilWhenMissing() {
+  func parseAvailableRAMMBReturnsNilWhenMissing() {
     let meminfoContent = """
       MemTotal:        8167852 kB
       MemFree:         307200 kB
@@ -32,14 +32,14 @@ struct OCRMachineCapacityProberTests {
   }
 
   @Test("should_handle_MemAvailable_with_various_whitespace")
-  func parseAvailableRAMMB_handlesWhitespace() {
+  func parseAvailableRAMMBHandlesWhitespace() {
     let meminfoContent = "MemAvailable:   1048576 kB"
     let result = MachineCapacityParsing.parseAvailableRAMMB(procMeminfoContents: meminfoContent)
     #expect(result == 1024)  // 1048576 / 1024 = 1024
   }
 
   @Test("should_return_nil_on_malformed_MemAvailable_value")
-  func parseAvailableRAMMB_returnsNilOnMalformedValue() {
+  func parseAvailableRAMMBReturnsNilOnMalformedValue() {
     let meminfoContent = "MemAvailable:   not_a_number kB"
     let result = MachineCapacityParsing.parseAvailableRAMMB(procMeminfoContents: meminfoContent)
     #expect(result == nil)
@@ -48,43 +48,43 @@ struct OCRMachineCapacityProberTests {
   // MARK: - parseCgroupCPUQuota tests
 
   @Test("should_parse_cpu_max_quota_equal_to_period_as_1_point_0")
-  func parseCgroupCPUQuota_quota_equals_period() {
+  func parseCgroupCPUQuotaQuotaEqualsPeriod() {
     let result = MachineCapacityParsing.parseCgroupCPUQuota(cpuMaxContents: "100000 100000")
     #expect(result == 1.0)
   }
 
   @Test("should_parse_cpu_max_half_quota")
-  func parseCgroupCPUQuota_half_quota() {
+  func parseCgroupCPUQuotaHalfQuota() {
     let result = MachineCapacityParsing.parseCgroupCPUQuota(cpuMaxContents: "50000 100000")
     #expect(result == 0.5)
   }
 
   @Test("should_parse_cpu_max_with_extra_whitespace")
-  func parseCgroupCPUQuota_extraWhitespace() {
+  func parseCgroupCPUQuotaExtraWhitespace() {
     let result = MachineCapacityParsing.parseCgroupCPUQuota(cpuMaxContents: "  75000  150000  ")
     #expect(result == 0.5)
   }
 
   @Test("should_return_nil_for_unlimited_max_quota")
-  func parseCgroupCPUQuota_unlimited() {
+  func parseCgroupCPUQuotaUnlimited() {
     let result = MachineCapacityParsing.parseCgroupCPUQuota(cpuMaxContents: "max 100000")
     #expect(result == nil)
   }
 
   @Test("should_return_nil_for_malformed_cpu_max")
-  func parseCgroupCPUQuota_malformed() {
+  func parseCgroupCPUQuotaMalformed() {
     let result = MachineCapacityParsing.parseCgroupCPUQuota(cpuMaxContents: "not a number 100000")
     #expect(result == nil)
   }
 
   @Test("should_return_nil_for_single_token_cpu_max")
-  func parseCgroupCPUQuota_singleToken() {
+  func parseCgroupCPUQuotaSingleToken() {
     let result = MachineCapacityParsing.parseCgroupCPUQuota(cpuMaxContents: "100000")
     #expect(result == nil)
   }
 
   @Test("should_return_nil_for_zero_period")
-  func parseCgroupCPUQuota_zeroPeriod() {
+  func parseCgroupCPUQuotaZeroPeriod() {
     let result = MachineCapacityParsing.parseCgroupCPUQuota(cpuMaxContents: "100000 0")
     #expect(result == nil)
   }
@@ -92,7 +92,7 @@ struct OCRMachineCapacityProberTests {
   // MARK: - parseHasAVX2 tests
 
   @Test("should_detect_AVX2_in_flags_line")
-  func parseHasAVX2_detects_avx2() {
+  func parseHasAVX2DetectsAvx2() {
     let cpuinfoContent = """
       processor\t: 0
       vendor_id\t: GenuineIntel
@@ -103,7 +103,7 @@ struct OCRMachineCapacityProberTests {
   }
 
   @Test("should_return_false_when_AVX2_is_not_present")
-  func parseHasAVX2_not_present() {
+  func parseHasAVX2NotPresent() {
     let cpuinfoContent = """
       processor\t: 0
       vendor_id\t: GenuineIntel
@@ -114,7 +114,7 @@ struct OCRMachineCapacityProberTests {
   }
 
   @Test("should_return_false_when_no_flags_line_exists")
-  func parseHasAVX2_noFlagsLine() {
+  func parseHasAVX2NoFlagsLine() {
     let cpuinfoContent = """
       processor\t: 0
       vendor_id\t: GenuineIntel
@@ -125,7 +125,7 @@ struct OCRMachineCapacityProberTests {
   }
 
   @Test("should_detect_AVX2_in_Features_line_non_x86")
-  func parseHasAVX2_features_line() {
+  func parseHasAVX2FeaturesLine() {
     let cpuinfoContent = """
       processor\t: 0
       Features\t: fp asimd evtstrm aes pmull sha1 sha2 crc32 atomics fphp asimdhp cpuid asimdrdm lrcpc dcpop asimddp ssbs
@@ -137,28 +137,28 @@ struct OCRMachineCapacityProberTests {
   // MARK: - parsePhysicalCoreCount tests
 
   @Test("should_count_distinct_core_IDs_correctly")
-  func parsePhysicalCoreCount_distinctCores() {
+  func parsePhysicalCoreCountDistinctCores() {
     let coreIDs = ["0", "1", "0", "1"]
     let result = MachineCapacityParsing.parsePhysicalCoreCount(coreIDValues: coreIDs)
     #expect(result == 2)  // Two distinct core IDs: 0 and 1
   }
 
   @Test("should_handle_single_core_ID")
-  func parsePhysicalCoreCount_singleCore() {
+  func parsePhysicalCoreCountSingleCore() {
     let coreIDs = ["0", "0", "0", "0"]
     let result = MachineCapacityParsing.parsePhysicalCoreCount(coreIDValues: coreIDs)
     #expect(result == 1)
   }
 
   @Test("should_return_1_for_empty_input")
-  func parsePhysicalCoreCount_emptyInput() {
+  func parsePhysicalCoreCountEmptyInput() {
     let coreIDs: [String] = []
     let result = MachineCapacityParsing.parsePhysicalCoreCount(coreIDValues: coreIDs)
     #expect(result == 1)  // Never return 0
   }
 
   @Test("should_handle_many_cores_correctly")
-  func parsePhysicalCoreCount_manyCores() {
+  func parsePhysicalCoreCountManyCores() {
     let coreIDs = ["0", "1", "2", "3", "0", "1", "2", "3"]
     let result = MachineCapacityParsing.parsePhysicalCoreCount(coreIDValues: coreIDs)
     #expect(result == 4)
@@ -167,31 +167,31 @@ struct OCRMachineCapacityProberTests {
   // MARK: - parseOnBattery tests
 
   @Test("should_return_true_when_AC_online_is_0")
-  func parseOnBattery_onBattery() {
+  func parseOnBatteryOnBattery() {
     let result = MachineCapacityParsing.parseOnBattery(acOnlineContents: "0")
     #expect(result == true)
   }
 
   @Test("should_return_false_when_AC_online_is_1")
-  func parseOnBattery_notOnBattery() {
+  func parseOnBatteryNotOnBattery() {
     let result = MachineCapacityParsing.parseOnBattery(acOnlineContents: "1")
     #expect(result == false)
   }
 
   @Test("should_handle_trailing_newline_in_AC_online")
-  func parseOnBattery_trailingNewline() {
+  func parseOnBatteryTrailingNewline() {
     let result = MachineCapacityParsing.parseOnBattery(acOnlineContents: "0\n")
     #expect(result == true)
   }
 
   @Test("should_handle_whitespace_around_AC_online_value")
-  func parseOnBattery_whitespace() {
+  func parseOnBatteryWhitespace() {
     let result = MachineCapacityParsing.parseOnBattery(acOnlineContents: "  1  \n")
     #expect(result == false)
   }
 
   @Test("should_return_false_for_malformed_AC_online")
-  func parseOnBattery_malformed() {
+  func parseOnBatteryMalformed() {
     let result = MachineCapacityParsing.parseOnBattery(acOnlineContents: "unknown")
     #expect(result == false)
   }

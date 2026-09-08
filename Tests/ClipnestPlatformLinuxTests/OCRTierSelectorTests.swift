@@ -10,7 +10,7 @@ struct OCRTierSelectorTests {
   // MARK: - capacityCeiling tests
 
   @Test("should_return_minimal_for_low_RAM_box")
-  func capacityCeiling_lowRAM() {
+  func capacityCeilingLowRAM() {
     let capacity = MachineCapacity(
       physicalCores: 8,
       logicalCores: 16,
@@ -24,7 +24,7 @@ struct OCRTierSelectorTests {
   }
 
   @Test("should_return_minimal_for_low_core_count_box")
-  func capacityCeiling_lowCores() {
+  func capacityCeilingLowCores() {
     let capacity = MachineCapacity(
       physicalCores: 1,
       logicalCores: 1,
@@ -38,7 +38,7 @@ struct OCRTierSelectorTests {
   }
 
   @Test("should_return_balanced_for_mid_range_box")
-  func capacityCeiling_balancedBox() {
+  func capacityCeilingBalancedBox() {
     let capacity = MachineCapacity(
       physicalCores: 4,
       logicalCores: 8,
@@ -57,7 +57,7 @@ struct OCRTierSelectorTests {
   }
 
   @Test("should_return_performance_for_high_end_box")
-  func capacityCeiling_performanceBox() {
+  func capacityCeilingPerformanceBox() {
     let capacity = MachineCapacity(
       physicalCores: 8,
       logicalCores: 16,
@@ -71,7 +71,7 @@ struct OCRTierSelectorTests {
   }
 
   @Test("should_respect_cgroup_CPU_quota_limit")
-  func capacityCeiling_cgroupLimit() {
+  func capacityCeilingCgroupLimit() {
     let capacity = MachineCapacity(
       physicalCores: 8,
       logicalCores: 16,
@@ -85,7 +85,7 @@ struct OCRTierSelectorTests {
   }
 
   @Test("should_clamp_to_balanced_when_on_battery")
-  func capacityCeiling_onBattery() {
+  func capacityCeilingOnBattery() {
     let capacity = MachineCapacity(
       physicalCores: 8,
       logicalCores: 16,
@@ -99,7 +99,7 @@ struct OCRTierSelectorTests {
   }
 
   @Test("should_return_balanced_without_AVX2_despite_good_hardware")
-  func capacityCeiling_noAVX2() {
+  func capacityCeilingNoAVX2() {
     let capacity = MachineCapacity(
       physicalCores: 8,
       logicalCores: 16,
@@ -115,7 +115,7 @@ struct OCRTierSelectorTests {
   // MARK: - selectTier tests
 
   @Test("should_use_full_ceiling_for_accurate_quality")
-  func selectTier_accurateUsesFullCeiling() {
+  func selectTierAccurateUsesFullCeiling() {
     let capacity = MachineCapacity(
       physicalCores: 8,
       logicalCores: 16,
@@ -133,7 +133,7 @@ struct OCRTierSelectorTests {
   }
 
   @Test("should_step_down_one_tier_for_fast_quality")
-  func selectTier_fastStepsDown() {
+  func selectTierFastStepsDown() {
     let capacity = MachineCapacity(
       physicalCores: 8,
       logicalCores: 16,
@@ -151,7 +151,7 @@ struct OCRTierSelectorTests {
   }
 
   @Test("should_not_step_below_minimal_for_fast_quality")
-  func selectTier_fastStaysAtMinimal() {
+  func selectTierFastStaysAtMinimal() {
     let capacity = MachineCapacity(
       physicalCores: 1,
       logicalCores: 1,
@@ -169,7 +169,7 @@ struct OCRTierSelectorTests {
   }
 
   @Test("should_step_from_balanced_down_to_minimal_for_fast")
-  func selectTier_fastFromBalancedToMinimal() {
+  func selectTierFastFromBalancedToMinimal() {
     let capacity = MachineCapacity(
       physicalCores: 4,
       logicalCores: 8,
@@ -190,7 +190,7 @@ struct OCRTierSelectorTests {
   }
 
   @Test("should_bypass_logic_with_forced_override")
-  func selectTier_forcedOverride() {
+  func selectTierForcedOverride() {
     let capacity = MachineCapacity(
       physicalCores: 1,
       logicalCores: 1,
@@ -210,7 +210,7 @@ struct OCRTierSelectorTests {
   // MARK: - select (convenience function) tests
 
   @Test("should_return_correct_configuration_for_selected_tier")
-  func select_returnsProperConfiguration() {
+  func selectReturnsProperConfiguration() {
     let capacity = MachineCapacity(
       physicalCores: 8,
       logicalCores: 16,
@@ -235,28 +235,28 @@ struct OCRTierSelectorTests {
   // MARK: - Tier Comparable tests
 
   @Test("should_satisfy_minimal_less_than_balanced")
-  func tierComparable_minimalLessThanBalanced() {
+  func tierComparableMinimalLessThanBalanced() {
     #expect(OCRTier.minimal < .balanced)
   }
 
   @Test("should_satisfy_balanced_less_than_performance")
-  func tierComparable_balancedLessThanPerformance() {
+  func tierComparableBalancedLessThanPerformance() {
     #expect(OCRTier.balanced < .performance)
   }
 
   @Test("should_satisfy_minimal_less_than_performance")
-  func tierComparable_minimalLessThanPerformance() {
+  func tierComparableMinimalLessThanPerformance() {
     #expect(OCRTier.minimal < .performance)
   }
 
   @Test("should_satisfy_equal_tiers")
-  func tierComparable_equalTiers() {
+  func tierComparableEqualTiers() {
     #expect(OCRTier.balanced == .balanced)
     #expect(!(OCRTier.balanced < .balanced))
   }
 
   @Test("should_clamp_performance_to_balanced_on_battery")
-  func tierComparable_clampWithMin() {
+  func tierComparableClampWithMin() {
     let tier = OCRTier.performance
     let clamped = min(tier, OCRTier.balanced)
     #expect(clamped == .balanced)
@@ -265,7 +265,7 @@ struct OCRTierSelectorTests {
   // MARK: - Edge cases
 
   @Test("should_handle_zero_RAM_available")
-  func selectTier_zeroRAM() {
+  func selectTierZeroRAM() {
     let capacity = MachineCapacity(
       physicalCores: 8,
       logicalCores: 16,
@@ -283,7 +283,7 @@ struct OCRTierSelectorTests {
   }
 
   @Test("should_handle_fractional_cgroup_quota_rounding")
-  func selectTier_fractionalCgroupQuota() {
+  func selectTierFractionalCgroupQuota() {
     let capacity = MachineCapacity(
       physicalCores: 4,
       logicalCores: 8,
@@ -302,7 +302,7 @@ struct OCRTierSelectorTests {
   }
 
   @Test("should_handle_cgroup_quota_larger_than_physical_cores")
-  func selectTier_cgroupQuotaExceedsPhysicalCores() {
+  func selectTierCgroupQuotaExceedsPhysicalCores() {
     let capacity = MachineCapacity(
       physicalCores: 2,
       logicalCores: 4,

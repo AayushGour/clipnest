@@ -14,7 +14,7 @@ import Testing
 struct OCRRuntimeAvailabilityTests {
 
   @Test("should_mirror_OrtLibrary_isLoaded_exactly")
-  func isAvailable_mirrorsOrtLibraryIsLoaded() {
+  func isAvailableMirrorsOrtLibraryIsLoaded() {
     #expect(OrtRuntimeAvailability.isAvailable == OrtLibrary.isLoaded)
   }
 }

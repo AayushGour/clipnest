@@ -109,7 +109,7 @@ public final class SettingsWindow: @unchecked Sendable {
   /// `SettingsWindow+Permissions.swift`'s call site hops back to the GTK
   /// thread itself before touching any widget. Also deliberately not
   /// defaulted, same reasoning as `uinputPermissionStatusProvider` above.
-  let requestUInputGrant: (_ completion: @escaping @Sendable (UInputGrantOutcome) -> Void) -> Void
+  let requestUInputGrant: (_ completion: @escaping UInputGrantCompletion) -> Void
 
   /// T-LXUPD: current installed version text, shown in the General tab
   /// (`UpdateSettingsPresentation.versionLine`) — the Linux analogue of
@@ -213,13 +213,13 @@ public final class SettingsWindow: @unchecked Sendable {
     setLaunchAtLogin: @escaping (Bool) throws -> Void,
     reinstallToggleHotkeyFloor: @escaping (_ accelerator: String) -> Void,
     uinputPermissionStatusProvider: @escaping () -> UInputPermissionStatus,
-    requestUInputGrant: @escaping (_ completion: @escaping @Sendable (UInputGrantOutcome) -> Void)
-      -> Void,
+    requestUInputGrant: @escaping (_ completion: @escaping UInputGrantCompletion) -> Void,
     installedVersionText: String,
     detectUpdateProvenance: @escaping () async -> LinuxUpdateProvenance,
-    performLinuxAppUpdate: @escaping (
-      _ onStep: @escaping @Sendable (LinuxUpdateStep) -> Void
-    ) async -> LinuxUpdateOutcome,
+    performLinuxAppUpdate:
+      @escaping (
+        _ onStep: @escaping @Sendable (LinuxUpdateStep) -> Void
+      ) async -> LinuxUpdateOutcome,
     aptUpgradeCommand: String
   ) {
     self.settings = settings
