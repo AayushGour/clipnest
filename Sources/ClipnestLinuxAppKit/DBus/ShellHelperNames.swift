@@ -20,6 +20,13 @@ enum ShellHelperMember {
   static let placeWindow = "PlaceWindow"
   static let unplaceWindow = "UnplaceWindow"
   static let shortcutActivated = "ShortcutActivated"
+  /// `Capabilities`'s companion signal — see
+  /// `ShellHelperResponses.isCapabilitiesChanged`'s doc comment for how
+  /// this app reacts to it (T-P10J: added alongside fixing the missing
+  /// `AddMatch` rule that used to make this, `ShortcutActivated`, and
+  /// `ClipboardChanged` all unreachable regardless of whether this app
+  /// even recognized their member names).
+  static let capabilitiesChanged = "CapabilitiesChanged"
   // The five clipboard-payload members (task P8-C) — see
   // `ShellHelperRequests`/`ShellHelperResponses`' doc comments for why
   // these were absent until `DBusValue.unixFD`/`DBusConnection`'s

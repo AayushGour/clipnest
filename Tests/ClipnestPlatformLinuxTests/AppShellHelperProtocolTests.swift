@@ -80,4 +80,41 @@ struct AppShellHelperProtocolTests {
     #expect(options.pointer?.y == 4)
     #expect(options.monitor == 1)
   }
+
+  // MARK: - addSignalsMatch (T-P10J regression)
+
+  @Test(
+    "addSignalsMatch scopes the rule to the ShellHelper interface + object path, not a specific member — one rule must receive all three signals"
+  )
+  func addSignalsMatchScopesToInterfaceAndPath() {
+    let message = ShellHelperRequests.addSignalsMatch(serial: 21)
+    #expect(message.member == "AddMatch")
+    #expect(message.destination == "org.freedesktop.DBus")
+    guard case .string(let rule)? = message.body.first else {
+      Issue.record("expected the match rule string")
+      return
+    }
+    #expect(rule.contains("type='signal'"))
+    #expect(rule.contains("interface='app.clipnest.ShellHelper1'"))
+    #expect(rule.contains("path='/app/clipnest/ShellHelper'"))
+    // Deliberately NOT scoped to a single `member=` — see this method's doc
+    // comment: ShortcutActivated/ClipboardChanged/CapabilitiesChanged all
+    // need to ride this one rule.
+    #expect(!rule.contains("member="))
+  }
+
+  @Test("isCapabilitiesChanged recognizes the signal by type + member")
+  func isCapabilitiesChangedRecognizesSignal() {
+    let signal = DBusMessage(type: .signal, serial: 1, member: "CapabilitiesChanged", body: [])
+    #expect(ShellHelperResponses.isCapabilitiesChanged(signal))
+  }
+
+  @Test("isCapabilitiesChanged rejects a method return or a differently-named signal")
+  func isCapabilitiesChangedRejectsWrongShapes() {
+    let wrongMember = DBusMessage(type: .signal, serial: 1, member: "ShortcutActivated", body: [])
+    #expect(!ShellHelperResponses.isCapabilitiesChanged(wrongMember))
+
+    let notASignal = fakeMethodReturn(body: [])
+    #expect(!ShellHelperResponses.isCapabilitiesChanged(notASignal))
+  }
 }

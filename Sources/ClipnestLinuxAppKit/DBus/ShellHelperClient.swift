@@ -104,13 +104,20 @@ public final class ShellHelperClient: @unchecked Sendable {
   }
 
   /// Sends `AddMatch` for `app.clipnest.ShellHelper`'s `NameOwnerChanged`
-  /// and starts the background signal-read loop. Call once, after
-  /// `refreshCapabilities()`'s initial call.
+  /// (the bus daemon's own signal about who owns the name), AND for every
+  /// signal the ShellHelper OBJECT itself emits (`ShortcutActivated`/
+  /// `ClipboardChanged`/`CapabilitiesChanged` — see
+  /// `ShellHelperRequests.addSignalsMatch`'s doc comment for T-P10J, the
+  /// bug this second call fixes: without it, this class's OWN
+  /// `readLoop` parsing code for those three signals was unreachable on
+  /// every machine, ever), then starts the background signal-read loop.
+  /// Call once, after `refreshCapabilities()`'s initial call.
   public func startWatching() {
     guard let signalConnection else { return }
     _ = signalConnection.call(
       DBusStandardRequests.addNameOwnerChangedMatch(
         forName: ShellHelperName.busName, serial: 20), timeout: timeout)
+    _ = signalConnection.call(ShellHelperRequests.addSignalsMatch(serial: 21), timeout: timeout)
 
     let thread = Thread { [weak self] in self?.readLoop(signalConnection) }
     thread.name = "ShellHelperClient"
@@ -127,6 +134,10 @@ public final class ShellHelperClient: @unchecked Sendable {
     while true {
       guard let message = connection.receiveOneMessage(timeout: .seconds(1)) else { continue }
       if DBusStandardResponses.parseNameOwnerChanged(message)?.name == ShellHelperName.busName {
+        _ = refreshCapabilities()
+        continue
+      }
+      if ShellHelperResponses.isCapabilitiesChanged(message) {
         _ = refreshCapabilities()
         continue
       }

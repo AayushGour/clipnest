@@ -17,6 +17,34 @@ import Foundation
 /// `DBusConnection`'s job via its `attachingFileDescriptors`/
 /// `fileDescriptors` parameters, called from `ShellHelperClient`.
 enum ShellHelperRequests {
+  /// The `org.freedesktop.DBus.AddMatch` rule that receives every signal
+  /// `app.clipnest.ShellHelper1` itself emits — `ShortcutActivated`,
+  /// `ClipboardChanged`, and `CapabilitiesChanged`. Scoped by `interface=`
+  /// + `path=` (not `member=`), so all three ride this ONE rule: unlike
+  /// `DBusStandardRequests.addNameOwnerChangedMatch` (which watches the bus
+  /// DAEMON's own signal about who owns a name), this watches signals the
+  /// ShellHelper OBJECT itself emits — a client gets neither kind for free
+  /// from the other, and `ShellHelperClient.startWatching()` sends both.
+  ///
+  /// **T-P10J**: this rule was entirely missing. `readLoop`'s existing
+  /// `ShellHelperResponses.parseShortcutActivated`/`parseClipboardChanged`/
+  /// (now) `isCapabilitiesChanged` were unreachable on every machine, ever
+  /// — a session bus never forwards an unsolicited signal to a connection
+  /// with no matching rule for it, regardless of whether that connection's
+  /// own code would have known what to do with it. Confirmed live against
+  /// a real GNOME Shell (`packaging/linux/gnome-shell-test/`): an
+  /// independent `gdbus monitor --dest app.clipnest.ShellHelper` saw a real
+  /// `ShortcutActivated` from a real `<Alt><Super>v` press that this app's
+  /// own `readLoop` never observed.
+  static func addSignalsMatch(serial: UInt32) -> DBusMessage {
+    let rule =
+      "type='signal',interface='\(ShellHelperName.interface)',path='\(ShellHelperName.objectPath)'"
+    return DBusMessage(
+      type: .methodCall, serial: serial, path: DBusStandardName.busObjectPath,
+      interface: DBusStandardName.busInterface, member: DBusStandardMember.addMatch,
+      destination: DBusStandardName.busServiceName, body: [.string(rule)])
+  }
+
   static func getCapabilities(serial: UInt32) -> DBusMessage {
     DBusMessage(
       type: .methodCall, serial: serial, path: ShellHelperName.objectPath,
@@ -241,6 +269,24 @@ enum ShellHelperResponses {
   static func isReadClipboardReplyShapeValid(_ message: DBusMessage) -> Bool {
     guard message.type == .methodReturn, case .unixFD? = message.body.first else { return false }
     return true
+  }
+
+  /// `CapabilitiesChanged(capabilities)` — the extension's best-effort
+  /// "I just finished enabling, re-read `Capabilities`" notice (it only
+  /// ever fires once, right after `enable()`; the extension's own source
+  /// comment calls a client that raced connecting before then just as
+  /// correct falling back to reading `Capabilities` directly). This app
+  /// deliberately does NOT trust the signal's own `capabilities: as`
+  /// payload — it just re-runs the same authoritative
+  /// `NameHasOwner`+`Properties.Get` round trip `NameOwnerChanged` already
+  /// triggers (`ShellHelperClient.refreshCapabilities()`), so a client that
+  /// missed this signal's one firing (or received it before `startWatching`
+  /// even ran) still converges via `refreshCapabilities()`'s existing
+  /// call at construction. Deliberately has no field-decoding parser of its
+  /// own, unlike `parseShortcutActivated`/`parseClipboardChanged` — nothing
+  /// reads its payload, so there is nothing to decode.
+  static func isCapabilitiesChanged(_ message: DBusMessage) -> Bool {
+    message.type == .signal && message.member == ShellHelperMember.capabilitiesChanged
   }
 
   /// `ClipboardChanged(selection, serial, mimetypes, owner_is_us, source)`.

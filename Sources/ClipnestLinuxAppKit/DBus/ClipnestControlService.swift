@@ -106,6 +106,89 @@ public final class ClipnestControlService: @unchecked Sendable {
   private let dispatcher: ClipnestControlDispatcher
   private var receiveThread: Thread?
 
+  // MARK: - T-P10I: demuxed outgoing calls on this SAME identity connection
+  //
+  // The devops investigation behind T-P10I ("gnome-shell-test/README.md"'s
+  // Findings) diagnosed the Shell-extension probe's failure as a pure
+  // ownership-PROPAGATION race, reproduced with a throwaway script that
+  // used ONE D-Bus connection for both claiming `app.clipnest.Clipnest`
+  // AND calling the extension. Tracing the REAL app's traffic with
+  // `dbus-monitor` against a real GNOME Shell (this task) found a
+  // different, deterministic (not racy) defect that misdiagnosis missed:
+  // `ShellHelperClient.callConnection` (built in `LinuxAppLifecycle
+  // .makeShellHelperClient` as a brand-new, separate `DBusConnection`) has
+  // a DIFFERENT unique name than `connection` here — the one that actually
+  // owns `app.clipnest.Clipnest` (claimed via `SingleInstance.acquire`).
+  // The extension's `_checkSender` (`extension/src/core/service.js`)
+  // denies EVERY SendKeyChord/GetPointer/PlaceWindow/etc. call whose
+  // sender isn't the CURRENT OWNER of `app.clipnest.Clipnest` — captured
+  // live: `error_name=org.freedesktop.DBus.Error.AccessDenied` on every
+  // single attempt across a 2-second bounded retry window, not just the
+  // first. No amount of waiting fixes a connection-identity mismatch; only
+  // sending from the connection that actually owns the name does.
+  //
+  // Fix: `ClipnestControlService` — the one object that already owns
+  // `connection` and already runs the one thread reading it — ALSO
+  // exposes a `DBusCalling`-conforming outgoing-call path
+  // (`call(_:timeout:)`) that sends on `connection` (so the sender the
+  // extension sees really is `app.clipnest.Clipnest`'s owner) and
+  // correlates the reply via `receiveLoop()`'s own read, instead of
+  // opening — and reading — a second, uncorrelated connection. This keeps
+  // `receiveLoop()` the SINGLE reader of `connection` (the exact hazard
+  // `ClipnestPlatformLinux.DBusConnection`'s own doc comment warns a
+  // shared connection needs a demultiplexer for), rather than also having
+  // some other thread call `connection.receiveOneMessage(_:)` directly and
+  // race it for the next buffered message.
+  //
+  // Scope: only the non-fd `DBusCalling.call(_:timeout:)` overload is
+  // implemented (`SendKeyChord`/`GetPointer`/`PlaceWindow`/etc. — every
+  // ShellHelper1 member the hotkey/paste/placement path needs). The
+  // fd-attaching overload (`ReadClipboard`/`SetClipboard`) is NOT — it
+  // would need `receiveLoop()` switched to the fd-aware receive path too,
+  // a larger, separate change out of this task's scope (clipboard-via-
+  // extension was already just as broken before this fix, for the
+  // identical sender-mismatch reason — this is not a regression).
+  private let pendingCallCondition = NSCondition()
+  private var pendingCallSerials: Set<UInt32> = []
+  private var resolvedReplies: [UInt32: DBusMessage] = [:]
+
+  /// Sends `message` on the SAME connection that owns `app.clipnest
+  /// .Clipnest` (see the "T-P10I" doc comment above) and blocks (up to
+  /// `timeout`) for its `METHOD_RETURN`/`ERROR` reply, which `receiveLoop()`
+  /// resolves on this service's own receive thread. `nil` on send failure
+  /// or timeout — matches `DBusConnection.call(_:timeout:)`'s own contract,
+  /// so every degrade-per-feature caller in `ShellHelperClient` (built
+  /// against the `DBusCalling` protocol, not a concrete connection type)
+  /// needs no change to use this instead.
+  public func call(_ message: DBusMessage, timeout: Duration) -> DBusMessage? {
+    var outgoing = message
+    let serial = connection.allocateSerial()
+    outgoing.serial = serial
+
+    pendingCallCondition.lock()
+    pendingCallSerials.insert(serial)
+    pendingCallCondition.unlock()
+
+    guard connection.send(outgoing) else {
+      pendingCallCondition.lock()
+      pendingCallSerials.remove(serial)
+      pendingCallCondition.unlock()
+      return nil
+    }
+
+    pendingCallCondition.lock()
+    defer { pendingCallCondition.unlock() }
+    let deadline = Date().addingTimeInterval(DurationConversion.timeInterval(for: timeout))
+    while resolvedReplies[serial] == nil {
+      let remaining = deadline.timeIntervalSinceNow
+      guard remaining > 0 else { break }
+      _ = pendingCallCondition.wait(until: Date().addingTimeInterval(remaining))
+    }
+    let reply = resolvedReplies.removeValue(forKey: serial)
+    pendingCallSerials.remove(serial)
+    return reply
+  }
+
   public var onTogglePicker: () -> Void {
     get { dispatcher.onTogglePicker }
     set { dispatcher.onTogglePicker = newValue }
@@ -154,6 +237,24 @@ public final class ClipnestControlService: @unchecked Sendable {
       // doc comment for why this one `continue` is deliberately silent.
       guard let message = connection.receiveOneMessage(timeout: .seconds(1)) else { continue }
       guard let request = ClipnestControlRequest.decode(message) else {
+        // T-P10I: before logging this as a rejected/unrecognized message,
+        // check whether it's actually the reply to one of THIS service's
+        // own outgoing `call(_:timeout:)` invocations (see that method's
+        // doc comment) — a `METHOD_RETURN`/`ERROR` never decodes as a
+        // `ClipnestControlRequest` (it isn't a method call at all), so
+        // without this check every such reply would be silently logged as
+        // "not a method call" and the waiting `call(_:timeout:)` caller
+        // would time out despite the reply having actually arrived.
+        if let replySerial = message.replySerial {
+          pendingCallCondition.lock()
+          let isPending = pendingCallSerials.contains(replySerial)
+          if isPending {
+            resolvedReplies[replySerial] = message
+            pendingCallCondition.broadcast()
+          }
+          pendingCallCondition.unlock()
+          if isPending { continue }
+        }
         Self.logger.debug(ClipnestControlReceiveRejection.notAMethodCall(message).logDescription)
         continue
       }
@@ -167,3 +268,14 @@ public final class ClipnestControlService: @unchecked Sendable {
     }
   }
 }
+
+/// T-P10I: lets `ShellHelperClient` (built against `DBusCalling`, never a
+/// concrete connection type — see that protocol's own doc comment) send
+/// its privileged, sender-checked calls through THIS service's identity
+/// connection instead of an uncorrelated one of its own — see the
+/// "T-P10I: demuxed outgoing calls" doc comment on `ClipnestControlService`
+/// for why that's required, not optional. Only the plain `call(_:timeout:)`
+/// overload is implemented above; the fd-attaching overload falls through
+/// to `DBusCalling`'s own default (`nil` — "unsupported"), same as every
+/// other non-fd-aware conformer.
+extension ClipnestControlService: DBusCalling {}
