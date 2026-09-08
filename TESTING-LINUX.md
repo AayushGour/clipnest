@@ -95,8 +95,15 @@ These were proven only in a synthetic GNOME Shell. Real hardware is the real tes
   overflow.
 - A second hotkey press may not toggle the picker closed (seen once, not
   reproduced from a clean state).
-- Snippet expansion uses the clipboard round-trip; the in-place AT-SPI path
-  exists but has never been exercised.
+- Snippet expansion prefers an in-place AT-SPI replace (no clipboard touched)
+  when the focused app exposes it, falling back to the clipboard round-trip
+  otherwise. Verified for real against a live accessibility bus and a real
+  GTK4 window (see `docs/API-ClipnestPlatformLinux.md`); a real bug in
+  reading the AT-SPI selection was found and fixed by that verification, so
+  earlier builds always fell through to the clipboard path regardless of app.
+  Coverage is still realistic, not universal — GTK4 works; GTK3/Qt need
+  `toolkit-accessibility` enabled (untested); Electron and terminal
+  emulators miss and fall back to clipboard, same as before.
 
 ---
 
