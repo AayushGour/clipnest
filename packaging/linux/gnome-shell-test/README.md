@@ -120,6 +120,44 @@ export DISPLAY=:99
 exec gnome-shell --x11 --display=:99
 ```
 
+## Troubleshooting: extension enabled but never appears to the Shell
+
+**Symptom** (hit exactly this way once already — read this before re-deriving
+it): after `cp -r` + `gnome-extensions enable`, `gsettings get org.gnome.shell
+enabled-extensions` correctly shows `['clipnest@clipnest.app']`, both GSettings
+schemas are registered, `metadata.json`'s `shell-version` matches the running
+Shell — and yet `gnome-extensions list --enabled` prints nothing,
+`org.gnome.Shell.Extensions.GetExtensionInfo` returns an empty `{}`,
+`app.clipnest.ShellHelper` never appears on the session bus, and
+`journalctl -u <session>.service` shows no extension/JS error at all (because
+there IS no error — the Shell simply never tried to load it).
+
+**Cause:** GNOME Shell only discovers a *brand-new* (never-before-seen)
+extension UUID while its own process is starting up. The live
+`Gio.FileMonitor`-based watch path that reacts to `enabled-extensions`
+changing only covers ENABLING/DISABLING an extension the Shell already knows
+about (i.e. already scanned once) — it does not retroactively notice a
+directory that did not exist the last time the Shell itself started.
+`gnome-extensions enable` only ever writes the GSettings key; it does not,
+and cannot, make an already-running Shell process rescan
+`~/.local/share/gnome-shell/extensions/` for new UUIDs.
+
+**Fix:** the FIRST time a given extension UUID is installed, restart the
+gnome-shell process itself (not just `enable` it) — e.g. restart the
+`systemd-run` unit from the "Running" section above:
+```bash
+docker exec clipnest-gnome-shell-test systemctl restart gtester-gnome.service
+```
+After the restart, re-check with the same `GetExtensionInfo`/`ListNames`
+calls shown in "Running" above — `state` should read `1` (ENABLED) and
+`app.clipnest.ShellHelper` should be on the bus. Only the FIRST install of a
+given UUID needs this; subsequent `enable`/`disable` cycles of an
+already-known extension take effect live, no restart needed (confirmed:
+`gnome-extensions disable clipnest@clipnest.app` immediately drops
+`app.clipnest.ShellHelper` off the bus with no restart, and re-`enable`
+brings it back — see the T-P10I/T-P10J re-verification in the Findings
+section below).
+
 `probe_shell_helper.py` / `probe_shell_helper2.py` / `probe_readclipboard.py`
 / `probe_setclipboard.py` in this directory are ad-hoc PyGObject scripts
 (python3-gi ships with the desktop package set already) that claim
@@ -226,3 +264,39 @@ literal command form referenced elsewhere — fails against the real CLI
 one; the manual `cp -r` into
 `~/.local/share/gnome-shell/extensions/<uuid>/` above is what actually
 works and is the shape any future install helper should follow.
+
+## Update 2026-09-08: T-P10I and T-P10J are fixed and verified (commit 700c38b)
+
+Both bugs above were fixed in the app (`ShellHelperClient.startWatching()`
+now adds a second `AddMatch` for the ShellHelper object's own signals;
+`probeLiveDispatch()` is retried on a bounded schedule via
+`LinuxAppLifecycle.retryLiveDispatchProbeIfNeeded`). Re-verified against
+this same harness — **for the first time in this port's history, a real
+`<Alt><Super>v` key press through a real Mutter opens the picker**:
+
+- `HotkeyBackendResolver` now resolves `.shellExtensionKeybinding` on a real
+  launch: **15/15 trials** (10 via log-grep, 5 timed: 0.121-0.266s from
+  process start to the resolved log line — a small bounded retry window,
+  not a hang).
+- With the extension disabled (confirmed off the bus first): **5/5 trials**
+  still resolve `.gsettingsFloor` cleanly, at 0.122-0.203s — the same order
+  of magnitude as the extension-present case, so the retry logic does not
+  meaningfully slow the common "no extension" path.
+- Clean single-action repro of the real hotkey opening the picker: killed
+  `clipnest`, moved the pointer to `(300,600)`, relaunched (resolved
+  `shellExtensionKeybinding`), screenshotted the plain desktop (picker
+  confirmed `IsUnMapped` via `xwininfo`), sent ONE real `<Alt><Super>v` via
+  `xdotool keydown/key/keyup`, re-checked: the picker window was now
+  `IsViewable` at exactly `560x420+300+600` (the cursor position), and a
+  second screenshot showed the actual rendered picker UI (search bar, type
+  filter icons, History/Pinned/Snippets tabs, "No clipboard history yet")
+  sitting there.
+
+Two things noticed but deliberately not chased further here (not confirmed
+as regressions from either fix — flagged for whoever owns picker UX next):
+`PlaceWindow` does not clamp to the monitor's work area (the picker's 420px
+height extended past the bottom edge when placed at y=600 on a 900px-tall
+screen); a second hotkey press while the picker was already open (during an
+earlier, Activities-Overview-obscured test, not the clean repro above) did
+not toggle it closed. Full trial data: `.claude/logs/devops.md`; decision
+record: `.claude/project-context.md` D91.
