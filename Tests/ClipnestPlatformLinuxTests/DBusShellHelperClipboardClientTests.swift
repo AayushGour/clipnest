@@ -158,7 +158,41 @@ struct DBusShellHelperClipboardClientTests {
       let result = client.readClipboard(selection: .clipboard, mimetype: "text/plain")
 
       #expect(result == nil)
-      #expect(fcntl(readEnd, F_GETFD) == -1, "the fd must have been closed, not leaked")
+      // Deliberately NOT `fcntl(readEnd, F_GETFD) == -1` (T-FLAKE1): the
+      // instant `readClipboard` really closes `readEnd`, that integer
+      // re-enters the PROCESS-WIDE fd-allocation pool — swift-testing runs
+      // suites concurrently within one process, so another suite's own
+      // `open`/`pipe`/`socket` call can be handed that exact number before
+      // this assertion runs, and `fcntl(F_GETFD)` has no way to know it's
+      // now looking at a completely different, unrelated open file
+      // description. That coincidental reuse is what made this test flake
+      // (observed failing once, then passing 3 consecutive full runs plus
+      // an isolated-suite run) — the assertion was correct in intent but
+      // asked a process-global, shared-namespace question instead of a
+      // question scoped to the one kernel object this test actually owns.
+      //
+      // Ask the PIPE instead of the fd table: `readEnd` and `writeEnd` are
+      // the two ends of a pipe this test alone created, so once `readEnd`'s
+      // open file description is truly gone (refcount to zero — nothing
+      // else in this test process holds another reference to it), the
+      // kernel reports that fact on `writeEnd`, which only this test holds
+      // and only this test could ever close. `poll()` (not a `write()`) is
+      // used so the check needs no `SIGPIPE` handling: POSIX guarantees a
+      // pipe's write end reports `POLLERR` once it has no more readers,
+      // and `revents` reports `POLLERR`/`POLLHUP` unconditionally — they
+      // aren't valid members of the `events` request field (see `poll(2)`)
+      // — so `events: 0` still surfaces it. Zero-timeout, non-blocking:
+      // `readClipboard` above already returned, so the close (if it
+      // happened) has already landed. Same `pollfd`/`POLLIN`-family Glibc
+      // API `X11ClipboardConnection.runEventLoop` already uses in
+      // production, just checking a different revent.
+      var polledWriteEnd = pollfd(fd: writeEnd, events: 0, revents: 0)
+      let pollResult = poll(&polledWriteEnd, 1, 0)
+      #expect(pollResult >= 0)
+      #expect(
+        polledWriteEnd.revents & Int16(POLLERR) != 0,
+        "the fd must have been closed, not leaked — its pipe's write end should observe POLLERR once its only reader is gone"
+      )
     }
 
     @Test("setClipboard attaches the caller's fd at wire index 0 and parses the returned serial")
