@@ -1,0 +1,27 @@
+---
+layout: default
+---
+{%- comment -%}
+  T91 purpose-built landing layout (used by pages/index.md, layout: home).
+  Replaces minima's home.html, which only rendered `<h1>{{ page.title }}</h1>`
+  above a flat content blob — that's the generic-blog structure this task
+  exists to fix. The hero below is built entirely from front matter Jekyll
+  already had (page.title, page.description — both untouched, no new copy
+  in either), plus two short CTA button labels. Everything after the hero
+  (the "Why Clipnest?" cards, screenshot, "what's in the box" grid, install
+  CTA band, "Learn more" grid) is {{ content }} — pages/index.md's own
+  markdown, restructured with wrapper divs but every sentence byte-identical
+  to what shipped before.
+{%- endcomment -%}
+<section class="hero">
+  <div class="shell hero-copy">
+    <h1>{{ page.title }}</h1>
+    <p class="lead">{{ page.description }}</p>
+    <div class="hero-cta">
+      <a class="btn btn-primary" href="{{ "/download/" | relative_url }}">Download Clipnest</a>
+      <a class="btn btn-secondary" href="https://github.com/AayushGour/clipnest">View on GitHub</a>
+    </div>
+  </div>
+</section>
+
+{{ content }}
