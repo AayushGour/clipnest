@@ -64,6 +64,7 @@ public final class SettingsStore {
     static let retentionDays = "settings.retentionDays"
     static let userExcludedBundleIDs = "settings.userExcludedBundleIDs"
     static let hasRequestedAccessibility = "settings.hasRequestedAccessibility"
+    static let hasShownAutoPasteStartupPrompt = "settings.hasShownAutoPasteStartupPrompt"
     static let automaticallyCheckForUpdates = "settings.automaticallyCheckForUpdates"
     static let isTextRecognitionEnabled = "settings.isTextRecognitionEnabled"
     static let textRecognitionQuality = "settings.textRecognitionQuality"
@@ -100,6 +101,23 @@ public final class SettingsStore {
   /// is never rate-limited.
   public var hasRequestedAccessibility: Bool {
     didSet { defaults.set(hasRequestedAccessibility, forKey: Key.hasRequestedAccessibility) }
+  }
+
+  /// The Linux analogue of `hasRequestedAccessibility` above: whether
+  /// `AutoPasteStartupPrompt.showIfNeeded` (`ClipnestGTK`) has ever shown
+  /// its one-time "Set Up Auto-Paste?" startup nudge. Same "never nag"
+  /// contract — set the instant the prompt is shown, not gated on which
+  /// button (if any) the user pressed, so a dismissed/ignored/killed prompt
+  /// never re-appears on the next launch. Unused on macOS (there is no
+  /// uinput-style grant to prompt for there), same as `hasRequestedAccessibility`
+  /// sits unused on Linux — this store is shared cross-platform, and a
+  /// platform-specific one-shot flag simply goes untouched on the platform
+  /// that doesn't apply to it, matching that property's own precedent
+  /// rather than `#if os(...)`-gating the declaration.
+  public var hasShownAutoPasteStartupPrompt: Bool {
+    didSet {
+      defaults.set(hasShownAutoPasteStartupPrompt, forKey: Key.hasShownAutoPasteStartupPrompt)
+    }
   }
 
   /// Approved feature: whether `UpdateChecker` runs its 24h background
@@ -167,6 +185,8 @@ public final class SettingsStore {
     self.retentionDays = defaults.object(forKey: Key.retentionDays) as? Int ?? Self.defaultDays
     self.userExcludedBundleIDs = defaults.stringArray(forKey: Key.userExcludedBundleIDs) ?? []
     self.hasRequestedAccessibility = defaults.bool(forKey: Key.hasRequestedAccessibility)
+    self.hasShownAutoPasteStartupPrompt = defaults.bool(
+      forKey: Key.hasShownAutoPasteStartupPrompt)
     // `object(forKey:) as? Bool` distinguishes "absent" (-> default true)
     // from an explicitly-stored false, same reasoning as `isCaptureEnabled`.
     self.automaticallyCheckForUpdates =

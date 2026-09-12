@@ -12,8 +12,10 @@ case "$1" in
     # Dedicated system group for /dev/uinput access — see
     # packaging/linux/udev/clipnest-uinput.rules. Created here, but NEVER
     # populated here: adding a user is an explicit, admin-authenticated
-    # action the user triggers from Clipnest's own Settings (pkexec, gated
-    # by the app.clipnest.grant-input polkit action — see
+    # action the user triggers themselves, either from Clipnest's own
+    # Settings > Permissions tab or from the one-time "Set Up Auto-Paste?"
+    # startup prompt (both call the identical pkexec path, gated by the
+    # app.clipnest.grant-input polkit action — see
     # packaging/linux/scripts/clipnest-grant-input), never automatic, and
     # never done by this package.
     if ! getent group clipnest-input >/dev/null 2>&1; then

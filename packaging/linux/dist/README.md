@@ -44,13 +44,18 @@ this project's source repository.
 
 ## Two more things worth knowing
 
-1. **Auto-paste needs one extra permission.** Open Settings ->
-   Permissions and grant it there. It adds you to the `clipnest-input`
-   group, which allows creating a virtual keyboard device and nothing
-   else — not the `input` group, which would let any program read your
-   real keystrokes. Log out and back in for the new group membership to
-   take effect. Without it, Clipnest still copies items to your
-   clipboard; you paste manually.
+1. **Auto-paste needs one extra permission.** If your session can't
+   auto-paste yet (typically a fresh Wayland login with no GNOME Shell
+   extension installed), Clipnest asks about this itself the first time it
+   starts — a "Set Up Auto-Paste?" dialog with a **Grant Access…** button,
+   shown once. You can also grant it anytime from Settings -> Permissions.
+   Either way it adds you to the `clipnest-input` group, which allows
+   creating a virtual keyboard device and nothing else — not the `input`
+   group, which would let any program read your real keystrokes. Log out
+   and back in for the new group membership to take effect. Without it,
+   Clipnest still copies items to your clipboard; you paste manually. This
+   one-time prompt is skipped entirely on a session that already has
+   auto-paste working (e.g. X11 via XTEST) — nothing to grant there.
 2. **The GNOME Shell extension is optional.** Clipnest works without it.
    With it, the picker can open at your cursor and appear above
    fullscreen windows:

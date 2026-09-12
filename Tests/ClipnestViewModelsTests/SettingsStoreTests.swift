@@ -161,4 +161,18 @@ struct SettingsStoreTests {
     store.textRecognitionQuality = .fast
     #expect(SettingsStore(defaults: defaults).textRecognitionQuality == .fast)
   }
+
+  /// The Linux one-time auto-paste startup nudge (`AutoPasteStartupPrompt`,
+  /// `ClipnestGTK`) must default to "never shown" and then stay sticky
+  /// across launches — same "never nag" contract as
+  /// `hasRequestedAccessibility` above, verified the identical way.
+  @Test("hasShownAutoPasteStartupPrompt: defaults false, persists once set")
+  func autoPasteStartupPromptFlagPersists() {
+    let defaults = makeDefaults()
+    let store = SettingsStore(defaults: defaults)
+    #expect(store.hasShownAutoPasteStartupPrompt == false)
+
+    store.hasShownAutoPasteStartupPrompt = true
+    #expect(SettingsStore(defaults: defaults).hasShownAutoPasteStartupPrompt == true)
+  }
 }

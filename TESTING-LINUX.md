@@ -61,6 +61,19 @@ Ctrl+V to paste. Auto-paste isn't set up on this session — see Settings →
 Permissions." Either way the item is copied to the clipboard; the difference
 is only whether Clipnest can also synthesize the paste keystroke for you.
 
+**First-run "Set Up Auto-Paste?" prompt.** On a session where no auto-paste
+backend is available at all (the same condition as "Enter copy" above),
+Clipnest now proactively asks about this at startup instead of only
+explaining it after you've already hit it — a modal dialog with **Grant
+Access…** (runs the same `pkexec clipnest-grant-input` flow as Settings →
+Permissions, right from the dialog) and **Not Now**. It explains what
+auto-paste unlocks, states plainly that it needs a logout/login to take
+effect, and is honest that Clipnest works fine without it. Shown at most
+once ever (persisted in `~/.config/clipnest/settings.json`) — dismissing it
+either way never shows it again; grant it later from Settings → Permissions
+if you skip it here. It never appears at all on a session that already has
+auto-paste (X11 via XTEST, or uinput already granted).
+
 Every row also has pin / save-as-snippet / delete buttons, and a right-click menu.
 
 `Delete` deliberately edits the search text when the caret has something to
@@ -88,8 +101,10 @@ These were proven only in a synthetic GNOME Shell. Real hardware is the real tes
 3. **Wayland.** Log into a Wayland session and check capture still works
    (copy in any app, confirm it appears). Capture goes through Mutter's XWayland
    clipboard bridge; this is the least-tested path in the whole port.
-4. **Auto-paste.** Settings → Permissions → grant, then **log out and back in**.
-   Without it Clipnest copies and you paste manually.
+4. **Auto-paste.** On first launch without it, the "Set Up Auto-Paste?"
+   prompt should appear on its own — grant it there, or from Settings →
+   Permissions → grant, then **log out and back in**. Without it Clipnest
+   copies and you paste manually.
 5. **Multi-monitor and fractional scaling.** Never tested at all.
 
 ---

@@ -224,6 +224,26 @@ public enum LinuxAppLifecycle {
     environment.startUpdateChecking()
     environment.enforceRetentionNow()
 
+    // Routed follow-up: proactively prompt for the auto-paste (uinput)
+    // permission at first run, the way macOS's `requestAccessibilityOnceIfNeeded()`
+    // shows its Accessibility prompt — rather than only ever explaining the
+    // gap passively in Settings > Permissions after a user has already hit
+    // it. `AutoPasteStartupPrompt.showIfNeeded` (`ClipnestGTK`) is the ONE
+    // place that decides whether to show it (gated on the resolved paste
+    // backend, not the raw uinput capability — see that type's own doc
+    // comment) and persists "shown" through `environment.settingsStore`, so
+    // this call is unconditional here; called before the initial-command
+    // switch below so a fresh install invoked as `clipnest --toggle-picker`
+    // still gets the one-time nudge (the prompt is modal, so it simply
+    // takes focus first).
+    AutoPasteStartupPrompt.showIfNeeded(
+      isAutoPasteAvailable: environment.eventSynthesizerKind != .clipboardOnly,
+      settings: environment.settingsStore,
+      requestUInputGrant: { completion in
+        GrantInputHelperClient.requestGrant(completion: completion)
+      }
+    )
+
     switch initialCommand {
     case .togglePicker: environment.togglePicker()
     case .expandSnippet: environment.expandSnippet()

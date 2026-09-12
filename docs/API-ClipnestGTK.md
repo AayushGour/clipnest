@@ -14,6 +14,7 @@ which constructs `PickerViewModel`/`SettingsStore` and owns their lifetime.
 - [`SnippetEditorWindow`](#snippeteditorwindow)
 - [`SettingsWindow`](#settingswindow)
 - [`GTKClipboardCrashNoticeInfo` and detection](#gtkclipboardcrashnoticeinfo-and-detection)
+- [`AutoPasteStartupPrompt`](#autopastestartupprompt)
 - [Actor isolation](#actor-isolation)
 - [Window placement](#window-placement)
 - [Working example](#working-example)
@@ -528,6 +529,83 @@ public enum GTKClipboardCrashNoticeDetection {
   GTKClipboardCrashNoticeInfo` parameter — no default value, same
   "a defaulted cross-platform seam ships a silently-dead feature"
   reasoning as every other injected `SettingsWindow.init` closure.
+
+## `AutoPasteStartupPrompt`
+
+The Linux analogue of macOS's `AppEnvironment.requestAccessibilityOnceIfNeeded()`
+(routed follow-up: "proactively prompt for the auto-paste permission at
+first run... rather than only explaining the problem after the user has
+already hit it") — a one-time, unsolicited startup nudge, distinct from the
+Permissions tab's passive explanation and the picker's one-time
+"copied — press Ctrl+V" notice (both of which only ever help a user who
+already knows to go looking, or has already hit the gap once).
+
+```swift
+public enum AutoPasteStartupPromptPresentation {
+  public static func shouldShow(isAutoPasteAvailable: Bool, hasShownBefore: Bool) -> Bool
+  public static let title: String
+  public static let explanationText: String
+  public static let securityExplanationText: String   // == PermissionsTabPresentation.securityExplanationText
+  public static let reloginText: String
+  public static let notNowButtonLabel: String
+  public static let grantButtonLabel: String           // == PermissionsTabPresentation.grantButtonLabel
+  public static let closeButtonLabel: String
+  public static let grantInFlightStatusText: String
+  public static func succeededStatusText(message: String) -> String
+  public static func failedStatusText(message: String) -> String
+}
+
+public enum AutoPasteStartupPrompt {
+  @MainActor
+  public static func showIfNeeded(
+    isAutoPasteAvailable: Bool,
+    settings: SettingsStore,
+    requestUInputGrant: @escaping (_ completion: @escaping UInputGrantCompletion) -> Void
+  )
+}
+```
+
+- **Gating condition** — shown only when `isAutoPasteAvailable` is `false`
+  (the resolved paste backend is `.clipboardOnly`), never on the raw uinput
+  capability. An X11 session already gets auto-paste via XTEST with no
+  uinput grant needed at all, so gating on the raw capability would nag
+  there for nothing; deriving the condition from the same pre-erased `Bool`
+  `PickerWindow.isAutoPasteAvailable`/`Paster.isAccessibilityGranted`
+  already receive means a future paste backend that also resolves away from
+  `.clipboardOnly` (e.g. a GNOME Shell extension paste path) suppresses this
+  prompt automatically, with no edit needed here.
+- **Never nags** — `showIfNeeded` reads/writes
+  `SettingsStore.hasShownAutoPasteStartupPrompt` directly (the existing
+  `SettingsStore`/`KeyValueStore` seam — a real JSON file on Linux, see
+  `Sources/ClipnestViewModels/Platform/JSONFileKeyValueStore.swift`), set
+  the instant it decides to show,
+  before the dialog is even built — mirrors `hasRequestedAccessibility`'s
+  exact contract, so a dialog closed via the titlebar X, or a process that
+  dies mid-prompt, still counts as "shown."
+- **Affirmative action** — "Grant Access…" calls `requestUInputGrant`
+  directly, the SAME closure type (and, at the real composition root, the
+  same `GrantInputHelperClient.requestGrant` implementation) the
+  Permissions tab's own Grant button uses — never a second privileged path.
+  Disables both buttons and shows `grantInFlightStatusText` while the
+  `pkexec` call is in flight, then swaps to a single `Close` button with
+  the real outcome (`succeededStatusText`/`failedStatusText`, the latter
+  pointing back to Settings → Permissions as a retry path).
+- **Use-after-free guard** — the dialog is a genuine one-shot `GtkWindow`
+  (unlike the persistent `SettingsWindow`/`PickerWindow`), but the
+  in-flight `pkexec` authentication can outlive it if the user closes the
+  dialog first. `AutoPasteStartupPromptSession.isDismissed` is set the
+  instant the window starts closing (either button, or the titlebar close
+  button via `close-request`) and re-checked before the async completion
+  ever touches a widget again.
+- Called exactly once, from `LinuxAppLifecycle.launch()`
+  (`Sources/ClipnestLinuxAppKit/App/LinuxAppLifecycle.swift`) right after
+  the composition root (`LinuxAppEnvironment`) exists — that module's own
+  API reference deliberately doesn't document `LinuxAppEnvironment`'s full
+  wiring (see its top doc comment), so this call site lives only in that
+  file's own comments, not restated here.
+  `AutoPasteStartupPromptPresentation.shouldShow`/text are unit-tested
+  directly; the live dialog is manual/screenshot-verified only (same split
+  every other presentation type in this module uses).
 
 ## Actor isolation
 
