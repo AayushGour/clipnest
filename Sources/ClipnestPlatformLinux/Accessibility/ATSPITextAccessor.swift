@@ -89,6 +89,48 @@ public struct ATSPITextAccessor: SelectedTextAccessing {
   /// position before reporting failure. Not a full guarantee (the recovery
   /// insert is itself a D-Bus call that can also fail) but strictly better
   /// than never trying.
+  ///
+  /// **A `true` `InsertText` reply is re-verified, not trusted (D97/D100):**
+  /// a boolean `true` here is AT-SPI's analogue of `AXError.success` on
+  /// macOS — it only certifies the target app's `EditableText` handler
+  /// ACCEPTED the call, never that the text object's content actually
+  /// changed to match. So after a `true` reply, this method reads back the
+  /// exact range it just wrote and compares it to `text` before reporting
+  /// success. That range is computed in AT-SPI's own offset unit —
+  /// `selection.start` through `selection.start + text`'s UNICODE SCALAR
+  /// count (`UTF8OffsetConversion.scalarCount(of:)`), never `text.count`
+  /// (extended grapheme clusters) or a UTF-16/UTF-8-byte count. This unit
+  /// was verified against a REAL `at-spi2-core` bus, not assumed: a
+  /// `dbus-monitor` capture of a live `EditableText.InsertText(position: 1,
+  /// text: "😀Y", length: 5)` call against a real GTK4 entry showed
+  /// `Text.CharacterCount` advancing by exactly 2 (the scalar count of
+  /// "😀Y", an astral emoji + "Y") and a follow-up `Text.GetText(1, 3)`
+  /// returning "😀Y" back byte-for-byte — ruling out UTF-16 code units
+  /// (which would have advanced the count by 3, since the emoji is a
+  /// surrogate pair) and UTF-8 bytes (which would have advanced it by 5).
+  /// A second live probe with a base+combining-mark sequence
+  /// ("e" + U+0301) ruled out extended-grapheme-cluster counting too: AT-SPI
+  /// reported it as 2 separate offset-addressable units, not the 1 grapheme
+  /// a human reader sees. No live phantom-insert repro backs the mismatch
+  /// case itself (unlike the macOS AX phantom-write bug this mirrors) —
+  /// this re-verification is contract symmetry (D100), not evidence that
+  /// AT-SPI has been observed lying.
+  ///
+  /// **A mismatch here does NOT run the best-effort rollback above —
+  /// deliberately, do not "fix" this into matching that behavior.** The
+  /// rollback above fires from a KNOWN state: `DeleteText` is confirmed to
+  /// have removed the selection, and `InsertText`'s reply is confirmed
+  /// (`false`, or a timeout) to mean the insert did not apply — re-inserting
+  /// the original text restores a fully understood before-state. A
+  /// verified-but-suspicious insert is a genuinely UNKNOWN state: the reply
+  /// already lied once (`true` when the content disagrees), so there is no
+  /// basis to assume the insert silently applied, silently no-opped, or
+  /// partially applied. Re-inserting `originalText` on top of an unknown
+  /// state risks DUPLICATING content rather than recovering it. The
+  /// strictly more honest response is to stop touching the document and
+  /// report failure, letting `SnippetExpander`'s clipboard tier — which
+  /// re-reads the live selection rather than assuming any prior state —
+  /// take over.
   @discardableResult
   public func replaceSelectedText(with text: String) -> Bool {
     guard let target = focusedObject(), let selection = currentSelection(target) else {
@@ -125,6 +167,25 @@ public struct ATSPITextAccessor: SelectedTextAccessing {
         ATSPIRequests.insertText(
           busName: target.busName, objectPath: target.objectPath, position: selection.start,
           text: originalText, serial: nextSerial()), timeout: timeout)
+      return false
+    }
+
+    // D97/D100 write re-verification -- see this method's doc comment for
+    // the offset-unit evidence and for why a mismatch here deliberately
+    // does NOT run the rollback above. `expectedEnd` is in AT-SPI's own
+    // scalar offset unit, matching `selection.start`/`selection.end`.
+    let expectedEnd = selection.start + UTF8OffsetConversion.scalarCount(of: text)
+    guard
+      let verifyReply = caller.call(
+        ATSPIRequests.getText(
+          busName: target.busName, objectPath: target.objectPath, start: selection.start,
+          end: expectedEnd, serial: nextSerial()), timeout: timeout),
+      let insertedText = ATSPIResponses.parseStringReply(verifyReply),
+      insertedText == text
+    else {
+      // Phantom insert: the app said `true` but the content disagrees (or
+      // could no longer be read at all). NOT the known-state rollback
+      // above -- see this method's doc comment.
       return false
     }
     return true

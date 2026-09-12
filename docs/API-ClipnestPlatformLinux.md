@@ -128,6 +128,21 @@ public struct ATSPITextAccessor: SelectedTextAccessing {
   a partially-applied edit (text silently erased, nothing put back) is a
   strictly worse outcome than the caller's clipboard fallback and is the
   one failure mode this method actively guards against, not just tolerates.
+- **Write re-verification, not blind trust in a `true` reply (D97/D100):** a
+  boolean `true` from `InsertText` only certifies the target app's
+  `EditableText` handler ACCEPTED the call, the same way `AXError.success`
+  certifies acceptance, not effect, on macOS. After a `true` reply, this
+  method reads back `Text.GetText(selection.start, selection.start +
+  scalarCount(text))` and compares it to `text`; a mismatch (or an
+  unreadable range) is reported as `false` — a phantom insert. **This does
+  NOT run the partial-edit rollback above.** That rollback fires from a
+  KNOWN state (delete confirmed done, insert confirmed failed); a
+  verified-but-suspicious insert is an UNKNOWN state, and re-inserting the
+  original text on top of an unknown state risks duplicating content
+  instead of recovering it — see `replaceSelectedText`'s doc comment for
+  the full reasoning. No live AT-SPI phantom-write repro backs this
+  specific mismatch case (unlike the macOS AX phantom-write bug it
+  mirrors) — this is contract symmetry, not an observed defect.
 
 ### `InsertText`'s length argument is a BYTE count, not a character count
 
@@ -167,6 +182,26 @@ undetected because the existing unit test encoded the identical wrong
 assumption as its canned reply (fixed alongside the production code — see
 `Tests/ClipnestPlatformLinuxTests/ATSPIRequestsResponsesTests.swift` and
 `ATSPITextAccessorTests.swift`).
+
+**AT-SPI's `Text`/`EditableText` offsets are Unicode SCALAR (codepoint)
+offsets — measured against a real bus, not assumed.** Two live probes
+against a real GTK4 `GtkEntry` disambiguated this from the other
+candidates: (1) an entry containing an astral emoji (`"a😀bcd"`) reported
+`Text.CharacterCount == 5` and `GetText(1,2)` returned the WHOLE 4-byte
+emoji as a single offset step — ruling out UTF-16 code units (which would
+split the emoji's surrogate pair across two offsets, count 6) and UTF-8
+bytes (count 8); (2) an entry containing a base+combining-mark sequence
+(`"e" + U+0301`, one `Character`/grapheme, two scalars) reported
+`CharacterCount == 6` for `"a" + "é" + "bcd"`, with `GetText(1,2)` and
+`GetText(2,3)` returning the base letter and the combining mark
+SEPARATELY — ruling out extended-grapheme-cluster counting. A `dbus-monitor`
+capture of the live `EditableText.InsertText(position: 1, text: "😀Y",
+length: 5)` call confirms the wire shape end to end: `CharacterCount`
+advanced by exactly 2 (the scalar count of `"😀Y"`), and the immediate
+`Text.GetText(1, 3)` read back `"😀Y"` byte-for-byte. This is the same unit
+`UTF8OffsetConversion.scalarCount(of:)` computes and
+`ATSPITextAccessor.replaceSelectedText`'s write re-verification (above)
+relies on.
 
 ## Coverage
 

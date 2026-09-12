@@ -26,6 +26,28 @@ struct UTF8OffsetConversionTests {
     #expect(UTF8OffsetConversion.utf8ByteCount(of: text) == 4)
   }
 
+  @Test(
+    "scalarCount counts Unicode scalars, matching AT-SPI's own offset unit -- verified against a real at-spi2-core bus (see ATSPITextAccessor.replaceSelectedText's doc comment), not UTF-16 code units or UTF-8 bytes"
+  )
+  func scalarCountMatchesUnicodeScalarView() {
+    #expect(UTF8OffsetConversion.scalarCount(of: "hello") == 5)
+    // 'é' is 1 scalar, 2 UTF-8 bytes -- scalarCount must track the former.
+    #expect(UTF8OffsetConversion.scalarCount(of: "héllo") == 5)
+    // An astral emoji is 1 Unicode scalar but 2 UTF-16 code units and 4
+    // UTF-8 bytes -- a wrong assumption using either of those would be
+    // caught here.
+    #expect(UTF8OffsetConversion.scalarCount(of: "😀Y") == 2)
+  }
+
+  @Test(
+    "scalarCount counts scalars, not extended grapheme clusters — a base+combining-mark sequence is 1 `Character` but 2 scalars, and the live at-spi2-core bus was confirmed to count it as 2 offset-addressable units, not 1"
+  )
+  func scalarCountDiffersFromCharacterCountForCombiningSequences() {
+    let text = "e\u{0301}"  // 'e' + COMBINING ACUTE ACCENT: 1 Character, 2 scalars.
+    #expect(text.count == 1)
+    #expect(UTF8OffsetConversion.scalarCount(of: text) == 2)
+  }
+
   @Test("stringIndex(atScalarOffset:) walks scalars, not extended grapheme clusters")
   func stringIndexWalksScalars() {
     // "é" here is 'e' + combining acute accent: 1 Character, 2 scalars.
