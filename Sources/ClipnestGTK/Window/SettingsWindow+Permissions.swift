@@ -163,6 +163,16 @@ extension SettingsWindow {
   func buildPermissionsTab() {
     let box = appendTab(title: "Permissions")
 
+    // Setup-status banner — shown at top of tab when permissions need setup
+    // (missing /dev/uinput access) or have just been granted. Updated by
+    // `refreshPermissionsStatus()` so it reflects live state.
+    let bannerLabel: OpaquePointer = gtk_label_new(nil)
+    gtk_label_set_xalign(bannerLabel, 0)
+    gtk_label_set_wrap(bannerLabel, 1)
+    gtk_label_set_max_width_chars(bannerLabel, 58)
+    gtk_box_append(box, bannerLabel)
+    permissionsSetupBannerLabel = bannerLabel
+
     addWrappedLabel(to: box, text: PermissionsTabPresentation.explanationText)
     addWrappedLabel(to: box, text: PermissionsTabPresentation.securityExplanationText)
 
@@ -282,6 +292,30 @@ extension SettingsWindow {
     gtk_widget_set_visible(
       permissionsGrantButton, PermissionsTabPresentation.grantButtonVisible(for: status) ? 1 : 0)
     gtk_widget_set_sensitive(permissionsGrantButton, 1)
+
+    // Banner — setup guidance when missing, or confirmation when granted.
+    if let permissionsSetupBannerLabel {
+      switch PermissionsTabPresentation.availability(for: status) {
+      case .available:
+        gtk_label_set_text(
+          permissionsSetupBannerLabel,
+          "Auto-paste is not yet set up — grant access below to let Clipnest type directly into apps."
+        )
+        gtk_widget_set_visible(permissionsSetupBannerLabel, 1)
+      case .pendingRelogin:
+        gtk_label_set_text(
+          permissionsSetupBannerLabel,
+          PermissionsTabPresentation.reloginNoteText
+        )
+        gtk_widget_set_visible(permissionsSetupBannerLabel, 1)
+      case .granted:
+        gtk_label_set_text(
+          permissionsSetupBannerLabel,
+          PermissionsTabPresentation.grantedConfirmationText
+        )
+        gtk_widget_set_visible(permissionsSetupBannerLabel, 1)
+      }
+    }
 
     if let permissionsResultLabel {
       switch PermissionsTabPresentation.availability(for: status) {

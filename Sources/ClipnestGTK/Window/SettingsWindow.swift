@@ -217,6 +217,7 @@ public final class SettingsWindow: @unchecked Sendable {
   var permissionsReloginNoteLabel: OpaquePointer?
   var permissionsResultLabel: OpaquePointer?
   var permissionsGrantButton: OpaquePointer?
+  var permissionsSetupBannerLabel: OpaquePointer?
   /// T-WB1-GTKBUMP: the clipboard-stability notice's title/body labels —
   /// `nil` (never built) whenever `gtkClipboardCrashNoticeInfo` says it
   /// doesn't apply (GTK 4.10+, or a non-X11 backend), matching this whole
