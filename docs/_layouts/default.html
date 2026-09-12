@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="{{ page.lang | default: site.lang | default: "en" }}">
+
+  <head>
+    <meta charset="utf-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+
+    {%- comment -%}
+      jekyll-seo-tag: title, meta description, canonical link, and its own
+      basic OG/Twitter/JSON-LD output. Always uses relative_url/absolute_url
+      internally — no hand-written paths here.
+    {%- endcomment -%}
+    {%- seo -%}
+
+    {%- comment -%}
+      Structured data (T76) and Open Graph / Twitter Card meta (T77).
+      Scaffolded empty for now — see each include file for what fills it in.
+    {%- endcomment -%}
+    {%- include seo-jsonld.html -%}
+    {%- include og-tags.html -%}
+
+    {%- comment -%}
+      T91: the site's favicon set (assets/favicon*.{svg,ico,png}) existed on
+      disk but was never linked from <head> on the live site — added here.
+    {%- endcomment -%}
+    <link rel="icon" href="{{ "/assets/favicon.svg" | relative_url }}" type="image/svg+xml">
+    <link rel="icon" href="{{ "/assets/favicon.ico" | relative_url }}" sizes="any">
+    <link rel="icon" href="{{ "/assets/favicon-32x32.png" | relative_url }}" sizes="32x32" type="image/png">
+    <link rel="icon" href="{{ "/assets/favicon-16x16.png" | relative_url }}" sizes="16x16" type="image/png">
+    <link rel="apple-touch-icon" href="{{ "/assets/apple-touch-icon.png" | relative_url }}">
+
+    {%- comment -%}
+      T91: purpose-built stylesheet (docs/assets/css/style.scss). Replaces
+      the previous link to /assets/main.css — minima's own compiled output,
+      which is what the live site was actually serving (theme: minima is
+      dropped in _config.yml this pass; see docs/CONTEXT or T91 handoff for
+      the root-cause note: the T72 brand pass in style.scss compiled fine to
+      /assets/css/style.css but no page ever linked to it, so none of it was
+      visible in production).
+    {%- endcomment -%}
+    <link rel="stylesheet" href="{{ "/assets/css/style.css" | relative_url }}">
+  </head>
+
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    {%- include header.html -%}
+
+    <main id="main" aria-label="Content">
+      {{ content }}
+    </main>
+
+    {%- include footer.html -%}
+
+    <script src="{{ "/assets/js/copy-command.js" | relative_url }}" defer></script>
+  </body>
+
+</html>

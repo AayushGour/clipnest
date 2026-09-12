@@ -1,0 +1,16 @@
+---
+layout: default
+---
+{%- comment -%}
+  T91: used by pages whose markdown body has no top-level H1 of its own
+  (faq.md — front matter `layout: page`, unchanged; compare.md used this
+  layout too until T93 removed the page). Renders the
+  H1 from page.title (existing front matter, untouched) the same way
+  minima's own page.html did, inside the shared .content-page prose column
+  plus a breadcrumb back to the home page (new UI chrome, not page copy).
+{%- endcomment -%}
+<article class="content-page">
+  <a class="breadcrumb" href="{{ "/" | relative_url }}">&larr; Clipnest</a>
+  <h1>{{ page.title }}</h1>
+  {{ content }}
+</article>

@@ -40,3 +40,6 @@ tools/glyph-classifier/real_eval_crops/
 # for that, never a second source of truth. See extension/README.md's Tests
 # section.
 extension/test/core/
+# Python bytecode from local skill scripts
+__pycache__/
+*.pyc
