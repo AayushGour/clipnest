@@ -1,4 +1,4 @@
-# Testing Clipnest 0.9.1 on Linux
+# Testing Clipnest 0.9.2 on Linux
 
 **Temporary file** — delete this and `dist/` once testing is done.
 
@@ -16,8 +16,8 @@ git clone -b linux-migration https://github.com/AayushGour/clipnest.git
 cd clipnest/dist
 
 uname -m                       # x86_64 -> amd64,  aarch64 -> arm64
-tar xzf clipnest-0.9.1-linux-amd64.tar.gz
-cd clipnest-0.9.1-linux-amd64
+tar xzf clipnest-0.9.2-linux-amd64.tar.gz
+cd clipnest-0.9.2-linux-amd64
 ./install.sh
 ```
 
@@ -50,6 +50,16 @@ Global hotkey defaults to **Alt+Super+V**, rebindable in Settings → Shortcuts.
 | `Delete` | delete highlighted (only when the search box is empty — see below) |
 | `Ctrl+S` | save as snippet · `Ctrl+N` new snippet · `Ctrl+Shift+E` replace |
 | `Ctrl+,` | Settings · `Esc` close |
+
+The footer's `Enter` hint reflects what will actually happen: it reads
+**"Enter paste"** when an auto-paste backend (uinput or XTEST) is available,
+and **"Enter copy"** when it is not (e.g. a Wayland session without the
+`clipnest-input` group grant, which needs a re-login to take effect — see
+Settings → Permissions). On the first paste attempt of the process without
+auto-paste, a one-time notice also appears: "Copied to clipboard — press
+Ctrl+V to paste. Auto-paste isn't set up on this session — see Settings →
+Permissions." Either way the item is copied to the clipboard; the difference
+is only whether Clipnest can also synthesize the paste keystroke for you.
 
 Every row also has pin / save-as-snippet / delete buttons, and a right-click menu.
 
@@ -98,12 +108,18 @@ These were proven only in a synthetic GNOME Shell. Real hardware is the real tes
 - Snippet expansion prefers an in-place AT-SPI replace (no clipboard touched)
   when the focused app exposes it, falling back to the clipboard round-trip
   otherwise. Verified for real against a live accessibility bus and a real
-  GTK4 window (see `docs/API-ClipnestPlatformLinux.md`); a real bug in
-  reading the AT-SPI selection was found and fixed by that verification, so
-  earlier builds always fell through to the clipboard path regardless of app.
-  Coverage is still realistic, not universal — GTK4 works; GTK3/Qt need
-  `toolkit-accessibility` enabled (untested); Electron and terminal
-  emulators miss and fall back to clipboard, same as before.
+  GTK4 window (see `docs/API-ClipnestPlatformLinux.md`). As of 0.9.2, every
+  AT-SPI insertion is verified by reading the affected text range back after
+  a successful reply and comparing it to what was sent — mirroring the
+  macOS AX trust contract — so a phantom "succeeded" reply that never
+  actually landed falls back to the clipboard path instead of silently
+  leaving the buffer unexpanded. Coverage is still realistic, not universal
+  — GTK4 works; GTK3/Qt need `toolkit-accessibility` enabled (untested);
+  Electron and terminal emulators miss and fall back to clipboard, same as
+  before.
+- When no auto-paste backend is available, the picker now says so instead
+  of silently doing nothing — see the `Enter` hint note under "Picker keys"
+  above (0.9.2).
 
 ---
 

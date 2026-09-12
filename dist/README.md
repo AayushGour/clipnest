@@ -1,20 +1,20 @@
-# Prebuilt Clipnest 0.9.1 for Ubuntu
+# Prebuilt Clipnest 0.9.2 for Ubuntu
 
 **Temporary.** These binaries live in git only so they are easy to grab for
 testing; they are meant to be removed once testing is done, and replaced by a
 GitHub Release. They add ~84 MB to history permanently, so do not treat this as
 the pattern for future builds.
 
-    clipnest-0.9.1-linux-amd64.tar.gz    Intel/AMD PCs, cloud VMs  (most machines)
-    clipnest-0.9.1-linux-arm64.tar.gz    Raspberry Pi, Graviton, Ubuntu on Apple Silicon
+    clipnest-0.9.2-linux-amd64.tar.gz    Intel/AMD PCs, cloud VMs  (most machines)
+    clipnest-0.9.2-linux-arm64.tar.gz    Raspberry Pi, Graviton, Ubuntu on Apple Silicon
 
 Not sure which? Run `uname -m` on the target machine: `x86_64` -> amd64,
 `aarch64` -> arm64.
 
 ## Install
 
-    tar xzf clipnest-0.9.1-linux-amd64.tar.gz
-    cd clipnest-0.9.1-linux-amd64
+    tar xzf clipnest-0.9.2-linux-amd64.tar.gz
+    cd clipnest-0.9.2-linux-amd64
     ./install.sh
 
 The installer refuses to run if the package architecture does not match the
