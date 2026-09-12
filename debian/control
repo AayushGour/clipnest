@@ -31,12 +31,12 @@ Depends: ${shlibs:Depends},
 Recommends: clipnest-ocr
 Description: clipboard history, snippets, and on-device OCR
  Clipnest watches the clipboard, keeps a searchable history, lets you save
- reusable text snippets, and expand them by keyword anywhere. On a Wayland
- session an optional GNOME Shell extension (installed per-user by the app
- itself, not by this package — see /usr/share/clipnest/gnome-shell-extension/)
- supplies capabilities a native Wayland client cannot have on its own:
- clipboard access while unfocused, a picker positioned at the pointer, and
- app-aware privacy exclusions.
+ reusable text snippets, and expand them by keyword anywhere. Clipboard
+ history and search work fully on their own, on X11 and Wayland alike. An
+ optional GNOME Shell extension (installed per-user by the app itself, not by
+ this package — see /usr/share/clipnest/gnome-shell-extension/) adds a picker
+ positioned at the pointer and able to appear above fullscreen windows, which
+ GTK4 cannot do on its own, plus a compositor-level hotkey.
  .
  100% local: there is no account, no sync, and no analytics. The only
  network traffic this package ever makes is an optional, once-a-day check

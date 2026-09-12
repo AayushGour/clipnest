@@ -10,12 +10,23 @@ capabilities a Wayland client structurally cannot have on its own.
 | Clipboard while unfocused | Works, via mutter's XWayland selection bridge | Works, natively |
 | Picker at the cursor | **Centred on the pointer's monitor** — a Wayland client cannot position itself | At the cursor |
 | Above fullscreen windows | Unavailable | `make_above()` |
-| Verified paste target | Unavailable, so auto-paste defaults off | Atomic focus+chord, race-free |
-| App identity for privacy exclusions | **Unavailable for native Wayland apps** — mutter reports its `no_focus_window` sentinel | Full, via `Shell.WindowTracker` |
+| Verified paste target | Unavailable, so auto-paste defaults off | Atomic focus+chord, race-free — **built here, not yet called by the app** |
+| App identity for privacy exclusions | **Unavailable for native Wayland apps** — mutter reports its `no_focus_window` sentinel | Full, via `Shell.WindowTracker` — **built here, not yet called by the app** |
 
 The last row matters most: without the extension, app-based exclusions and the
 password-manager denylist silently cannot apply to native Wayland apps. The
 marker-based filter (`x-kde-passwordManagerHint`) still works everywhere.
+
+**Two rows are marked "not yet called by the app", and the distinction is
+important.** `FocusAndSendKeyChord` and `GetFocusedApp` are implemented here and
+verified live against a real Mutter (see `packaging/linux/gnome-shell-test/`),
+but nothing on the Swift side invokes them: `ShellHelperClient` has no wrapper
+for either, and `LinuxEventSynthesizerSelection.choose` never consults the
+extension when picking a paste backend. So installing the extension does **not**
+currently give you auto-paste or app-aware privacy exclusions on Wayland, however
+much the mechanism exists. Wiring the paste half is tracked as `T-WLPASTE2`.
+Until then, read the right-hand column as "what this extension can supply", not
+"what Clipnest does with it today".
 
 ## Layout
 
