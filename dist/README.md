@@ -2,8 +2,10 @@
 
 **Temporary.** These binaries live in git only so they are easy to grab for
 testing; they are meant to be removed once testing is done, and replaced by a
-GitHub Release. They add ~84 MB to history permanently, so do not treat this as
-the pattern for future builds.
+GitHub Release. Each pair adds ~84 MB to history permanently -- and replacing
+them does not reclaim the old ones, so 0.9.1's pair is still in history too,
+putting this at ~170 MB total. Do not treat this as the pattern for future
+builds.
 
     clipnest-0.9.2-linux-amd64.tar.gz    Intel/AMD PCs, cloud VMs  (most machines)
     clipnest-0.9.2-linux-arm64.tar.gz    Raspberry Pi, Graviton, Ubuntu on Apple Silicon
