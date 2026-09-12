@@ -282,6 +282,13 @@ final class LinuxAppEnvironment {
 
     let pickerWindow = PickerWindow(
       viewModel: viewModel,
+      // Routed bug report ("pasting does nothing... the app gives the user
+      // no indication why"): required, not defaulted — same
+      // cross-platform-seam rule `reinstallToggleHotkeyFloor` documents.
+      // Drives `PickerWindow`'s honest-footer wording and its one-time
+      // "copied — press Ctrl+V" notice on `.clipboardOnly` (see
+      // `PickerWindow.showClipboardOnlyNoticeThenDismiss()`).
+      isAutoPasteAvailable: synthesizerResult.kind != .clipboardOnly,
       onDismiss: {
         // Only the owner-side flag. `PickerWindow.dismiss()` — the single
         // path every user-initiated dismissal now routes through — has
@@ -293,10 +300,22 @@ final class LinuxAppEnvironment {
         visibilityBox.value = false
       })
     self.pickerWindow = pickerWindow
-    // `dismiss()`, not `hide()`: hiding alone left `visibilityBox` true, so
-    // the next hotkey ran the "hide" half of `togglePicker` against an
-    // already-hidden window and appeared to do nothing.
-    viewModel.dismiss = { [weak pickerWindow] in pickerWindow?.dismiss() }
+    // `dismiss()` (via `dismissAfterPasteAttempt()` below), not `hide()`:
+    // hiding alone left `visibilityBox` true, so the next hotkey ran the
+    // "hide" half of `togglePicker` against an already-hidden window and
+    // appeared to do nothing.
+    //
+    // `dismissAfterPasteAttempt()`, not plain `dismiss()`: this closure is
+    // `PickerViewModel`'s ONE shared dismiss hook, called both after a real
+    // paste attempt (`select(_:)`/`pasteSnippet(_:)`) and from
+    // `openSettingsFromPicker()` (Ctrl+,) — see `PickerWindow
+    // .pasteAttemptPending`'s doc comment for how that method tells the two
+    // apart (`markPasteAttemptPending()`, called from `PickerWindow
+    // +Keyboard.swift`'s `.commit` dispatch and `PickerWindow+Rows.swift`'s
+    // row-activation handler, both this task's files) and shows the
+    // routed bug report's one-time "copied — press Ctrl+V" notice only for
+    // the former, only on `.clipboardOnly`, only once per process.
+    viewModel.dismiss = { [weak pickerWindow] in pickerWindow?.dismissAfterPasteAttempt() }
     viewModel.suppressOwnPasteboardWrite = { [weak monitor] changeCount in
       monitor?.ignore(changeCount: changeCount)
     }

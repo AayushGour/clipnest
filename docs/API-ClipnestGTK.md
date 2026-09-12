@@ -44,17 +44,27 @@ The GTK4 counterpart of macOS's `PickerPanel`/`PickerView`.
 
 ```swift
 public final class PickerWindow: @unchecked Sendable {
-  public init(viewModel: PickerViewModel, onDismiss: @escaping () -> Void)
+  public init(
+    viewModel: PickerViewModel, isAutoPasteAvailable: Bool, onDismiss: @escaping () -> Void
+  )
   public func show(at point: (x: Int, y: Int)?)
   public func hide()
-  public func dismiss()                    // the single user-initiated-dismissal path
+  public func dismiss()                    // unconditional dismiss — Esc, focus-loss, etc.
+  public func dismissAfterPasteAttempt()   // what PickerViewModel.dismiss is actually wired to
   public func refocusAfterEditorClose()    // called once SnippetEditorWindow closes
   public var windowToken: String { get }
+  public var isAutoPasteAvailable: Bool { get }
 }
 ```
 
-- `init(viewModel:onDismiss:)` — builds the window (borderless: `gtk_window
-  _set_decorated(false)`) and wires every control. Does not show it.
+- `init(viewModel:isAutoPasteAvailable:onDismiss:)` — builds the window
+  (borderless: `gtk_window_set_decorated(false)`) and wires every control.
+  Does not show it. `isAutoPasteAvailable` is required, not defaulted (per
+  coding-standards.md's cross-platform-seam rule): the composition root
+  (`LinuxAppEnvironment.init`) passes `synthesizerResult.kind !=
+  .clipboardOnly` — whether `LinuxEventSynthesizerFactory` actually found a
+  keystroke-injection backend (uinput/XTEST) or only ever writes the
+  pasteboard. Drives the honest-paste-feedback behavior below.
 - `show(at:)` — resets/re-focuses search, calls `viewModel.willShow()`,
   starts the poll-and-reconcile loop (see below), and presents the window.
   `point` is accepted for API-contract fidelity but **not acted on** — see
@@ -77,7 +87,7 @@ the human-readable list also shown in Settings → Shortcuts):
 | Chord | Action |
 |---|---|
 | ↑ / ↓ | Move selection |
-| Enter | Paste highlighted item |
+| Enter | Paste highlighted item — reads "copy" instead when `isAutoPasteAvailable` is `false`, see below |
 | Alt+Enter | Paste as plain/recognized text |
 | Escape | Dismiss (via `onDismiss`) |
 | Ctrl+F | Focus the search field |
@@ -125,6 +135,69 @@ scenario for scenario:
 | Search field empty, Delete | Same as above (an empty field is "caret at the end") | Same as above |
 | An active selection in the search field, Delete | `TextField` deletes the selection; picker never sees it | `GtkText` deletes the selection; picker never sees it |
 | Focus outside the search field (e.g. a row button), Delete | N/A on macOS today (the search field is always focused) | Picker always deletes the highlighted item, regardless of caret/selection |
+
+### Honest paste feedback on `.clipboardOnly` (routed bug report)
+
+**Root cause, confirmed live in a real Wayland session (weston, WAYLAND_DISPLAY
+set, no `/dev/uinput`):** `LinuxEventSynthesizerFactory.makeDefault()` selects
+`.clipboardOnly` on a fresh Wayland install (no uinput grant yet, XTEST
+correctly refused off X11) — the app's own startup log line reads `paste
+backend selected: clipboardOnly`. On that backend, selecting a row still
+writes the real content to the pasteboard (verified via `wl-paste` against a
+live picker) — only the synthesized keystroke that would auto-paste it never
+fires — but the picker used to give no indication of either fact: the row's
+own footer claimed `Enter paste` regardless, and the picker simply vanished
+on Enter with nothing else visible.
+
+Two fixes, both gated on `isAutoPasteAvailable`, both scoped to this file
+(`ShortcutHints.swift`'s shared, macOS-visible vocabulary is untouched):
+
+1. **Honest footer, every time.** `PickerWindow.footerText(for:capabilities:
+   isAutoPasteAvailable:)` takes `ShortcutHints.text(for:capabilities:)`'s
+   assembled string and swaps the literal substring `"Enter paste"` for
+   `"Enter copy"` when `isAutoPasteAvailable` is `false` — everything else in
+   the footer (search/pin/save/delete/tab/settings hints) is untouched.
+   `isAutoPasteAvailable: true` is byte-identical to `ShortcutHints.text`'s
+   own output — zero behavior change for the working uinput/XTEST case.
+2. **A one-time notice, the first time this process attempts a paste while
+   `.clipboardOnly`.** `PickerWindow.markPasteAttemptPending()` is called
+   right before dispatching a select/paste attempt to `PickerViewModel`
+   (`.commit` in `PickerWindow+Keyboard.swift`'s `dispatch(_:)`, and the
+   row-activation handler in `PickerWindow+Rows.swift`). The composition
+   root wires `PickerViewModel.dismiss` to `PickerWindow
+   .dismissAfterPasteAttempt()` (not plain `dismiss()`) — the one method
+   that shared closure actually routes through, since `openSettingsFromPicker()`
+   (Ctrl+,) calls it too and must never see the notice. `dismissAfterPasteAttempt()`
+   consumes the pending flag; only when it was genuinely set, auto-paste is
+   unavailable, and the notice hasn't shown yet this process, it swaps the
+   list area's content (mirrors `emptyStateLabel`'s three-way visibility
+   swap — see `PickerWindow+Reconcile.swift`'s `updateContentVisibility`)
+   for `clipboardOnlyNoticeDisplayMs` (1.4s) with:
+
+   ```
+   Copied to clipboard — press Ctrl+V to paste.
+   Auto-paste isn't set up on this session — see Settings → Permissions.
+   ```
+
+   then performs the real dismiss. Every subsequent paste attempt this
+   process makes dismisses immediately, same as the working case — the
+   footer's permanent "Enter copy" wording is the ongoing reminder, this
+   notice is deliberately shown only once (the routed bug report's own
+   framing: "telling them once is better than a dialog every time"). Points
+   at the existing Settings → Permissions tab (`SettingsWindow
+   +Permissions.swift`) rather than re-explaining the uinput grant here.
+
+   The pending flag self-clears after 400ms if `dismiss()` is never called
+   at all (a `select(_:)` whose content resolution fails — a missing/corrupt
+   blob — never reaches `dismiss()`; see `PickerViewModel+Paste.swift`) so a
+   stale flag can't misattribute the picker's next, unrelated dismissal.
+
+Verified live end-to-end (own container, real weston Wayland compositor,
+screenshots in the task record): the footer read `Enter copy`; pressing
+Enter showed the notice verbatim, the picker auto-closed after ~1.4s, and
+`wl-paste` confirmed the selected item's exact text was on the clipboard the
+whole time; a second selection dismissed immediately with no repeated
+notice, and the clipboard still updated correctly.
 
 ## Row actions and the right-click context menu
 

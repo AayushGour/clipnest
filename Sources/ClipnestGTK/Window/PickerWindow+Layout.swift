@@ -109,6 +109,20 @@ extension PickerWindow {
     gtk_widget_set_visible(emptyStateLabel, 0)
     gtk_box_append(outerBox, emptyStateLabel)
 
+    // Routed bug report ("make it honest" — Phase 2): same centered/
+    // hidden-by-default/wrapped treatment as `emptyStateLabel` immediately
+    // above — see `PickerWindow.showClipboardOnlyNoticeThenDismiss()`.
+    gtk_label_set_wrap(clipboardOnlyNoticeLabel, 1)
+    gtk_label_set_justify(clipboardOnlyNoticeLabel, GTK_JUSTIFY_CENTER)
+    gtk_widget_add_css_class(clipboardOnlyNoticeLabel, "picker-empty")
+    gtk_widget_set_halign(clipboardOnlyNoticeLabel, GTK_ALIGN_CENTER)
+    gtk_widget_set_valign(clipboardOnlyNoticeLabel, GTK_ALIGN_CENTER)
+    gtk_widget_set_vexpand(clipboardOnlyNoticeLabel, 1)
+    gtk_widget_set_margin_start(clipboardOnlyNoticeLabel, PickerWindow.outerMargin * 3)
+    gtk_widget_set_margin_end(clipboardOnlyNoticeLabel, PickerWindow.outerMargin * 3)
+    gtk_widget_set_visible(clipboardOnlyNoticeLabel, 0)
+    gtk_box_append(outerBox, clipboardOnlyNoticeLabel)
+
     gtk_label_set_xalign(footerLabel, 0)
     gtk_widget_add_css_class(footerLabel, "dim-label")
     // Visual-parity pass: matches `PickerView.shortcutHintBar`'s

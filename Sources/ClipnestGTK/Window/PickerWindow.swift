@@ -114,6 +114,47 @@ public final class PickerWindow: @unchecked Sendable {
   let onDismiss: () -> Void
   public let windowToken: String
 
+  /// Whether the composition root's paste backend can actually synthesize a
+  /// keystroke (`.uinput`/`.xtest`) versus only ever writing the pasteboard
+  /// (`.clipboardOnly` — see `LinuxEventSynthesizerSelection`). Required, no
+  /// default: per coding-standards.md's cross-platform-seam rule, a
+  /// defaulted value here would let a missing composition-root wire-up
+  /// compile silently into a permanently-dishonest footer/notice instead of
+  /// a build error. Drives two things, both about telling the user the
+  /// truth instead of silently doing nothing (routed bug report:
+  /// "pasting does nothing... the app gives the user no indication why"):
+  /// `PickerWindow+Reconcile.swift`'s footer wording ("Enter copy" instead
+  /// of the false "Enter paste"), and this file's one-time
+  /// `showClipboardOnlyNoticeThenDismiss()` toast.
+  let isAutoPasteAvailable: Bool
+
+  /// Set right before dispatching a select/paste attempt to the view model
+  /// (`.commit` in `PickerWindow+Keyboard.swift`'s `dispatch(_:)`, and the
+  /// row-activation handler in `PickerWindow+Rows.swift`) and consumed by
+  /// `dismissAfterPasteAttempt()` — the ONLY way to tell, from inside the
+  /// shared `viewModel.dismiss` closure, whether THIS particular dismissal
+  /// is a paste attempt (show the notice) or something else that closure
+  /// also drives, `openSettingsFromPicker()` (never show it there). A
+  /// short-lived self-clearing guard, not a plain latch: `select(_:)` calls
+  /// `dismiss()` only once its async content resolution actually finds
+  /// something to paste (`PickerViewModel+Paste.swift`'s own doc comment —
+  /// out of this file's scope) — a missing/corrupt blob resolves to `nil`
+  /// and never calls `dismiss()` at all, which would otherwise leave this
+  /// flag stuck `true` and misattribute the picker's NEXT, unrelated
+  /// dismissal (e.g. Ctrl+, moments later) as a paste attempt too. The
+  /// timeout below bounds that staleness window instead of relying on every
+  /// future caller to remember to clear it.
+  private var pasteAttemptPending = false
+  /// How long `pasteAttemptPending` stays armed before self-clearing —
+  /// comfortably above the slowest real content resolution
+  /// (`PickerViewModel+Paste.swift`'s own doc comment measures ~9-80ms for
+  /// an off-main blob read on a large image), so a real paste attempt is
+  /// never missed, while still closing the misattribution window above to
+  /// something no realistic user interaction can land inside.
+  private static let pasteAttemptPendingTimeoutMs: UInt32 = 400
+  /// Shown at most once per process lifetime — see `showClipboardOnlyNoticeThenDismiss()`.
+  private var hasShownClipboardOnlyNotice = false
+
   // MARK: - Widgets (built by `buildLayout()`, `PickerWindow+Layout.swift`)
 
   let window: OpaquePointer
@@ -140,6 +181,12 @@ public final class PickerWindow: @unchecked Sendable {
   /// immediately below (hidden by default, shown/hidden only by that
   /// reconcile step).
   let emptyStateLabel: OpaquePointer
+  /// Shown in place of `scrolledWindow`/`loadingLabel`/`emptyStateLabel` for
+  /// `Self.clipboardOnlyNoticeDisplayMs` after the FIRST paste attempt this
+  /// process makes while `isAutoPasteAvailable` is `false` — see
+  /// `showClipboardOnlyNoticeThenDismiss()`. Hidden by default, built the
+  /// same way as `emptyStateLabel` immediately above.
+  let clipboardOnlyNoticeLabel: OpaquePointer
   let footerLabel: OpaquePointer
   let previewPopover: OpaquePointer
   let previewImage: OpaquePointer
@@ -276,8 +323,11 @@ public final class PickerWindow: @unchecked Sendable {
   /// True only for the duration of `dismiss()` — see its re-entrancy guard.
   private var isDismissing = false
 
-  public init(viewModel: PickerViewModel, onDismiss: @escaping () -> Void) {
+  public init(
+    viewModel: PickerViewModel, isAutoPasteAvailable: Bool, onDismiss: @escaping () -> Void
+  ) {
     self.viewModel = viewModel
+    self.isAutoPasteAvailable = isAutoPasteAvailable
     self.onDismiss = onDismiss
     self.windowToken = PickerWindow.role
 
@@ -289,6 +339,7 @@ public final class PickerWindow: @unchecked Sendable {
     listBox = gtk_list_box_new()
     loadingLabel = gtk_label_new("Loading…")
     emptyStateLabel = gtk_label_new("")
+    clipboardOnlyNoticeLabel = gtk_label_new("")
     footerLabel = gtk_label_new("")
     previewPopover = gtk_popover_new()
     previewImage = gtk_image_new()
@@ -401,6 +452,115 @@ public final class PickerWindow: @unchecked Sendable {
     onDismiss()
   }
 
+  /// Call immediately before dispatching a select/paste attempt to
+  /// `PickerViewModel` (`.commit` in `PickerWindow+Keyboard.swift`'s
+  /// `dispatch(_:)`, and the row-activation handler in
+  /// `PickerWindow+Rows.swift`) — see `pasteAttemptPending`'s doc comment
+  /// for why `dismissAfterPasteAttempt()` needs this to tell a paste-
+  /// triggered dismissal apart from `openSettingsFromPicker()`'s, which
+  /// routes through the exact same injected `PickerViewModel.dismiss`
+  /// closure. Self-clears after `pasteAttemptPendingTimeoutMs` so a select
+  /// that never calls `dismiss()` at all (missing/corrupt blob — see
+  /// `PickerViewModel+Paste.pasteContent(for:plainText:)`) doesn't leave
+  /// this flag permanently misattributing the picker's next dismissal.
+  func markPasteAttemptPending() {
+    pasteAttemptPending = true
+    g_timeout_add_full(
+      G_PRIORITY_DEFAULT,
+      Self.pasteAttemptPendingTimeoutMs,
+      clearPasteAttemptPendingTimeoutTrampoline,
+      retainedTrampolineContext(self),
+      releaseTrampolineContextSingleArg)
+  }
+
+  /// The deferred half of `markPasteAttemptPending()`'s self-clearing guard
+  /// — see `pasteAttemptPending`'s doc comment. Unconditional, not
+  /// re-entrancy-guarded: if `dismissAfterPasteAttempt()` already consumed
+  /// (and reset) the flag before this fires, setting it `false` again is a
+  /// no-op; if it never fired, this is exactly the safety net the flag
+  /// exists for.
+  fileprivate func clearPasteAttemptPendingIfExpired() {
+    pasteAttemptPending = false
+  }
+
+  /// The composition root wires `PickerViewModel.dismiss` to THIS method
+  /// (`LinuxAppEnvironment.init`), not to plain `dismiss()` directly, so
+  /// every dismissal that closure drives — a successful paste attempt
+  /// (`select(_:)`/`pasteSnippet(_:)`) AND `openSettingsFromPicker()` alike
+  /// — can be told apart via `pasteAttemptPending` (see its doc comment).
+  /// Only a genuine, first-ever (this process) paste attempt while
+  /// `isAutoPasteAvailable` is `false` shows the notice; every other case —
+  /// auto-paste IS available, the notice already ran once, or this
+  /// dismissal isn't a paste attempt at all — dismisses exactly as before.
+  public func dismissAfterPasteAttempt() {
+    let wasPasteAttempt = pasteAttemptPending
+    pasteAttemptPending = false
+    guard wasPasteAttempt, !isAutoPasteAvailable, !hasShownClipboardOnlyNotice else {
+      dismiss()
+      return
+    }
+    hasShownClipboardOnlyNotice = true
+    showClipboardOnlyNoticeThenDismiss()
+  }
+
+  /// Routed bug report, Phase 2 ("make it honest"): on `.clipboardOnly`,
+  /// selecting a row still writes the pasteboard (verified live — see this
+  /// task's report), but no synthesized keystroke follows, and the picker
+  /// closing gave the user no indication anything happened at all versus
+  /// the app being broken. Shown ONCE per process lifetime — see
+  /// `.claude/task-board.md`'s routing brief: "telling them 'copied — press
+  /// Ctrl+V to paste' once is better than a dialog every time." Points at
+  /// the existing Settings > Permissions tab (`SettingsWindow
+  /// +Permissions.swift`, out of this file's scope) rather than
+  /// re-explaining the uinput grant here — connects to that copy instead of
+  /// duplicating it.
+  ///
+  /// Replaces the list area's content in place (mirrors T-RT5's
+  /// `emptyStateLabel` three-way visibility swap in
+  /// `PickerWindow+Reconcile.swift`) rather than opening a second surface —
+  /// GTK4 has no built-in lightweight toast widget this app can reach
+  /// without a new dependency (coding-standards.md's dependency policy),
+  /// and a brand-new top-level window would need its own positioning story
+  /// on a platform that already has none for THIS window (see this file's
+  /// top "WINDOW PLACEMENT" doc comment). `stopObservingChanges()` freezes
+  /// the normal reconcile pipeline for the display duration so no
+  /// intervening `objectWillChange` (vanishingly unlikely in this ~1.2s
+  /// window, but possible — e.g. a background retention sweep) overwrites
+  /// this widget swap before the deferred real dismiss below runs.
+  private func showClipboardOnlyNoticeThenDismiss() {
+    stopObservingChanges()
+    gtk_widget_set_visible(scrolledWindow, 0)
+    gtk_widget_set_visible(loadingLabel, 0)
+    gtk_widget_set_visible(emptyStateLabel, 0)
+    gtk_label_set_text(clipboardOnlyNoticeLabel, PickerWindow.clipboardOnlyNoticeText)
+    gtk_widget_set_visible(clipboardOnlyNoticeLabel, 1)
+    g_timeout_add_full(
+      G_PRIORITY_DEFAULT,
+      Self.clipboardOnlyNoticeDisplayMs,
+      clipboardOnlyNoticeTimeoutTrampoline,
+      retainedTrampolineContext(self),
+      releaseTrampolineContextSingleArg)
+  }
+
+  /// The actual work `showClipboardOnlyNoticeThenDismiss()`'s deferred timer
+  /// runs: hides the notice and performs the real dismiss (`hide()` +
+  /// `onDismiss()`) — matches `performRefocusAfterEditorClose()`'s identical
+  /// "deferred work lives in its own method, `fileprivate` for the
+  /// top-level trampoline below" shape.
+  fileprivate func finishClipboardOnlyNoticeDismiss() {
+    gtk_widget_set_visible(clipboardOnlyNoticeLabel, 0)
+    dismiss()
+  }
+
+  /// How long `showClipboardOnlyNoticeThenDismiss()`'s notice stays up —
+  /// long enough to read two short lines, short enough to still feel like
+  /// "the picker closed," not "a dialog I have to wait out."
+  private static let clipboardOnlyNoticeDisplayMs: UInt32 = 1_400
+
+  static let clipboardOnlyNoticeText =
+    "Copied to clipboard — press Ctrl+V to paste.\n"
+    + "Auto-paste isn't set up on this session — see Settings \u{2192} Permissions."
+
   /// Hides the picker and stops observing/cancels any pending reconcile —
   /// mirrors `PickerPanel.orderOut`/`PickerViewModel.didHide()` on macOS.
   /// Prefer `dismiss()` for anything user-initiated — see its doc comment.
@@ -494,5 +654,25 @@ private let refocusAfterEditorCloseIdleTrampoline:
   @convention(c) (UnsafeMutableRawPointer?) -> Int32 = { data in
     guard let window = unretainedContext(data, as: PickerWindow.self) else { return 0 }
     window.performRefocusAfterEditorClose()
+    return 0
+  }
+
+/// `GSourceFunc` for `markPasteAttemptPending()`'s self-clearing timer —
+/// same one-shot shape as `refocusAfterEditorCloseIdleTrampoline` above
+/// (`0`/`G_SOURCE_REMOVE`, never repeats).
+private let clearPasteAttemptPendingTimeoutTrampoline:
+  @convention(c) (UnsafeMutableRawPointer?) -> Int32 = { data in
+    guard let window = unretainedContext(data, as: PickerWindow.self) else { return 0 }
+    window.clearPasteAttemptPendingIfExpired()
+    return 0
+  }
+
+/// `GSourceFunc` for `showClipboardOnlyNoticeThenDismiss()`'s display-
+/// duration timer — same one-shot shape as `refocusAfterEditorCloseIdleTrampoline`
+/// above.
+private let clipboardOnlyNoticeTimeoutTrampoline:
+  @convention(c) (UnsafeMutableRawPointer?) -> Int32 = { data in
+    guard let window = unretainedContext(data, as: PickerWindow.self) else { return 0 }
+    window.finishClipboardOnlyNoticeDismiss()
     return 0
   }

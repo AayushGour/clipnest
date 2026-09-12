@@ -185,9 +185,36 @@ extension PickerWindow {
     // not re-derived — see that type's doc comment).
     if aspects.contains(.rows) || aspects.contains(.snippets) || aspects.contains(.selection) {
       let capabilities = MainActor.assumeIsolated { viewModel.highlightedItemCapabilities }
-      let footerText = ShortcutHints.text(for: snapshot.activeTab, capabilities: capabilities)
+      let footerText = Self.footerText(
+        for: snapshot.activeTab, capabilities: capabilities,
+        isAutoPasteAvailable: isAutoPasteAvailable
+      )
       gtk_label_set_text(footerLabel, footerText)
     }
+  }
+
+  /// Routed bug report ("make it honest" — Phase 2): `ShortcutHints.text`'s
+  /// Linux vocabulary (`ShortcutHints.swift`, out of this file's scope,
+  /// shared with macOS) unconditionally advertises `"Enter paste"` — true
+  /// when `isAutoPasteAvailable`, but false and actively misleading on
+  /// `.clipboardOnly`: `Enter` still copies the highlighted row to the
+  /// clipboard (verified live — see this task's report), it just never
+  /// synthesizes the keystroke that would paste it. A plain substring swap
+  /// on the ALREADY-ASSEMBLED string — not a change to `ShortcutHints`
+  /// itself — keeps this Linux-only correction out of the shared,
+  /// macOS-visible vocabulary/wording function; `ShortcutHintsTests.swift`'s
+  /// exact-string coverage of that shared function is therefore unaffected.
+  /// The Alt+Enter plain/OCR-text hints (`"Alt+Enter plain"`/`"Alt+Enter OCR
+  /// text"`) don't literally say "paste", so they're left as-is — the
+  /// one-time notice (`PickerWindow.showClipboardOnlyNoticeThenDismiss()`)
+  /// and this same "Enter copy" correction already establish that nothing
+  /// on this tab auto-pastes.
+  static func footerText(
+    for tab: PickerTab, capabilities: HighlightedItemCapabilities, isAutoPasteAvailable: Bool
+  ) -> String {
+    let text = ShortcutHints.text(for: tab, capabilities: capabilities)
+    guard !isAutoPasteAvailable else { return text }
+    return text.replacingOccurrences(of: "Enter paste", with: "Enter copy")
   }
 
   /// T-RT5: decides which ONE of {`scrolledWindow` (the row list),

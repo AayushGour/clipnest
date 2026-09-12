@@ -240,6 +240,7 @@ extension PickerWindow {
     case .moveDown:
       MainActor.assumeIsolated { viewModel.moveSelection(by: 1) }
     case .commit(let plainText):
+      markPasteAttemptPending()
       MainActor.assumeIsolated { viewModel.selectHighlighted(plainText: plainText) }
     case .dismiss:
       dismiss()

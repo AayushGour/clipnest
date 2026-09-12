@@ -382,6 +382,7 @@ extension PickerWindow {
   }
 
   func handleRowActivated() {
+    markPasteAttemptPending()
     MainActor.assumeIsolated {
       viewModel.selectHighlighted()
     }
