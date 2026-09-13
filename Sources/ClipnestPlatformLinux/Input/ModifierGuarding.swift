@@ -66,6 +66,32 @@ public struct WaitForReleaseModifierGuard: ModifierGuarding {
 /// where a different modifier-dependent action could misfire. Accepted:
 /// strictly better than the status quo (100% merge failure at a
 /// human-length hold) and strictly safer than a stuck phantom modifier.
+/// PROVEN INEFFECTIVE — DO NOT TRUST THIS TO FIX THE MERGE (T-CROSSDEVICE-MODIFIER1,
+/// measured 2026-09-14). Mutter tracks modifier state PER ORIGINATING DEVICE, so a
+/// key-up posted from Clipnest's own uinput device cannot clear a modifier the user's
+/// physical keyboard is still asserting. Measured Clipnest-free with two independent
+/// virtual keyboards and a GTK4 key-event logger reading `Gdk.ModifierType` directly:
+///
+///   positive control (B alone, Ctrl+C)                8/8 clean
+///   baseline, A holds Shift                           8/8 merged
+///   THIS STRATEGY, A holds Shift, B releases it      15/15 STILL MERGED
+///   baseline, A holds Super                           8/8 merged
+///   THIS STRATEGY, Super                              8/8 STILL MERGED
+///   phantom release (nobody holding)                  6/6 clean, zero events emitted
+///
+/// The raw stream shows it directly: immediately after this guard's key-up for Shift,
+/// the very next event — this device's own Ctrl press — already reports
+/// `state=["SHIFT_MASK"]`. A before/after run of the full production binary against
+/// its own parent commit confirmed the user-visible failure rate does not move on any
+/// of 8 conditions (see the board's T-MODWAIT-WAYLAND1 REJECT entry).
+///
+/// It is retained only because it is harmless (releasing an unpressed key is a no-op
+/// in evdev) and because the `ModifierGuarding` seam it fills is the right shape for a
+/// strategy that CAN work. The only remaining candidate is the GNOME Shell extension's
+/// Clutter seat state — the compositor is the one party that knows the true aggregate
+/// modifier state — which would make correct paste depend on a component this project
+/// documents as optional. That is a product decision, tracked on the board, not an
+/// implementation choice to be made here.
 public struct ForceReleaseModifierGuard: ModifierGuarding {
   private let device: any KeyEventPosting
 
