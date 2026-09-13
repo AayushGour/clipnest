@@ -20,10 +20,27 @@ public struct ModifierMask: OptionSet, Sendable, Equatable {
 /// **The Wayland gap:** there is no client-side API at all for reading
 /// physical modifier state on native Wayland — only the compositor knows
 /// it. The eventual Wayland reader is a GNOME Shell extension companion
-/// process supplying the mask over its own IPC channel (a separate,
-/// not-yet-built task); until that lands, `NullModifierMaskReader` (always
-/// reports "nothing held") is the documented fallback used whenever no X11
-/// display is reachable — see `LinuxEventSynthesizerFactory`.
+/// supplying the mask over its own IPC channel (a separate, not-yet-built
+/// task); until that lands, `NullModifierMaskReader` (always reports
+/// "nothing held") is the documented fallback used whenever no X11 display
+/// is reachable — see `LinuxEventSynthesizerFactory`.
+///
+/// **The gap is WIDER than the paragraph above says, and this was measured
+/// (T-COPYFLAKE1, 2026-09-13), not reasoned about.** On a GNOME Wayland
+/// session XWayland IS reachable, so the factory picks
+/// `X11ModifierMaskReader`, not `NullModifierMaskReader` — and that reader
+/// is blind in exactly the same way while REPORTING SUCCESS: with a
+/// native-Wayland window focused, `XQueryPointer` returns success with an
+/// empty state mask even while Shift/Super are physically held (8/8 probe
+/// samples). So on the single most common Linux desktop configuration this
+/// protocol's production conformance silently answers "nothing held",
+/// always, and `ModifierReleaseWaiter` is inert rather than absent.
+///
+/// Both conformances therefore share one defect this protocol's SHAPE
+/// permits: `currentModifierMask()` has no way to say "I cannot tell".
+/// Whatever supplies the real Wayland reading should arrive together with
+/// a third state, or every future backend will be free to make the same
+/// mistake silently.
 public protocol ModifierMaskReading: Sendable {
   func currentModifierMask() -> ModifierMask
 }

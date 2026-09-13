@@ -352,8 +352,19 @@ public enum LinuxAppLifecycle {
     // hotkeys specifically — exactly the "declared but nobody wires it"
     // gap `coding-standards.md` warns a cross-platform seam against, even
     // though this one is Linux-only rather than cross-platform.
-    client.onCapabilitiesChanged = { _ in
-      Task { @MainActor in reconcileHotkeyBackend(shellHelperClient: client) }
+    client.onCapabilitiesChanged = { capabilities in
+      Task { @MainActor in
+        // T-HOTKEYGAP1 diagnostics: the extension going away is the START
+        // of the window in which both hotkeys were observed dead, so the
+        // moment this is logged is the zero point every other measurement
+        // in that investigation is relative to. Logged INSIDE the hop (not
+        // in the closure body) because `logger` is isolated to this
+        // `@MainActor` enum, like every other logging call site here.
+        logger.info(
+          "shell-helper capabilities changed: present=\(capabilities.isPresent) canDeliverShortcuts=\(capabilities.canDeliverShortcuts)"
+        )
+        reconcileHotkeyBackend(shellHelperClient: client)
+      }
     }
     // See `LinuxAppEnvironment.placeWindowHandler`'s doc comment /
     // `PickerWindow.swift`'s own: only the compositor (via this D-Bus
@@ -375,6 +386,17 @@ public enum LinuxAppLifecycle {
     // extension is disabled, with no separate signal to react to.
     environment.clipboardReplacer.privilegedTextWriter = { [weak client] text in
       client?.setClipboardText(text) ?? false
+    }
+    // T-COPYFLAKE1 diagnostics: see `LinuxClipboardSelectionReplacer
+    // .focusProbe`'s doc comment. Same no-re-wiring-needed reasoning as
+    // `privilegedTextWriter` above — `getFocusedApp()` re-checks
+    // `currentCapabilities.supports(.focus)` per call, so this degrades to
+    // `waylandFocus=unavailable` on its own the moment the extension goes
+    // away. This is also `GetFocusedApp`'s FIRST Swift reader: the method
+    // was implemented, tested and shipped in the extension with no caller
+    // at all (coding-standards.md names it as a live dead-path instance).
+    environment.clipboardReplacer.focusProbe = { [weak client] in
+      client?.getFocusedApp()
     }
   }
 
@@ -429,7 +451,18 @@ public enum LinuxAppLifecycle {
   /// `retryLiveDispatchProbeIfNeeded` for a bounded, non-blocking retry.
   @MainActor
   private static func reconcileHotkeyBackend(shellHelperClient: ShellHelperClient?) {
+    let start = ProcessInfo.processInfo.systemUptime
     let confirmed = resolveAndApplyHotkeyBackend(shellHelperClient: shellHelperClient)
+    // T-HOTKEYGAP1 diagnostics: logged on EVERY reconcile, not only when
+    // the backend changed (the existing "hotkey backend resolved" line
+    // below is change-gated on purpose, to keep steady-state quiet). A
+    // reconcile that decided nothing changed is exactly the case that
+    // needed to be visible: the reported failure had Clipnest reconciling
+    // correctly while both hotkeys stayed dead, so "we reconciled" and
+    // "the accelerator is grabbed" must be separately visible facts.
+    logger.info(
+      "hotkey reconcile: liveDispatchConfirmed=\(confirmed) elapsedMs=\(Int((ProcessInfo.processInfo.systemUptime - start) * 1000))"
+    )
     if !confirmed {
       retryLiveDispatchProbeIfNeeded(shellHelperClient: shellHelperClient)
     }
@@ -497,6 +530,9 @@ public enum LinuxAppLifecycle {
       xGrabKeyAvailable: false,
       globalShortcutsPortalAvailable: cachedGlobalShortcutsPortalAvailable)
 
+    logger.info(
+      "hotkey resolve inputs: shellExtensionAvailable=\(shellExtensionAvailable) liveDispatchConfirmed=\(shellExtensionLiveDispatchConfirmed) portalAvailable=\(cachedGlobalShortcutsPortalAvailable) resolved=\(String(describing: backend))"
+    )
     if backend != lastResolvedHotkeyBackend {
       let previous = lastResolvedHotkeyBackend
       logger.info(

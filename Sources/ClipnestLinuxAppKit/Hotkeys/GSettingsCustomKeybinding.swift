@@ -15,6 +15,14 @@ import Foundation
 /// (the part with real logic to get wrong) is unit-tested directly
 /// instead.
 enum GSettingsCustomKeybinding {
+  /// T-HOTKEYGAP1 diagnostics: the floor's install result is the one fact
+  /// that separates "Clipnest wrote the fallback keybinding" from
+  /// "gnome-settings-daemon actually re-grabbed the accelerator" — see
+  /// `InstallOutcome`'s doc comment. Metadata only (segment name +
+  /// booleans); accelerators/commands are never user content.
+  private static let logger = ClipnestLogger(
+    subsystem: ClipnestLog.subsystem, category: "GSettingsCustomKeybinding")
+
   /// - Parameters:
   ///   - name: the human-readable label GNOME Settings' own "Keyboard"
   ///     panel shows for this binding (so a curious user finds an entry
@@ -25,32 +33,95 @@ enum GSettingsCustomKeybinding {
   ///   - binding: the accelerator string in GTK's `gtk_accelerator_parse`
   ///     format (e.g. `"<Super><Shift>v"`).
   ///   - segment: the named path segment (e.g. `"clipnest-toggle"`).
+  /// What `install` actually changed, so a caller can log the difference
+  /// between "the floor was written" and "the floor was already exactly
+  /// this and nothing was written".
+  ///
+  /// This distinction is the whole point (T-HOTKEYGAP1): gnome-settings-
+  /// daemon's media-keys plugin re-grabs an accelerator when it sees a
+  /// GSettings `changed` signal for that binding — a value-identical
+  /// re-write may produce no `changed` signal and therefore no re-grab, so
+  /// "install succeeded" and "gsd now holds the grab" are different facts
+  /// and must not read the same in a log (coding-standards.md's
+  /// unconfirmed-vs-confirmed rule).
+  struct InstallOutcome: Equatable {
+    /// `false` when the schemas/path were unavailable and nothing at all
+    /// was attempted — distinct from "attempted and nothing needed to
+    /// change".
+    var applied: Bool
+    /// Whether the `binding` key's value actually differed from what was
+    /// already stored.
+    var bindingChanged: Bool
+    /// Whether this binding's path had to be appended to the media-keys
+    /// `custom-keybindings` list.
+    var listChanged: Bool
+
+    static let notApplied = InstallOutcome(
+      applied: false, bindingChanged: false, listChanged: false)
+
+    var logDescription: String {
+      "applied=\(applied) bindingChanged=\(bindingChanged) listChanged=\(listChanged)"
+    }
+  }
+
   static func install(name: String, command: String, binding: String, segment: String) {
     // Both schemas must exist BEFORE any g_settings_new* call — see
     // `schemaIsInstalled`: a missing schema aborts the process, it does not
     // return nil.
     guard schemaIsInstalled(MediaKeysSchema.mainSchemaID),
       schemaIsInstalled(MediaKeysSchema.customKeybindingSchemaID)
-    else { return }
-    guard let path = try? GSettingsKeybindingPath.path(forSegment: segment) else { return }
+    else {
+      logger.notice(
+        "gsettings floor install: segment=\(segment) \(InstallOutcome.notApplied.logDescription) reason=schemaMissing"
+      )
+      return
+    }
+    guard let path = try? GSettingsKeybindingPath.path(forSegment: segment)
+    else {
+      logger.notice(
+        "gsettings floor install: segment=\(segment) \(InstallOutcome.notApplied.logDescription) reason=badPath"
+      )
+      return
+    }
 
     guard
       let perBinding = MediaKeysSchema.customKeybindingSchemaID.withCString({ schemaID in
         path.withCString { pathCString in g_settings_new_with_path(schemaID, pathCString) }
       })
-    else { return }
+    else {
+      logger.notice(
+        "gsettings floor install: segment=\(segment) \(InstallOutcome.notApplied.logDescription) reason=settingsUnavailable"
+      )
+      return
+    }
+    let previousBinding = readString(perBinding, key: MediaKeysSchema.bindingKey)
     setString(perBinding, key: MediaKeysSchema.nameKey, value: name)
     setString(perBinding, key: MediaKeysSchema.commandKey, value: command)
     setString(perBinding, key: MediaKeysSchema.bindingKey, value: binding)
 
     guard
       let main = MediaKeysSchema.mainSchemaID.withCString({ g_settings_new($0) })
-    else { return }
+    else {
+      logger.notice(
+        "gsettings floor install: segment=\(segment) "
+          + InstallOutcome(
+            applied: true, bindingChanged: previousBinding != binding, listChanged: false
+          ).logDescription
+          + " reason=mainSchemaUnavailable")
+      return
+    }
     var existing = readStringList(main, key: MediaKeysSchema.customKeybindingsListKey)
+    var listChanged = false
     if !existing.contains(path) {
       existing.append(path)
       writeStringList(main, key: MediaKeysSchema.customKeybindingsListKey, values: existing)
+      listChanged = true
     }
+    logger.notice(
+      "gsettings floor install: segment=\(segment) "
+        + InstallOutcome(
+          applied: true, bindingChanged: previousBinding != binding, listChanged: listChanged
+        ).logDescription)
   }
 
   /// Whether a GSettings schema is actually installed on this machine.
@@ -82,6 +153,14 @@ enum GSettingsCustomKeybinding {
         _ = g_settings_set_string(settings, keyCString, valueCString)
       }
     }
+  }
+
+  private static func readString(
+    _ settings: UnsafeMutablePointer<GSettings>, key: String
+  ) -> String? {
+    guard let cString = key.withCString({ g_settings_get_string(settings, $0) }) else { return nil }
+    defer { g_free(cString) }
+    return String(cString: cString)
   }
 
   private static func readStringList(

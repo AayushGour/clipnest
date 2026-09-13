@@ -620,6 +620,14 @@ final class LinuxAppEnvironment {
   /// `PickerWindow` contract doesn't expose) since this IS the one place
   /// every trigger already funnels through.
   func showPicker(at point: (x: Int, y: Int)?) {
+    // T-HOTKEYGAP1 diagnostics: the two hotkey delivery paths land in
+    // DIFFERENT entry points — the Shell extension's `ShortcutActivated`
+    // calls `showPicker(at:)` directly, while the GSettings floor's
+    // `clipnest --toggle-picker` goes through `togglePicker()`. Logging
+    // only one of them made a working extension-path hotkey read exactly
+    // like a dead one during this investigation's first positive-control
+    // run. Metadata only (one boolean).
+    Self.logger.info("showPicker: hasPoint=\(point != nil)")
     frontmostAppTracker.record()
     pickerViewModel.willShow()
     pickerWindow.show(at: point)
@@ -635,6 +643,13 @@ final class LinuxAppEnvironment {
   }
 
   func togglePicker(at point: (x: Int, y: Int)? = nil) {
+    // T-HOTKEYGAP1 diagnostics: the toggle hotkey reaching this process at
+    // all is the fact under test when the Shell extension is disabled and
+    // the GSettings floor is supposed to take over — and it was previously
+    // invisible in the log, so "the hotkey is dead" and "the hotkey fired
+    // but the window did not appear" could not be told apart. Metadata
+    // only (two booleans).
+    Self.logger.info("togglePicker: visibleBefore=\(isPickerVisible) hasPoint=\(point != nil)")
     if isPickerVisible {
       hidePicker()
     } else {

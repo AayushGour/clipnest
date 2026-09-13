@@ -146,6 +146,22 @@ public final class X11ClipboardConnection: X11SelectionConnecting, X11WindowIden
     return requestConversion(x11, mimeType: mimeType)
   }
 
+  public func selectionOwnerWindowID() -> UInt64? {
+    guard let x11 else { return nil }
+    // Deliberately a DIRECT Xlib round trip on the calling thread rather
+    // than a request handed to the event thread the way
+    // `payload(forMimeType:)` is: `XGetSelectionOwner` is a plain
+    // request/reply with no `SelectionNotify` to correlate, so it has
+    // none of the "another thread already dequeued my event" hazard that
+    // forced the `pendingConversion` handshake (see this type's doc
+    // comment). Xlib itself is thread-safe here only because every
+    // `Display*` user in this process goes through `XInitThreads`-free
+    // single-connection locking inside Xlib — the same assumption
+    // `X11WindowIdentityQuerying`'s property reads above already make.
+    let owner = XGetSelectionOwner(x11.display, x11.clipboardAtom)
+    return owner == X11State.zero ? nil : UInt64(owner)
+  }
+
   // MARK: - X11WindowIdentityQuerying
 
   public func activeWindowID() -> UInt64? {

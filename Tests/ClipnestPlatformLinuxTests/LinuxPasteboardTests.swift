@@ -13,6 +13,15 @@ private final class FakeX11SelectionConnecting: X11SelectionConnecting, @uncheck
   var payloads: [String: Data] = [:]
   var onSelectionChanged: (@Sendable (Int, Bool) -> Void)?
 
+  /// Diagnostic-only owner id — settable so a test can model "nobody
+  /// owns the selection" (`nil`) as distinct from a real owner, the
+  /// distinction `LinuxClipboardSelectionReplacer`'s copy-failure probe
+  /// logs. Defaults to a non-nil placeholder so the ordinary tests read
+  /// as "some app owns the clipboard", which is the normal state.
+  var ownerWindowID: UInt64? = 0x42
+
+  func selectionOwnerWindowID() -> UInt64? { ownerWindowID }
+
   func currentTargets() -> [String] { targets }
   func payload(forMimeType mimeType: String) -> Data? { payloads[mimeType] }
 }
@@ -25,6 +34,31 @@ struct LinuxPasteboardTests {
     connection.changeSerial = 7
     let pasteboard = LinuxPasteboard(connection: connection)
     #expect(pasteboard.changeCount == 7)
+  }
+
+  @Test("selectionOwnerWindowID forwards the connection's owner id, nil included")
+  func selectionOwnerForwardsOwnerID() {
+    let connection = FakeX11SelectionConnecting()
+    connection.ownerWindowID = 0x600004
+    #expect(LinuxPasteboard(connection: connection).selectionOwnerWindowID == 0x600004)
+    connection.ownerWindowID = nil
+    #expect(LinuxPasteboard(connection: connection).selectionOwnerWindowID == nil)
+  }
+
+  /// Deliberate asymmetry with every payload accessor below, and the
+  /// reason it gets its own test: a window id is not clipboard content, so
+  /// the concealed-marker fail-closed gate must NOT suppress it. The whole
+  /// point of reading an owner id during a copy diagnostic is to identify
+  /// an owner whose payload this type is correctly refusing to read.
+  @Test("selectionOwnerWindowID is not suppressed by the concealed-marker gate")
+  func selectionOwnerSurvivesConcealedMarker() {
+    let connection = FakeX11SelectionConnecting()
+    connection.targets = ["x-kde-passwordManagerHint", "text/plain"]
+    connection.ownerWindowID = 0x123
+    let pasteboard = LinuxPasteboard(connection: connection)
+    #expect(pasteboard.availableTypes == [.concealed])
+    #expect(pasteboard.string(forType: .string) == nil)
+    #expect(pasteboard.selectionOwnerWindowID == 0x123)
   }
 
   @Test("Reports .concealed only, unconditionally, the instant a privacy marker is present")

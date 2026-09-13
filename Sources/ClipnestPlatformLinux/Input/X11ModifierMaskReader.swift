@@ -2,10 +2,34 @@ import CXlib
 import Foundation
 
 /// Real, `XQueryPointer`-backed `ModifierMaskReading` — reads the state
-/// mask returned alongside the pointer position, which `XQueryPointer`
-/// reports honoring the CURRENT physical modifier keys regardless of which
-/// window has focus. Manual-verify only: no X server in the CI container
-/// this ships to.
+/// mask returned alongside the pointer position. Manual-verify only: no X
+/// server in the CI container this ships to.
+///
+/// **CORRECTION (T-COPYFLAKE1, measured live 2026-09-13).** This comment
+/// used to claim `XQueryPointer` "reports honoring the CURRENT physical
+/// modifier keys regardless of which window has focus". That is TRUE on a
+/// real X11 session and FALSE on a GNOME Wayland session, where this class
+/// is nevertheless the reader `LinuxEventSynthesizerFactory` picks
+/// (XWayland is running, so `XOpenDisplay` succeeds and the
+/// `NullModifierMaskReader` branch is never taken). XWayland's core
+/// keyboard state is only updated from the key events mutter forwards to
+/// it, so with a native-Wayland window focused it never sees the user's
+/// modifiers at all. Probed directly with Shift and then Super physically
+/// held down by a uinput device: `XQueryPointer` returned SUCCESS with
+/// `state == 0` on 8 of 8 samples.
+///
+/// The consequence is not a missing reading, it is a WRONG one:
+/// `ModifierReleaseWaiter` reads `[]`, concludes "nothing is held", and
+/// lets `UInputEventSynthesizer.post` fire its chord with the user's
+/// hotkey modifiers still down — measured to turn a 0%-failure path into a
+/// 100%-failure one for snippet expansion (see
+/// `LinuxClipboardSelectionReplacer`'s own notes). This is the
+/// coding-standards.md false-success family: a call that cannot express
+/// "I do not know" is forced to answer "nothing held". A correct fix needs
+/// a modifier source the compositor actually feeds — the Shell-extension
+/// companion `ModifierMaskReading`'s doc comment already names — plus a
+/// third state so an unknown reading can never be mistaken for an empty
+/// one.
 ///
 /// Assumes the common `Mod1Mask` = Alt / `Mod4Mask` = Super convention —
 /// true for every mainstream desktop's default modifier mapping. A user

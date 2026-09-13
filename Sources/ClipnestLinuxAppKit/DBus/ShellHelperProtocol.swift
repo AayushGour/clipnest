@@ -188,6 +188,44 @@ enum ShellHelperResponses {
     return (x, y, monitor)
   }
 
+  /// `GetFocusedApp() -> a{sv}` — the compositor's own focused-window
+  /// identity. Returns `nil` only when the reply is not a well-formed
+  /// method return carrying a dict; an EMPTY dict (nothing focused) is a
+  /// real, distinct answer and decodes to an all-`nil` `ShellFocusedApp`,
+  /// never to `nil` — "the compositor says nothing is focused" and "I
+  /// could not ask" are different facts and must not collapse into one
+  /// (coding-standards.md's third-state rule).
+  static func parseGetFocusedApp(_ message: DBusMessage) -> ShellFocusedApp? {
+    guard message.type == .methodReturn, case .array(let entries)? = message.body.first
+    else { return nil }
+
+    var appID: String?
+    var name: String?
+    var wmClass: String?
+    var pid: Int32?
+    var windowSerial: Int32?
+    var clientType: String?
+
+    for entry in entries {
+      guard case .dictEntry(.string(let key), .variant(let inner)) = entry else { continue }
+      switch key {
+      case ShellFocusedAppKey.appID: if case .string(let value) = inner { appID = value }
+      case ShellFocusedAppKey.name: if case .string(let value) = inner { name = value }
+      case ShellFocusedAppKey.wmClass: if case .string(let value) = inner { wmClass = value }
+      case ShellFocusedAppKey.pid: if case .int32(let value) = inner { pid = value }
+      case ShellFocusedAppKey.windowSerial:
+        if case .int32(let value) = inner { windowSerial = value }
+      case ShellFocusedAppKey.clientType:
+        if case .string(let value) = inner { clientType = value }
+      default: break
+      }
+    }
+
+    return ShellFocusedApp(
+      appID: appID, name: name, wmClass: wmClass, pid: pid, windowSerial: windowSerial,
+      clientType: clientType)
+  }
+
   static func parseGetMonitorWorkArea(
     _ message: DBusMessage
   ) -> (x: Int32, y: Int32, width: Int32, height: Int32)? {

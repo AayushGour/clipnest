@@ -237,6 +237,18 @@ public final class ShellHelperClient: @unchecked Sendable {
     return reply.flatMap(ShellHelperResponses.parseGetPointer)
   }
 
+  /// The compositor's own "who has keyboard focus right now", used by
+  /// `LinuxClipboardSelectionReplacer`'s copy diagnostics to record what
+  /// Wayland focus ACTUALLY was at the instant of a synthesized Ctrl+C —
+  /// the fact neither `_NET_ACTIVE_WINDOW` (X11 `None` for a native
+  /// Wayland window) nor AT-SPI's `FOCUSED` state can be trusted to
+  /// report on this session type.
+  public func getFocusedApp() -> ShellFocusedApp? {
+    guard currentCapabilities.supports(.focus) else { return nil }
+    let reply = callConnection.call(ShellHelperRequests.getFocusedApp(serial: 33), timeout: timeout)
+    return reply.flatMap(ShellHelperResponses.parseGetFocusedApp)
+  }
+
   /// The live-dispatch half of `HotkeyBackendResolver`'s capability-trap
   /// fix — see that type's doc comment on `.shellExtensionKeybinding`.
   /// Deliberately bypasses `currentCapabilities.supports(.pointer)`

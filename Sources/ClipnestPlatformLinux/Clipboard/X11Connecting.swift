@@ -24,6 +24,39 @@ public protocol X11SelectionConnecting: Sendable {
   /// `MimeRepresentationSelector` are checked against.
   func currentTargets() -> [String]
 
+  /// Diagnostic-only: the X11 window id that currently owns the CLIPBOARD
+  /// selection (`XGetSelectionOwner`), or `nil` when nothing owns it
+  /// (X11 `None`) or no X server is reachable.
+  ///
+  /// Exists because `changeSerial` cannot distinguish "a different client
+  /// took ownership" from "the same client re-asserted it".
+  ///
+  /// **B4 correction (T-COPYFLAKE1 review):** on a genuine X11 session (no
+  /// Wayland compositor bridging the selection), this DOES answer WHO
+  /// answered a synthesized copy — each client's own window owns the
+  /// selection directly. On a GNOME **Wayland** session, however, it does
+  /// NOT: mutter's X11 bridge (`meta-x11-selection.c`) always re-asserts
+  /// ownership through its OWN internal selection-bridge window on behalf
+  /// of every Wayland client, so this reports the SAME id after every
+  /// copy regardless of which app actually answered it — measured and
+  /// confirmed live (see the diagnostics table in
+  /// `docs/API-ClipnestLinuxAppKit.md`), not assumed. An earlier version of
+  /// this doc comment claimed the opposite ("the one fact that says WHO
+  /// answered a synthesized copy") unconditionally, which this same
+  /// investigation's own findings disproved for the platform's primary
+  /// target session type — corrected here rather than left to mislead the
+  /// next reader of this protocol.
+  ///
+  /// What this value CAN still say, even on Wayland: whether ownership
+  /// moved AT ALL (a real, non-bridge id appearing means something outside
+  /// mutter's bridge took it — worth investigating on its own), and
+  /// whether this is a native-X11 or a Wayland/XWayland-bridged session in
+  /// the first place (a constant id across every copy is itself
+  /// diagnostic). Read by `LinuxClipboardSelectionReplacer`'s per-step
+  /// diagnostics, which log it (a numeric window id — metadata, never
+  /// selection bytes) before and after the synthesized Ctrl+C.
+  func selectionOwnerWindowID() -> UInt64?
+
   /// Performs (or returns an already-cached) full payload conversion for
   /// exactly `mimeType`, transparently handling an `INCR` reply via
   /// `IncrTransferReassembler`. Returns `nil` on any failure — a refused

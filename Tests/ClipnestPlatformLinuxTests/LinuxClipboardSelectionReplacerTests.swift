@@ -30,6 +30,15 @@ private final class FakeX11Connection: X11SelectionConnecting, @unchecked Sendab
   var payloads: [String: Data] = [:]
   var onSelectionChanged: (@Sendable (Int, Bool) -> Void)?
 
+  /// Diagnostic-only owner id — settable so a test can model "nobody
+  /// owns the selection" (`nil`) as distinct from a real owner, the
+  /// distinction `LinuxClipboardSelectionReplacer`'s copy-failure probe
+  /// logs. Defaults to a non-nil placeholder so the ordinary tests read
+  /// as "some app owns the clipboard", which is the normal state.
+  var ownerWindowID: UInt64? = 0x42
+
+  func selectionOwnerWindowID() -> UInt64? { ownerWindowID }
+
   func currentTargets() -> [String] { targets }
   func payload(forMimeType mimeType: String) -> Data? { payloads[mimeType] }
 }
@@ -84,10 +93,27 @@ private final class FakePasteboardWriting: PasteboardWriting, @unchecked Sendabl
   /// best-effort-timeout test below.
   var onWrite: (() -> Void)?
 
+  /// T-COPYFLAKE1 regression coverage: `onWrite` above only ever modeled
+  /// the SERIAL half of write propagation, never the actual CONTENT ending
+  /// up somewhere `pasteboard.string(forType:)` (backed by the separate
+  /// `FakeX11Connection`, not this writer) can read back — harmless before
+  /// this fix, since nothing ever polled string content for a write this
+  /// class made. The copy-sentinel wait does exactly that, so a test
+  /// setup that bumps `connection.changeSerial` without also updating
+  /// `connection.payloads` would make `waitForSentinelToClear` see
+  /// whatever STALE content was already there and report a false "changed"
+  /// on its very first check — silently correct-looking, wrong for the
+  /// reason the assertion cared about. `makeReplacer` below wires this to
+  /// keep the fake `FakeX11Connection` honest about what was actually
+  /// written, the same realism `onCopy` already provides for the target
+  /// app's side of the transaction.
+  var onWriteString: ((String) -> Void)?
+
   func writeString(_ string: String, forType type: ClipMediaType) {
     writes.append(.string(string, type))
     changeCount += 1
     onWrite?()
+    onWriteString?(string)
   }
 
   func writeData(_ data: Data, forType type: ClipMediaType) {
@@ -121,12 +147,20 @@ struct LinuxClipboardSelectionReplacerTests {
   ) -> LinuxClipboardSelectionReplacer {
     // Realistic default: a real write eventually bumps the connection's
     // serial via mutter's re-owning of the CLIPBOARD selection (see
-    // `FakePasteboardWriting.onWrite`'s doc comment) — every existing test
-    // below that reaches a write wants this simulated so it isn't paying
-    // the full `copyMaxWait` ceiling for no reason. Only the dedicated
+    // `FakePasteboardWriting.onWrite`'s doc comment) AND makes the written
+    // string readable back through the SAME connection the replacer's
+    // `pasteboard` reads from (`onWriteString`, T-COPYFLAKE1) — every
+    // existing test below that reaches a write wants both simulated so it
+    // isn't paying the full `copyMaxWait` ceiling for no reason, and so the
+    // copy-sentinel wait sees the sentinel for real rather than
+    // coincidentally-already-different stale content. Only the dedicated
     // "write propagation times out" test passes `false`.
     if simulateWritePropagation {
       writer.onWrite = { connection.changeSerial += 1 }
+      writer.onWriteString = { text in
+        connection.targets = ["UTF8_STRING"]
+        connection.payloads["UTF8_STRING"] = Data(text.utf8)
+      }
     }
     return LinuxClipboardSelectionReplacer(
       poster: poster,
@@ -156,11 +190,12 @@ struct LinuxClipboardSelectionReplacerTests {
     }
 
     #expect(result == .replaced)
-    // The transient expansion body was written, THEN overwritten by the
-    // restore — order matters, so this asserts the full sequence, not just
-    // membership.
+    // The copy sentinel (T-COPYFLAKE1) was written first, then the
+    // transient expansion body, THEN overwritten by the restore — order
+    // matters, so this asserts the full sequence, not just membership.
     #expect(
       writer.writes == [
+        .string(LinuxClipboardSelectionReplacer.copySentinelValue, .string),
         .string("EXPANDED", .string),
         .string("original clip", .string),
       ])
@@ -286,9 +321,14 @@ struct LinuxClipboardSelectionReplacerTests {
     let result = await replacer.replaceSelection { _ in nil }
 
     #expect(result == .noMatch)
-    // No expansion body is ever written on the `.noMatch` path — the ONLY
-    // write is the restore.
-    #expect(writer.writes == [.string("original clip", .string)])
+    // No expansion body is ever written on the `.noMatch` path — only the
+    // copy sentinel (T-COPYFLAKE1) ahead of the synthesized Ctrl+C, then
+    // the restore.
+    #expect(
+      writer.writes == [
+        .string(LinuxClipboardSelectionReplacer.copySentinelValue, .string),
+        .string("original clip", .string),
+      ])
   }
 
   @Test("No selection made still restores the original clipboard")
@@ -298,8 +338,12 @@ struct LinuxClipboardSelectionReplacerTests {
     connection.payloads["UTF8_STRING"] = Data("original clip".utf8)
 
     // `post` succeeds (keystroke posted) but never changes the connection,
-    // simulating "nothing was selected" — `waitForChange` polls until its
-    // real ~500ms ceiling before giving up.
+    // simulating "nothing was selected" — the copy sentinel DOES land (the
+    // default `simulateWritePropagation: true` wiring), so this exercises
+    // `waitForSentinelToClear`, which polls until its real ~500ms ceiling
+    // before giving up, exactly as `waitForChange` did before T-COPYFLAKE1
+    // — content-comparison correctly reports no change here too, since
+    // nothing ever wrote anything different from the sentinel.
     let poster = FakeSyntheticKeystrokePosting()
     let writer = FakePasteboardWriting()
     let replacer = makeReplacer(connection: connection, poster: poster, writer: writer)
@@ -307,7 +351,11 @@ struct LinuxClipboardSelectionReplacerTests {
     let result = await replacer.replaceSelection { _ in "EXPANDED" }
 
     #expect(result == .noSelection)
-    #expect(writer.writes == [.string("original clip", .string)])
+    #expect(
+      writer.writes == [
+        .string(LinuxClipboardSelectionReplacer.copySentinelValue, .string),
+        .string("original clip", .string),
+      ])
   }
 
   @Test(
@@ -325,21 +373,31 @@ struct LinuxClipboardSelectionReplacerTests {
       connection.changeSerial += 1
     }
     let writer = FakePasteboardWriting()
-    // `simulateWritePropagation: false` — the expansion-body write never
-    // bumps the connection's serial, modeling the ACTUAL T-SNIPPET-FF1
-    // defect this test guards against: `writer.writeString`
-    // (`gdk_clipboard_set_text`) silently never took effect at all for a
-    // background/unfocused caller like this one (GDK's Wayland clipboard
-    // backend needs a fresh input-event serial this class never has — see
+    // `simulateWritePropagation: false` — NEITHER the copy sentinel
+    // (T-COPYFLAKE1) nor the expansion-body write ever bumps the
+    // connection's serial, modeling the ACTUAL T-SNIPPET-FF1 defect this
+    // test guards against: `writer.writeString` (`gdk_clipboard_set_text`)
+    // silently never took effect AT ALL for a background/unfocused caller
+    // like this one (GDK's Wayland clipboard backend needs a fresh
+    // input-event serial this class never has — see
     // `LinuxClipboardSelectionReplacer.privilegedTextWriter`'s doc comment
-    // for the confirmed root cause). The fix must still attempt the paste
-    // rather than bail out — best-effort, since a target that reads the
-    // clipboard lazily could still get the right content even when this
-    // wait can't confirm it landed. T-SHELLHELPER-TIMEOUT1 fix: this used
-    // to also assert `result == .replaced` here — the exact dishonest-
-    // success bug that task fixed (a paste WAS attempted, but the caller
-    // has no way to know the target actually received the new body rather
-    // than pasting the pre-transaction clipboard back over itself, which is
+    // for the confirmed root cause) — realistically, a machine with no
+    // Shell extension and a dead ordinary writer fails BOTH writes the
+    // same way, not just the second one. The copy sentinel's own
+    // confirmation wait times out first, so the copy step falls back to
+    // the ORIGINAL event-based `waitForChange` (still succeeds here, since
+    // `poster.onCopy` bumps the serial directly, independent of any
+    // writer) — this test now pays that ceiling twice (sentinel confirm,
+    // then write-propagation confirm) rather than once, a real but modest
+    // cost, and a faithful rather than artificial combined scenario. The
+    // fix must still attempt the paste rather than bail out — best-effort,
+    // since a target that reads the clipboard lazily could still get the
+    // right content even when this wait can't confirm it landed.
+    // T-SHELLHELPER-TIMEOUT1 fix: this used to also assert `result ==
+    // .replaced` here — the exact dishonest-success bug that task fixed (a
+    // paste WAS attempted, but the caller has no way to know the target
+    // actually received the new body rather than pasting the
+    // pre-transaction clipboard back over itself, which is
     // indistinguishable to the eye from a real success). Now asserts
     // `.writeUnconfirmed` instead, while the paste-is-still-attempted
     // behavior itself is unchanged.
@@ -354,6 +412,7 @@ struct LinuxClipboardSelectionReplacerTests {
     #expect(poster.postedChords.map(\.character) == ["c", "v"])
     #expect(
       writer.writes == [
+        .string(LinuxClipboardSelectionReplacer.copySentinelValue, .string),
         .string("EXPANDED", .string),
         .string("original clip", .string),
       ])
@@ -393,7 +452,14 @@ struct LinuxClipboardSelectionReplacerTests {
       // `owner-changed`-driven XFixes notify a real write would (see
       // `ShellHelperClient.setClipboardText`'s doc comment) — the
       // connection serial DOES bump for this path, unlike the plain
-      // `writer.writeString` fake above.
+      // `writer.writeString` fake above, AND (T-COPYFLAKE1) the written
+      // text becomes the connection's real readable content, exactly like
+      // `onWriteString`'s realism for the ordinary-writer path — this is
+      // called for BOTH the copy sentinel and the expansion body, in that
+      // order, so a test asserting exact call order/content needs this to
+      // behave like a real write for either.
+      connection.targets = ["UTF8_STRING"]
+      connection.payloads["UTF8_STRING"] = Data(text.utf8)
       connection.changeSerial += 1
       return true
     }
@@ -403,9 +469,172 @@ struct LinuxClipboardSelectionReplacerTests {
     }
 
     #expect(result == .replaced)
-    #expect(privilegedWriterCalls == ["EXPANDED"])
-    // The expansion body is written via the privileged path only —
-    // `writer.writes` sees just the final restore, never "EXPANDED".
-    #expect(writer.writes == [.string("original clip", .string)])
+    // Called for the copy sentinel (T-COPYFLAKE1) first, the expansion body
+    // second, and (B1 fix) the clipboard RESTORE third — the privileged
+    // path is preferred for EVERY text write this class makes, not just the
+    // body, closing the exact gap B1's review found (the restore write used
+    // to skip the privileged path entirely and go straight to the ordinary
+    // writer, which is what let the copy sentinel get stranded on a real
+    // Wayland session).
+    #expect(
+      privilegedWriterCalls
+        == [LinuxClipboardSelectionReplacer.copySentinelValue, "EXPANDED", "original clip"])
+    // Since the privileged path handles all three text writes, the ordinary
+    // writer is never called at all.
+    #expect(writer.writes.isEmpty)
+  }
+
+  // MARK: - T-COPYFLAKE1: content-comparison copy detection
+
+  @Test(
+    "T-COPYFLAKE1: a real copy is detected via content even when mutter's X11 bridge does NOT fire a fresh ownership-change event for it (the exact asymmetry the fix targets: ownership-change is an EVENT count, not a WRITE count)"
+  )
+  func detectsCopyByContentEvenWithoutAnOwnershipChangeEvent() async {
+    let connection = FakeX11Connection()
+    connection.targets = ["UTF8_STRING"]
+    connection.payloads["UTF8_STRING"] = Data("original clip".utf8)
+
+    let poster = FakeSyntheticKeystrokePosting()
+    // Models the exact failure this task diagnosed against mutter's own
+    // source (`meta-x11-selection.c`'s `notify_selection_owner`): the
+    // target app's copy changes the SELECTION CONTENT but — because
+    // mutter's X11 bridge only re-calls `XSetSelectionOwner` when its
+    // cached owner OBJECT differs from the new one — never bumps
+    // `changeSerial`. Before T-COPYFLAKE1, `waitForChange(after:)` polled
+    // ONLY `changeSerial` and would have burned the full ~500ms ceiling
+    // here and reported `.noSelection` despite the content genuinely
+    // having changed; deliberately NOT asserted directly (that would just
+    // re-describe the old, now-dead code path) — the behavioral proof is
+    // that this test passes fast, via `result == .replaced` below.
+    poster.onCopy = {
+      connection.targets = ["UTF8_STRING"]
+      connection.payloads["UTF8_STRING"] = Data("selected text".utf8)
+      // changeSerial deliberately NOT bumped.
+    }
+    let writer = FakePasteboardWriting()
+    let replacer = makeReplacer(connection: connection, poster: poster, writer: writer)
+
+    let result = await replacer.replaceSelection { selection in
+      selection == "selected text" ? "EXPANDED" : nil
+    }
+
+    #expect(result == .replaced)
+  }
+
+  @Test(
+    "T-COPYFLAKE1: when the copy sentinel's own landing can't be confirmed (e.g. no Shell extension and the ordinary writer silently no-ops, T-SNIPPET-FF1), the copy step still detects a REAL copy via the event-based fallback — never worse than before the fix"
+  )
+  func fallbackStillDetectsARealCopyWhenSentinelCannotBeConfirmed() async {
+    let connection = FakeX11Connection()
+    connection.targets = ["UTF8_STRING"]
+    connection.payloads["UTF8_STRING"] = Data("original clip".utf8)
+
+    let poster = FakeSyntheticKeystrokePosting()
+    poster.onCopy = {
+      connection.targets = ["UTF8_STRING"]
+      connection.payloads["UTF8_STRING"] = Data("selected text".utf8)
+      connection.changeSerial += 1
+    }
+    let writer = FakePasteboardWriting()
+    // Isolates the sentinel step specifically: the SENTINEL write never
+    // propagates (models T-SNIPPET-FF1's silent no-op), but every OTHER
+    // write (the expansion body) does — unlike
+    // `stillPastesWhenWritePropagationTimesOut`, which fails BOTH writes
+    // together, this proves the copy-step fallback alone, without the
+    // separately-tested write-propagation-timeout behavior muddying which
+    // failure is responsible for the outcome.
+    // `onWrite` deliberately left `nil` — it fires with no argument, so it
+    // cannot distinguish the sentinel from any other write; all the
+    // serial-bump-or-not logic below lives in `onWriteString` instead,
+    // which DOES see the text.
+    writer.onWriteString = { text in
+      guard text != LinuxClipboardSelectionReplacer.copySentinelValue else { return }
+      connection.targets = ["UTF8_STRING"]
+      connection.payloads["UTF8_STRING"] = Data(text.utf8)
+      connection.changeSerial += 1
+    }
+    let replacer = LinuxClipboardSelectionReplacer(
+      poster: poster,
+      pasteboard: LinuxPasteboard(connection: connection),
+      writer: writer,
+      frontmostAppProvider: FakeFrontmostAppReferenceProviding()
+    )
+
+    let result = await replacer.replaceSelection { selection in
+      selection == "selected text" ? "EXPANDED" : nil
+    }
+
+    // Fully succeeds: the copy step falls back to polling `changeCount`
+    // directly, which `poster.onCopy` bumps independent of any write this
+    // class makes, so the sentinel confirmation failing degrades
+    // gracefully rather than taking the whole transaction down with it —
+    // and the (unrelated) expansion-body write still propagates normally.
+    //
+    // B5 fix (review finding): unlike the ORIGINAL version of this test,
+    // this scenario is deliberately NOT relied on to prove the fallback is
+    // actually exercised — with these fakes, `poster.onCopy` runs
+    // SYNCHRONOUSLY inside `post(_:)`, so by the time either wait strategy
+    // takes its first poll tick, the content has already changed AND the
+    // serial has already bumped. Both `waitForChange` (event count) and
+    // `waitForSentinelToClear` (content compare) would report success
+    // here regardless of which one the production code actually calls —
+    // deleting the `sentinelReadBack ? ... : ...` branch entirely and
+    // always calling `waitForSentinelToClear` would leave this exact
+    // assertion passing. This test is kept as a real-copy regression
+    // guard (the fallback must not itself break a working case), NOT as
+    // proof the branch exists — see
+    // `fallbackReportsNoSelectionRatherThanAFalsePositiveWhenNothingWasCopied`
+    // below for the version of this scenario that actually discriminates,
+    // and does go red with the branch removed.
+    #expect(result == .replaced)
+  }
+
+  @Test(
+    "T-COPYFLAKE1/B5: sentinel unconfirmed AND nothing was actually copied — the fallback MUST use the EVENT count, not clipboard CONTENT, or it misreads the untouched pre-sentinel content (which trivially differs from the sentinel literal) as a fresh copy that never happened"
+  )
+  func fallbackReportsNoSelectionRatherThanAFalsePositiveWhenNothingWasCopied() async {
+    let connection = FakeX11Connection()
+    connection.targets = ["UTF8_STRING"]
+    connection.payloads["UTF8_STRING"] = Data("original clip".utf8)
+
+    // No `onCopy` at all — models a synthesized Ctrl+C that reaches no
+    // selection whatsoever (wrong window focused, empty selection, chord
+    // swallowed): the real-world case this whole probe/decision-table
+    // exists to get right, per the production comment at this class's
+    // copy-failure-probe call site.
+    let poster = FakeSyntheticKeystrokePosting()
+    let writer = FakePasteboardWriting()
+    // `simulateWritePropagation: false` — every write (sentinel included)
+    // silently no-ops onto the connection, the T-SNIPPET-FF1 shape
+    // `stillPastesWhenWritePropagationTimesOut` also uses — so the
+    // sentinel's own landing is never confirmed (`sentinelConfirmed` AND
+    // `sentinelReadBack` both false) and the REAL clipboard content stays
+    // "original clip" for the entire transaction.
+    let replacer = makeReplacer(
+      connection: connection, poster: poster, writer: writer, simulateWritePropagation: false)
+
+    let result = await replacer.replaceSelection { _ in "EXPANDED" }
+
+    // This is the genuinely discriminating case: "original clip" already
+    // differs from the sentinel literal BEFORE the synthesized Ctrl+C is
+    // even posted (the sentinel write silently no-op'd, so it never
+    // overwrote it). If the copy step polled CONTENT
+    // (`waitForSentinelToClear`) here — i.e. if `sentinelReadBack` were
+    // ignored and the ternary always took the content-comparison branch —
+    // "original clip" != sentinel would be `true` on the very FIRST poll
+    // tick, before the keystroke could possibly have done anything: a
+    // false "the copy happened" verdict despite nothing being selected,
+    // which would then read "original clip" back as the selection and
+    // report `.writeUnconfirmed`/`.replaced` instead of `.noSelection`.
+    // The correct fallback (event count, which `poster` never bumps here
+    // since `onCopy` is nil) times out instead and reports the true
+    // answer. Manually traced against a standalone reproduction of
+    // `pollUntilCeiling` + this exact ternary (see this task's report —
+    // the real `ClipnestPlatformLinuxTests` target does not compile on
+    // this macOS host, so this exact test file could not be executed
+    // here); the trace confirms removing the `sentinelReadBack` branch
+    // (always calling `waitForSentinelToClear`) flips this assertion to
+    // fail, satisfied on tick 1 with no wait at all.
+    #expect(result == .noSelection)
   }
 }

@@ -45,6 +45,60 @@ struct AppShellHelperProtocolTests {
     #expect(parsed?.monitor == 0)
   }
 
+  @Test("parseGetFocusedApp decodes every identity field of the a{sv} reply")
+  func parseGetFocusedAppDecodesFields() {
+    let reply = fakeMethodReturn(body: [
+      .array([
+        .dictEntry(.string("app-id"), .variant(.string("org.mozilla.firefox"))),
+        .dictEntry(.string("name"), .variant(.string("Firefox"))),
+        .dictEntry(.string("wm-class"), .variant(.string("firefox"))),
+        .dictEntry(.string("pid"), .variant(.int32(4242))),
+        .dictEntry(.string("window-serial"), .variant(.int32(91))),
+        .dictEntry(.string("client-type"), .variant(.string("x11"))),
+      ])
+    ])
+    let parsed = ShellHelperResponses.parseGetFocusedApp(reply)
+    #expect(parsed?.appID == "org.mozilla.firefox")
+    #expect(parsed?.name == "Firefox")
+    #expect(parsed?.wmClass == "firefox")
+    #expect(parsed?.pid == 4242)
+    #expect(parsed?.windowSerial == 91)
+    #expect(parsed?.clientType == "x11")
+  }
+
+  /// N3 fix (T-COPYFLAKE1 review): `name` used to be decoded and stored
+  /// with no production reader anywhere — this pins that
+  /// `LinuxClipboardSelectionReplacer`'s `.notice` call sites (the only
+  /// production reader of `logDescription`) now actually see it.
+  @Test("logDescription includes the human-readable application name, not just wmClass/appID")
+  func logDescriptionIncludesApplicationName() {
+    let focused = ShellFocusedApp(
+      appID: "org.mozilla.firefox", name: "Firefox", wmClass: "firefox", pid: 4242,
+      windowSerial: 91, clientType: "x11")
+    #expect(
+      focused.logDescription
+        == "wmClass=firefox appID=org.mozilla.firefox name=Firefox pid=4242 windowSerial=91"
+        + " clientType=x11")
+  }
+
+  /// The third-state rule (coding-standards.md): "the compositor says
+  /// nothing is focused" is a real answer and must NOT decode to the same
+  /// `nil` a failed/absent reply produces — otherwise a diagnostic that
+  /// exists to tell those two apart cannot.
+  @Test("parseGetFocusedApp: an empty dict decodes to a known-but-empty answer, not nil")
+  func parseGetFocusedAppEmptyDictIsNotNil() {
+    let parsed = ShellHelperResponses.parseGetFocusedApp(fakeMethodReturn(body: [.array([])]))
+    #expect(parsed != nil)
+    #expect(parsed?.wmClass == nil)
+    #expect(
+      parsed?.logDescription == "wmClass=? appID=? name=? pid=? windowSerial=? clientType=?")
+  }
+
+  @Test("parseGetFocusedApp returns nil when the reply is not a method return carrying a dict")
+  func parseGetFocusedAppRejectsMalformedReply() {
+    #expect(ShellHelperResponses.parseGetFocusedApp(fakeMethodReturn(body: [.string("x")])) == nil)
+  }
+
   @Test("parseGetMonitorWorkArea extracts the (x,y,width,height) structure")
   func parseGetMonitorWorkAreaExtractsStructure() {
     let reply = fakeMethodReturn(body: [

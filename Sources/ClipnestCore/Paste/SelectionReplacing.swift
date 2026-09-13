@@ -20,6 +20,18 @@ public enum SelectionReplaceResult: Sendable, Equatable {
   /// `if result != .replaced { beep() }` already does, with no code change
   /// needed there), never as `.replaced`.
   case writeUnconfirmed
+  /// The mirror of `.writeUnconfirmed` for the COPY step, added by the
+  /// T-COPYFLAKE1 investigation's review (finding "Escalation"):
+  /// `LinuxClipboardSelectionReplacer` computes a third-state signal
+  /// (`stillSentinel`) that can tell "nothing was selected" apart from
+  /// "something WAS copied but this class's own detection missed the
+  /// transition" — collapsing both into `.noSelection` would be exactly
+  /// the dishonest-success shape `.writeUnconfirmed` was added to stop one
+  /// task earlier, just on the read side instead of the write side. Treat
+  /// this as a failure exactly like the other non-`.replaced` cases —
+  /// `SnippetExpander.expand()`'s existing `if result != .replaced {
+  /// beep() }` already does, with no code change needed there.
+  case copyUnconfirmed
 }
 
 /// Universal, works-in-any-app fallback for replacing the current selection —

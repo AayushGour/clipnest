@@ -56,6 +56,15 @@ public final class LinuxPasteboard: MonitoredPasteboard, @unchecked Sendable {
 
   public var changeCount: Int { connection.changeSerial }
 
+  /// Diagnostic passthrough of `X11SelectionConnecting.selectionOwnerWindowID()`
+  /// — see that declaration for why an owner id answers a question
+  /// `changeCount` structurally cannot. Metadata only (a window id), never
+  /// selection bytes, and deliberately NOT gated on the concealed-marker
+  /// check the payload accessors below apply: a window id is not content,
+  /// and the whole point of reading it is to identify a selection owner
+  /// whose payload this type is (correctly) refusing to read.
+  public var selectionOwnerWindowID: UInt64? { connection.selectionOwnerWindowID() }
+
   /// Reports only `.concealed` (never any other key) the instant a privacy
   /// marker is present — fail-closed, matching `PrivacyMarkerDetector`'s
   /// contract. Otherwise reports the union of every category with a
