@@ -18,20 +18,44 @@ import Foundation
 /// replacer, out of this module's scope, reuses the same backend
 /// instance's `post(_:)`") — never a second uinput/XTEST call site.
 ///
-/// T-TERMPASTE1: `TerminalAppRegistry.modifiers(forAppIdentifier:)` is
-/// consulted in `replaceSelection`, but for a DIFFERENT reason than its
-/// usual Ctrl+C/Ctrl+V-vs-Ctrl+Shift+C/Ctrl+Shift+V chord-selection role
-/// (still exactly what `Paster`'s own paste-from-picker chord needs, since
-/// a terminal reassigns plain Ctrl+C to SIGINT and plain Ctrl+V to nothing
-/// useful): a positive match here means this class DECLINES the whole
-/// transaction instead of running it with a different chord. Reason: this
-/// class's only replace mechanism is Copy-then-Paste with no delete step,
-/// which relies on "paste replaces the OS-level selection" — true
-/// everywhere else, false in a terminal, where a mouse-drag highlight is a
-/// cosmetic, copy-only artifact disconnected from the shell's real cursor.
-/// No chord fixes that; see `SelectionReplaceResult.declinedTerminalTarget`
-/// for the full writeup, including why sending backspaces first was
-/// considered and rejected.
+/// T-TERMPASTE1: `TerminalAppRegistry.isTerminal(appIdentifier:)` is
+/// consulted in `replaceSelection`, but for a DIFFERENT reason than
+/// `TerminalAppRegistry.modifiers(forAppIdentifier:)`'s usual Ctrl+C/Ctrl+V-
+/// vs-Ctrl+Shift+C/Ctrl+Shift+V chord-selection role (still exactly what
+/// `Paster`'s own paste-from-picker chord needs, since a terminal
+/// reassigns plain Ctrl+C to SIGINT and plain Ctrl+V to nothing useful): a
+/// positive match here means this class DECLINES the whole transaction
+/// instead of running it with a different chord. Reason: this class's only
+/// replace mechanism is Copy-then-Paste with no delete step, which relies
+/// on "paste replaces the OS-level selection" — true everywhere else,
+/// false in a terminal, where a mouse-drag highlight is a cosmetic,
+/// copy-only artifact disconnected from the shell's real cursor. No chord
+/// fixes that; see `SelectionReplaceResult.declinedTerminalTarget` for the
+/// full writeup, including why sending backspaces first was considered and
+/// rejected. A direct identity predicate is used here (not the chord
+/// equality this gate used to infer terminal-ness from) so a future
+/// terminal needing a different chord can't silently stop this decline
+/// from firing with no test catching it.
+///
+/// **Known gap — INERT on native Wayland (T-TERMDECLINE-WAYLAND1, found
+/// 2026-09-14):** the decline above depends on `frontmostAppProvider`
+/// (`LinuxFrontmostAppReferenceProvider` in production), which is X11-only
+/// and collapses `WindowIdentityClassifier.waylandFocusUnavailable` — "a
+/// window IS focused, this backend just cannot see what" — to `nil`, the
+/// same value it returns for "nothing is focused" (see that type's own doc
+/// comment). `TerminalAppRegistry` treats `nil`/unrecognized as "not a
+/// terminal" by design (guessing wrong would break paste in ordinary
+/// apps), so a `nil` frontmost ref reads as non-terminal here too. Net
+/// effect: this decline is effective on `.x11` sessions and on XWayland
+/// clients whose window properties are readable, but does **not** fire for
+/// a native-Wayland terminal — the exact session type this whole gate
+/// exists for — so the line still corrupts into `<keyword><body>` there.
+/// The fix would require either depending on the optional GNOME Shell
+/// extension's `focusProbe`/`ShellFocusedApp` (which already resolves real
+/// Wayland focus) or declining on unknown identity generally (which would
+/// refuse expansion in every native-Wayland app whose identity can't be
+/// read, not just terminals) — a product call, not made here, tracked as
+/// `T-TERMDECLINE-WAYLAND1` on the board.
 ///
 /// Snapshots and restores the clipboard around the whole transaction via
 /// `GTKClipboardWriting` + the injected pasteboard reader, so the user's
@@ -193,10 +217,7 @@ public final class LinuxClipboardSelectionReplacer: SelectionReplacing {
     // copy/paste fires, never the missing-delete-step corruption once it
     // does.
     let frontmostRef = frontmostAppProvider.currentFrontmostAppRef()
-    let isTerminalTarget =
-      TerminalAppRegistry.modifiers(forAppIdentifier: frontmostRef?.bundleID) == [
-        .control, .shift,
-      ]
+    let isTerminalTarget = TerminalAppRegistry.isTerminal(appIdentifier: frontmostRef?.bundleID)
     Self.logger.notice(
       "terminal-target check: isTerminalTarget=\(isTerminalTarget) x11FrontmostBundleID=\(frontmostRef?.bundleID ?? "?") x11FrontmostPID=\(frontmostRef.map { String($0.processIdentifier) } ?? "?")"
     )

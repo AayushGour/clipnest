@@ -717,4 +717,52 @@ struct LinuxClipboardSelectionReplacerTests {
     // Plain Ctrl (not Ctrl+Shift) — this frontmost app isn't a terminal.
     #expect(poster.postedChords.map(\.modifiers) == [[.control], [.control]])
   }
+
+  @Test(
+    "T-TERMDECLINE-WAYLAND1 (documents a KNOWN GAP, does not fix it): frontmostAppProvider returning nil — the exact value LinuxFrontmostAppReferenceProvider produces for BOTH \"nothing focused\" and a native-Wayland window it cannot identify — is read as non-terminal, so the decline never fires and the transaction runs normally even when the real frontmost app might be an unreadable native-Wayland terminal"
+  )
+  func nilFrontmostRefIsTreatedAsNonTerminalRatherThanDeclining() async {
+    let connection = FakeX11Connection()
+    connection.targets = ["UTF8_STRING"]
+    connection.payloads["UTF8_STRING"] = Data("original clip".utf8)
+
+    let poster = FakeSyntheticKeystrokePosting()
+    poster.onCopy = {
+      connection.targets = ["UTF8_STRING"]
+      connection.payloads["UTF8_STRING"] = Data("selected text".utf8)
+      connection.changeSerial += 1
+    }
+    let writer = FakePasteboardWriting()
+    let frontmostProvider = FakeFrontmostAppReferenceProviding()
+    // `ref` left at its default `nil` — deliberately not distinguishing
+    // "nothing is focused" from "something is focused but this backend
+    // cannot see what" (`WindowIdentityOutcome.waylandFocusUnavailable`),
+    // because `LinuxFrontmostAppReferenceProvider.currentFrontmostAppRef()`
+    // does not distinguish them either — see that type's own doc comment.
+    let replacer = LinuxClipboardSelectionReplacer(
+      poster: poster,
+      pasteboard: LinuxPasteboard(connection: connection),
+      writer: writer,
+      frontmostAppProvider: frontmostProvider
+    )
+    writer.onWrite = { connection.changeSerial += 1 }
+    writer.onWriteString = { text in
+      connection.targets = ["UTF8_STRING"]
+      connection.payloads["UTF8_STRING"] = Data(text.utf8)
+    }
+
+    let result = await replacer.replaceSelection { selection in
+      selection == "selected text" ? "EXPANDED" : nil
+    }
+
+    // This is the bug T-TERMDECLINE-WAYLAND1 documents, not the fix for
+    // it: on a real native-Wayland terminal this same `nil` would be
+    // produced, the decline would not fire, and the transaction below
+    // would corrupt the line into `<keyword><body>` exactly like the
+    // undeclined case this suite otherwise guards against. Asserting
+    // `.replaced` here pins the CURRENT (gap) behavior so a future fix is
+    // a deliberate, visible change to this test, not a silent one.
+    #expect(result == .replaced)
+    #expect(poster.postedChords.map(\.modifiers) == [[.control], [.control]])
+  }
 }

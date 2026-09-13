@@ -1043,6 +1043,18 @@ write are independently verified rather than trusted on a bare `AXError`.
    a backspace count here would delete the wrong characters at the real
    cursor instead of the highlighted ones — see `SelectionReplaceResult
    .declinedTerminalTarget`'s doc comment for the full comparison.
+
+   **Linux has the same case (`LinuxClipboardSelectionReplacer`,
+   `TerminalAppRegistry.terminalIdentifiers`) but with a known gap on native
+   Wayland (T-TERMDECLINE-WAYLAND1, found 2026-09-14):** the frontmost-app
+   read it decides on is X11-only, and native-Wayland focus collapses to
+   `nil` rather than to a readable identity, which this check reads as "not
+   a terminal." So on Linux the decline is effective on X11 sessions and on
+   XWayland clients whose window properties are readable, but **does not
+   fire for a native-Wayland terminal** — the line still corrupts there.
+   See `docs/API-ClipnestLinuxAppKit.md`'s T-TERMPASTE1 section for the full
+   writeup and the board task.
+
    Otherwise, it runs the entire transaction atomically from the clipboard's
    point of view: `beginSuppression()` (→ `ClipboardMonitor.pause()`),
    snapshot every pasteboard item/type verbatim (`snapshotClipboard()`),

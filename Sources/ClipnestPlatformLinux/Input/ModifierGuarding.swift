@@ -18,6 +18,20 @@ import Foundation
 ///   rather than trusting a read that is measured to lie (`XQueryPointer`
 ///   reports an empty mask while Shift/Super are physically held, 8/8
 ///   probe samples, whenever a native-Wayland window has focus).
+///
+/// **Before trusting `ForceReleaseModifierGuard`, read its own doc comment
+/// first: it does NOT fix the cross-device modifier merge it was built for
+/// (T-CROSSDEVICE-MODIFIER1, measured 2026-09-14) — Mutter tracks modifier
+/// state PER ORIGINATING DEVICE, so a key-up posted from Clipnest's own
+/// uinput device cannot clear a modifier the user's physical keyboard is
+/// still asserting (15/15 still merged in a Clipnest-free control). It
+/// remains wired only because it is harmless, not because it works. The
+/// real, kept win from the commit that introduced this seam is
+/// `LinuxEventSynthesizerFactory` switching from display-reachability to
+/// `SessionType` — see `ModifierMaskReading`'s doc comment — which stopped
+/// a wrong X11 reading from being silently trusted on Wayland, independent
+/// of whether either `ModifierGuarding` conformance actually clears the
+/// merge.**
 public protocol ModifierGuarding: Sendable {
   /// - Returns: `true` once it is safe to assert the chord's own
   ///   modifiers; `false` if the caller must abandon the post rather than
@@ -43,6 +57,36 @@ public struct WaitForReleaseModifierGuard: ModifierGuarding {
 
 /// The Wayland strategy — see `ModifierGuarding`'s doc comment.
 ///
+/// **PROVEN INEFFECTIVE — DO NOT TRUST THIS TO FIX THE MERGE
+/// (T-CROSSDEVICE-MODIFIER1, measured 2026-09-14).** Mutter tracks modifier
+/// state PER ORIGINATING DEVICE, so a key-up posted from Clipnest's own
+/// uinput device cannot clear a modifier the user's physical keyboard is
+/// still asserting. Measured Clipnest-free with two independent virtual
+/// keyboards and a GTK4 key-event logger reading `Gdk.ModifierType`
+/// directly:
+///
+///   positive control (B alone, Ctrl+C)                8/8 clean
+///   baseline, A holds Shift                           8/8 merged
+///   THIS STRATEGY, A holds Shift, B releases it      15/15 STILL MERGED
+///   baseline, A holds Super                           8/8 merged
+///   THIS STRATEGY, Super                              8/8 STILL MERGED
+///   phantom release (nobody holding)                  6/6 clean, zero events emitted
+///
+/// The raw stream shows it directly: immediately after this guard's key-up for Shift,
+/// the very next event — this device's own Ctrl press — already reports
+/// `state=["SHIFT_MASK"]`. A before/after run of the full production binary against
+/// its own parent commit confirmed the user-visible failure rate does not move on 7 of
+/// 8 conditions, with overlapping confidence intervals on the 8th (see the board's
+/// T-MODWAIT-WAYLAND1 REJECT entry).
+///
+/// It is retained only because it is harmless (releasing an unpressed key is a no-op
+/// in evdev) and because the `ModifierGuarding` seam it fills is the right shape for a
+/// strategy that CAN work — **not because it currently works.** The only remaining
+/// candidate is the GNOME Shell extension's Clutter seat state — the compositor is the
+/// one party that knows the true aggregate modifier state — which would make correct
+/// paste depend on a component this project documents as optional. That is a product
+/// decision, tracked on the board, not an implementation choice to be made here.
+///
 /// Mirrors the Windows analog other text-injection tools already ship for
 /// the identical problem (`ReleaseModifiers`/`RestoreModifiers` in e.g.
 /// OpenWhispr's `windows-fast-paste.c`, confirmed against that project's
@@ -63,35 +107,9 @@ public struct WaitForReleaseModifierGuard: ModifierGuarding {
 /// genuinely held: a brief window (bounded by how quickly the user
 /// releases the physical key afterward, since their own release event
 /// then reaches the SAME shared state as a harmless redundant release)
-/// where a different modifier-dependent action could misfire. Accepted:
-/// strictly better than the status quo (100% merge failure at a
-/// human-length hold) and strictly safer than a stuck phantom modifier.
-/// PROVEN INEFFECTIVE — DO NOT TRUST THIS TO FIX THE MERGE (T-CROSSDEVICE-MODIFIER1,
-/// measured 2026-09-14). Mutter tracks modifier state PER ORIGINATING DEVICE, so a
-/// key-up posted from Clipnest's own uinput device cannot clear a modifier the user's
-/// physical keyboard is still asserting. Measured Clipnest-free with two independent
-/// virtual keyboards and a GTK4 key-event logger reading `Gdk.ModifierType` directly:
-///
-///   positive control (B alone, Ctrl+C)                8/8 clean
-///   baseline, A holds Shift                           8/8 merged
-///   THIS STRATEGY, A holds Shift, B releases it      15/15 STILL MERGED
-///   baseline, A holds Super                           8/8 merged
-///   THIS STRATEGY, Super                              8/8 STILL MERGED
-///   phantom release (nobody holding)                  6/6 clean, zero events emitted
-///
-/// The raw stream shows it directly: immediately after this guard's key-up for Shift,
-/// the very next event — this device's own Ctrl press — already reports
-/// `state=["SHIFT_MASK"]`. A before/after run of the full production binary against
-/// its own parent commit confirmed the user-visible failure rate does not move on any
-/// of 8 conditions (see the board's T-MODWAIT-WAYLAND1 REJECT entry).
-///
-/// It is retained only because it is harmless (releasing an unpressed key is a no-op
-/// in evdev) and because the `ModifierGuarding` seam it fills is the right shape for a
-/// strategy that CAN work. The only remaining candidate is the GNOME Shell extension's
-/// Clutter seat state — the compositor is the one party that knows the true aggregate
-/// modifier state — which would make correct paste depend on a component this project
-/// documents as optional. That is a product decision, tracked on the board, not an
-/// implementation choice to be made here.
+/// where a different modifier-dependent action could misfire — moot for
+/// the merge itself, which the measurements above show this guard does
+/// not prevent either way.
 public struct ForceReleaseModifierGuard: ModifierGuarding {
   private let device: any KeyEventPosting
 

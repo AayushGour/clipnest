@@ -27,16 +27,28 @@ import Foundation
 /// coding-standards.md false-success family: a call that cannot express
 /// "I do not know" is forced to answer "nothing held".
 ///
-/// **RESOLVED for the uinput backend (T-MODWAIT-WAYLAND1, 2026-09-14):**
-/// this class itself is unchanged and is still correct — and still used —
-/// for real `.x11` sessions (see `LinuxEventSynthesizerFactory`'s
-/// per-session-type branch); the fix does not touch it. What changed is
-/// that `.wayland`/`.unknown` sessions no longer route through this class
-/// at all: `ForceReleaseModifierGuard` (`ModifierGuarding.swift`) replaces
-/// the READ this class cannot make trustworthy on Wayland with an
+/// **PARTIALLY ADDRESSED for the uinput backend (T-MODWAIT-WAYLAND1,
+/// 2026-09-14) — do not read this as "the Wayland problem is fixed," see
+/// the correction below.** This class itself is unchanged and is still
+/// correct — and still used — for real `.x11` sessions (see
+/// `LinuxEventSynthesizerFactory`'s per-session-type branch); the fix does
+/// not touch it. What is REAL: `LinuxEventSynthesizerFactory` now branches
+/// on `SessionType` instead of display reachability, so it no longer
+/// silently picks this class's wrong-on-Wayland answer just because
+/// XWayland happens to be reachable — that specific lie (`success` with an
+/// empty mask while modifiers are physically held) can no longer reach
+/// `ModifierReleaseWaiter`. In its place, `.wayland`/`.unknown` sessions get
+/// `ForceReleaseModifierGuard` (`ModifierGuarding.swift`), which posts an
 /// unconditional uinput-level RELEASE of every tracked modifier keycode
-/// before each chord, sidestepping the "I do not know" problem entirely
-/// rather than trying to answer it.
+/// before each chord instead of reading anything — **but that replacement
+/// was itself later measured ineffective at the actual merge problem
+/// (T-CROSSDEVICE-MODIFIER1, 2026-09-14): Mutter tracks modifier state per
+/// originating device, so a release posted from Clipnest's own uinput
+/// device cannot clear a modifier the user's physical keyboard is still
+/// asserting — see that type's own doc comment for the measurements.** The
+/// genuine fix here is narrower than it first looked: this class no longer
+/// gets trusted where it lies; the cross-device modifier merge itself
+/// remains open, tracked on the board as `T-CROSSDEVICE-MODIFIER1`.
 ///
 /// Assumes the common `Mod1Mask` = Alt / `Mod4Mask` = Super convention —
 /// true for every mainstream desktop's default modifier mapping. A user

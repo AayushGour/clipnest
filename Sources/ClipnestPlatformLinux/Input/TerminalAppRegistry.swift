@@ -34,4 +34,23 @@ public enum TerminalAppRegistry {
     guard let identifier, terminalIdentifiers.contains(identifier) else { return .control }
     return [.control, .shift]
   }
+
+  /// A direct "is this a terminal" predicate, mirroring
+  /// `MacTerminalAppRegistry.isTerminal(bundleIdentifier:)`'s shape.
+  ///
+  /// Added because `LinuxClipboardSelectionReplacer`'s terminal-decline
+  /// gate (T-TERMPASTE1) used to infer "is terminal" from
+  /// `modifiers(forAppIdentifier:) == [.control, .shift]` — equivalent
+  /// TODAY (the chord and the identity check happen to agree, since every
+  /// current entry needs Ctrl+Shift+V), but silently wrong the moment a
+  /// FUTURE terminal needs a different chord: the decline gate would stop
+  /// firing for it and no test would fail, since nothing asserts the
+  /// equivalence itself. A direct membership check has no such
+  /// coincidental coupling. `nil`/unrecognized -> `false`, the same
+  /// never-assume-a-terminal-without-a-positive-match default
+  /// `modifiers(forAppIdentifier:)` and `MacTerminalAppRegistry` both use.
+  public static func isTerminal(appIdentifier identifier: String?) -> Bool {
+    guard let identifier else { return false }
+    return terminalIdentifiers.contains(identifier)
+  }
 }

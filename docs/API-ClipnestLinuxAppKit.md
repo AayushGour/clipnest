@@ -271,6 +271,30 @@ untouched `TerminalAppRegistryTests` were run directly rather than the
 whole `ClipnestPlatformLinuxTests` target, to avoid the known pre-existing
 GSettings-mutating test elsewhere in that target).
 
+**Known gap — INERT on native Wayland (T-TERMDECLINE-WAYLAND1, found
+2026-09-14):** the `frontmostRef` this gate reads comes from
+`LinuxFrontmostAppReferenceProvider`, which is X11-only
+(`_NET_ACTIVE_WINDOW` + `WM_CLASS`/`_NET_WM_PID`/`_GTK_APPLICATION_ID`).
+`WindowIdentityClassifier` already models the honest third state for a
+native-Wayland-focused window — `.waylandFocusUnavailable`, "something IS
+focused, this backend just cannot see what" — but
+`LinuxFrontmostAppReferenceProvider.currentFrontmostAppRef()` collapses that
+case (and the "identified but no PID" case) to `nil`, which this decline
+check reads as "not a terminal" (`TerminalAppRegistry`'s own contract:
+`nil`/unrecognized defaults to "not a terminal," never a positive match).
+**Net effect: on a native-Wayland terminal (no XWayland fallback available
+for its identity), this decline never fires and the line is still
+corrupted into `<keyword><body>`** — exactly the bug this whole gate exists
+to prevent, for exactly the session type this branch targets. The decline
+IS effective on X11 sessions and on XWayland clients whose properties are
+readable. Fixing this requires a product decision (depend on the optional
+GNOME Shell extension's `focusProbe`/`ShellFocusedApp`, which already knows
+the real focused app on Wayland, vs. decline-on-unknown-identity, which
+would refuse expansion in every native-Wayland app whose identity can't be
+read, not just terminals) — tracked as `T-TERMDECLINE-WAYLAND1` on the
+board, the same tension already blocking `T-CROSSDEVICE-MODIFIER1`. Not
+fixed here; documented so nobody mistakes silence for coverage.
+
 ## `LinuxClipboardSelectionReplacer`'s copy-sentinel detection (T-COPYFLAKE1)
 
 `Clipboard/LinuxClipboardSelectionReplacer.swift`'s `replaceSelection` writes
@@ -439,7 +463,14 @@ The earlier 0/60 result is explained: that harness triggered expansion
 through `clipnest --expand-snippet` (no hotkey, no modifiers held), which is
 the 0% row of the same table.
 
-### Fix (T-MODWAIT-WAYLAND1, 2026-09-14)
+### Fix attempted (T-MODWAIT-WAYLAND1, 2026-09-14) — one part real, the modifier-release strategy RETRACTED (T-CROSSDEVICE-MODIFIER1)
+
+**This section used to read as a completed fix. It wasn't one.** Two
+independent measurements taken the same day (`T-CROSSDEVICE-MODIFIER1`,
+below) proved the modifier-release strategy this section originally
+described does not stop the merge it was built for. The section is
+rewritten below in the past tense, describing what was attempted, what was
+measured, and what is actually true now.
 
 **Independent re-confirmation first, before changing anything**: the
 `XQueryPointer` claim above was re-derived from scratch against a fresh,
@@ -452,23 +483,35 @@ uinput virtual keyboard holding Shift/Super/both. Result: **8/8** —
 `XQueryPointer` returned `success=1 state=0x0` every single time, matching
 the original finding exactly. The premise held.
 
-**Chosen fix**: `ModifierReleaseWaiter`'s read-then-wait shape cannot be
+**What was tried**: `ModifierReleaseWaiter`'s read-then-wait shape cannot be
 salvaged for Wayland — there is no reader this protocol's `currentModifierMask()`
 shape could return that is trustworthy for a native-Wayland-focused window,
 compositor-companion or not (see `ModifierMaskReading`'s doc comment). So
-instead of trying to answer "is a modifier held," the uinput backend now
-UNCONDITIONALLY releases every tracked modifier keycode (both left/right
-variants of Ctrl/Shift/Alt/Super — `LinuxEventCode.allModifierKeycodes`,
+instead of trying to answer "is a modifier held," the uinput backend was
+changed to UNCONDITIONALLY release every tracked modifier keycode (both
+left/right variants of Ctrl/Shift/Alt/Super — `LinuxEventCode.allModifierKeycodes`,
 verified against the VM's own `/usr/include/linux/input-event-codes.h`, not
 assumed) through the same `/dev/uinput` device immediately before posting a
-chord, on Wayland sessions only. `LinuxEventSynthesizerFactory` now branches
-on `SessionType`, not display reachability: `.x11` still gets the original
-wait-and-observe strategy (`XQueryPointer` is genuinely trustworthy on a
-real X11 session), `.wayland`/`.unknown` get the new force-release strategy.
-Both are conformances of a new seam, `ModifierGuarding`
+chord, on Wayland sessions only. Both strategies were unified behind one new
+seam, `ModifierGuarding`
 (`Sources/ClipnestPlatformLinux/Input/ModifierGuarding.swift`):
 `WaitForReleaseModifierGuard` (X11, wraps the unchanged
 `ModifierReleaseWaiter`) and `ForceReleaseModifierGuard` (Wayland).
+
+**What actually landed and is real, independent of the retraction below**:
+`LinuxEventSynthesizerFactory` now branches on `SessionType`, not display
+reachability. Before this fix, the factory picked a modifier strategy by
+asking "can I open an X display?" — which XWayland answers yes to on a
+GNOME Wayland session, so it silently handed a native-Wayland session the
+X11 reader, which reports success with an empty modifier mask while
+Shift/Super are physically held (see the root cause above). Now the factory
+asks the session type directly: `.x11` gets `WaitForReleaseModifierGuard`
+(genuinely trustworthy there), `.wayland`/`.unknown` get
+`ForceReleaseModifierGuard`. **This part is the real, kept win from this
+commit** — a wrong reading is no longer silently trusted just because
+XWayland happens to be reachable, regardless of what
+`ForceReleaseModifierGuard` itself does or does not fix (see the retraction
+below).
 
 This mirrors the Windows analog other text-injection tools already ship for
 the identical problem — OpenWhispr's `windows-fast-paste.c` `ReleaseModifiers`/
@@ -481,28 +524,48 @@ wrong is the bug), so blindly restoring risks asserting a modifier the user
 was never holding (e.g. the CLI-trigger path above, measured at 0/6 failures
 specifically because it holds nothing) and leaving it stuck down. Releasing
 a key that was never down is a documented no-op in evdev/XKB's key-state
-model, so skipping the restore keeps that path correct; the accepted cost
-lands only when a modifier WAS genuinely held: a brief window — bounded by
-how quickly the user releases the physical key afterward, since their own
-release event then reaches the same shared state as a harmless redundant
-release — where a different modifier-dependent action could in principle
-misfire. That is strictly better than the prior 100%-merge-failure state at
-a human-length hold, and strictly safer than a stuck phantom modifier.
+model, so skipping the restore keeps that path correct. Unit-tested
+exact-sequence assertions for the release mechanism live in
+`Tests/ClipnestPlatformLinuxTests/InputModifierGuardingTests.swift`.
 
-**Before/after, same mechanism as the table above** (uinput virtual keyboard
-holding the modifier, `XQueryPointer`/copy outcome observed while held):
-before the fix, a physically-held Shift/Super rides along into every
-uinput-posted chord unconditionally, matching the 6/6–8/8 failure rows
-above. After the fix, `ForceReleaseModifierGuard.clearInterferingModifiers()`
-clears all eight tracked keycodes before the chord's own modifiers are
-asserted, so the injected chord can no longer merge with a stale Shift/Super
-— unit-tested exact-sequence assertions live in
-`Tests/ClipnestPlatformLinuxTests/InputModifierGuardingTests.swift`. A full
-production-binary re-run of every row in the table above (real hotkey grab,
-real target app) is manual-verify-only, same as the rest of this module —
-disclosed as unverified live if it could not be completed this session; see
-`.claude/logs/senior-dev.md` for exactly what was and wasn't re-measured
-live.
+**RETRACTED (T-CROSSDEVICE-MODIFIER1, measured 2026-09-14): `ForceReleaseModifierGuard`
+does not fix the merge it was built to fix.** This section previously
+claimed the injected chord "can no longer merge with a stale Shift/Super"
+and that the result was "strictly better than the prior 100%-merge-failure
+state." Both claims are false. Two independent measurements say so:
+
+1. A before/after run of the full production binary against its own parent
+   commit showed the user-visible failure rate does not move on 7 of 8
+   conditions from the table above, with overlapping confidence intervals on
+   the 8th (see the board's `T-MODWAIT-WAYLAND1` REJECT entry).
+2. A Clipnest-free experiment with two independent virtual keyboards and a
+   GTK4 key-event logger reading `Gdk.ModifierType` directly proved the
+   mechanism: Mutter tracks modifier state **per originating device**, so a
+   key-up posted from Clipnest's own uinput device cannot clear a modifier
+   the user's physical keyboard is still asserting.
+
+   | condition | result |
+   | --- | --- |
+   | positive control (B alone, Ctrl+C) | 8/8 clean |
+   | baseline, A holds Shift | 8/8 merged |
+   | force-release, A holds Shift, B releases it | 15/15 STILL MERGED |
+   | baseline, A holds Super | 8/8 merged |
+   | force-release, Super | 8/8 STILL MERGED |
+   | phantom release (nobody holding) | 6/6 clean, zero events emitted |
+
+The injected chord can still merge with a stale Shift/Super held on the
+user's physical keyboard. `ForceReleaseModifierGuard` is kept in the tree
+because it is harmless (releasing an unpressed key is a documented evdev
+no-op — the phantom-release row above) and because the `ModifierGuarding`
+seam is the right shape for a strategy that CAN work — **not because it
+currently works.** The only remaining candidate is the GNOME Shell
+extension's Clutter seat state (the compositor is the one party that knows
+the true aggregate modifier state), which would make correct paste depend
+on a component this project documents as optional — a product decision,
+tracked as `T-CROSSDEVICE-MODIFIER1` on the board, not resolved here. See
+`Sources/ClipnestPlatformLinux/Input/ModifierGuarding.swift`'s
+`ForceReleaseModifierGuard` doc comment for the same measurements, kept in
+sync with this section.
 
 ### Diagnostics surface added for this investigation
 

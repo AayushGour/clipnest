@@ -199,6 +199,21 @@ enum GSettingsCustomKeybinding {
   /// Returns `[binding]` unchanged when `binding` is already empty — there
   /// is no non-empty "no binding" value to bounce through, and the schema's
   /// own default is already `""`.
+  ///
+  /// **Crash-safety note (recorded 2026-09-14, independent review of this
+  /// fix):** `install`'s two `setString` calls for this sequence are not
+  /// atomic. A process death between them (crash, `kill -9`, power loss)
+  /// leaves the GSettings `binding` key at `""` — no hotkey grabbed — until
+  /// the next launch. This self-heals: the accelerator's source of truth is
+  /// the `app.clipnest.Clipnest.Keybindings` schema, not this derived
+  /// media-keys floor, and `LinuxAppLifecycle.resolveAndApplyHotkeyBackend`
+  /// unconditionally re-resolves and reinstalls this floor on every launch
+  /// (see that method's own doc comment), so the empty window closes on the
+  /// very next start. The residual worth naming: this floor exists
+  /// precisely to work when Clipnest is NOT running, so a death landing
+  /// inside that window means a user relying on the hotkey to *launch*
+  /// Clipnest would need one manual start first before the hotkey works
+  /// again.
   static func bindingWriteSequence(for binding: String) -> [String] {
     binding.isEmpty ? [binding] : ["", binding]
   }

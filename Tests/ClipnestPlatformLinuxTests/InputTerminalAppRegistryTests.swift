@@ -31,4 +31,30 @@ struct TerminalAppRegistryTests {
     ]
     #expect(TerminalAppRegistry.terminalIdentifiers == expected)
   }
+
+  // MARK: - isTerminal(appIdentifier:) — the direct predicate
+  // LinuxClipboardSelectionReplacer's terminal-decline gate (T-TERMPASTE1)
+  // now calls, in place of inferring "is terminal" from
+  // `modifiers(forAppIdentifier:) == [.control, .shift]`. These tests pin
+  // the predicate itself, independent of the chord it happens to agree
+  // with today for every current entry.
+
+  @Test("every known terminal identifier is reported as a terminal")
+  func knownTerminalsAreReportedAsTerminals() {
+    for identifier in TerminalAppRegistry.terminalIdentifiers {
+      #expect(
+        TerminalAppRegistry.isTerminal(appIdentifier: identifier),
+        "expected \(identifier) to be reported as a terminal")
+    }
+  }
+
+  @Test("an ordinary app is not reported as a terminal")
+  func ordinaryAppIsNotReportedAsTerminal() {
+    #expect(!TerminalAppRegistry.isTerminal(appIdentifier: "org.gnome.TextEditor"))
+  }
+
+  @Test("a nil identifier is never assumed to be a terminal")
+  func nilIdentifierIsNotReportedAsTerminal() {
+    #expect(!TerminalAppRegistry.isTerminal(appIdentifier: nil))
+  }
 }

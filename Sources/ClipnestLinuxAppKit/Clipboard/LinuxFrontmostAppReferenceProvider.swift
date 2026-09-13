@@ -20,6 +20,18 @@ public struct LinuxFrontmostAppReferenceProvider: FrontmostAppReferenceProviding
     self.querying = querying
   }
 
+  /// **Known gap (T-TERMDECLINE-WAYLAND1, found 2026-09-14): collapses
+  /// `WindowIdentityClassifier.waylandFocusUnavailable` to `nil`, the SAME
+  /// value returned for `.none` ("nothing is focused").** `.identified`
+  /// with no `processID` also falls through to `nil` below. This is a
+  /// silent "cannot say I do not know" per coding-standards.md — a caller
+  /// like `LinuxClipboardSelectionReplacer`'s terminal-decline gate cannot
+  /// tell "no window focused" apart from "a native-Wayland window IS
+  /// focused but this X11-only backend cannot see what it is," and
+  /// `TerminalAppRegistry` treats both as "not a terminal." Fixing this
+  /// would mean giving `FrontmostAppReferenceProviding` a third state (or
+  /// consulting the optional Shell extension's `focusProbe` here) — out of
+  /// scope for this type today; tracked on the board.
   public func currentFrontmostAppRef() -> FrontmostAppRef? {
     let windowID = querying.activeWindowID()
     let queryableWindowID = (windowID != nil && windowID != 0) ? windowID : nil
