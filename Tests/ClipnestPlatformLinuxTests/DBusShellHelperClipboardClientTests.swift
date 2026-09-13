@@ -20,6 +20,13 @@ import Testing
 private final class FakeShellHelperFileDescriptorCalling: DBusCalling, @unchecked Sendable {
   private(set) var sentMessages: [DBusMessage] = []
   private(set) var attachedFileDescriptorsPerCall: [[Int32]] = []
+  /// T-SHELLHELPER-TIMEOUT1: the `timeout` actually passed to each call, in
+  /// send order — lets tests assert `SetClipboard` gets the larger
+  /// `clipboardWriteTimeout` while every other member (including
+  /// `ReadClipboard`, which looks payload-shaped but replies
+  /// synchronously — see `ShellHelperClient.defaultClipboardWriteTimeout`'s
+  /// doc comment) keeps the small shared default.
+  private(set) var timeoutsPerCall: [Duration] = []
   private var scriptedPlainReplies: [DBusMessage?]
   private var scriptedFileDescriptorReplies: [(message: DBusMessage, fileDescriptors: [Int32])?]
 
@@ -33,6 +40,7 @@ private final class FakeShellHelperFileDescriptorCalling: DBusCalling, @unchecke
 
   func call(_ message: DBusMessage, timeout: Duration) -> DBusMessage? {
     sentMessages.append(message)
+    timeoutsPerCall.append(timeout)
     guard !scriptedPlainReplies.isEmpty else { return nil }
     return scriptedPlainReplies.removeFirst()
   }
@@ -42,6 +50,7 @@ private final class FakeShellHelperFileDescriptorCalling: DBusCalling, @unchecke
   ) -> (message: DBusMessage, fileDescriptors: [Int32])? {
     sentMessages.append(message)
     attachedFileDescriptorsPerCall.append(attachingFileDescriptors)
+    timeoutsPerCall.append(timeout)
     guard !scriptedFileDescriptorReplies.isEmpty else { return nil }
     return scriptedFileDescriptorReplies.removeFirst()
   }
@@ -217,5 +226,36 @@ struct DBusShellHelperClipboardClientTests {
     #expect(client.getClipboardMimeTypes(selection: .clipboard) == nil)
     #expect(client.readClipboard(selection: .clipboard, mimetype: "text/plain") == nil)
     #expect(client.setClipboard(mimetype: "text/plain", fileDescriptor: 7) == nil)
+  }
+
+  @Test(
+    "T-SHELLHELPER-TIMEOUT1: setClipboard uses the larger clipboardWriteTimeout; readClipboard keeps the small shared default"
+  )
+  func setClipboardUsesTheLargerWriteTimeoutButReadClipboardDoesNot() {
+    let fake = FakeShellHelperFileDescriptorCalling(
+      scriptedPlainReplies: [
+        fakeMethodReturn(body: [.boolean(true)]),
+        fakeMethodReturn(body: [.variant(.array([.string("clipboard")]))]),
+      ],
+      scriptedFileDescriptorReplies: [
+        (message: fakeMethodReturn(body: [.unixFD(0)]), fileDescriptors: [0]),
+        (message: fakeMethodReturn(body: [.uint64(1)]), fileDescriptors: []),
+      ])
+    let client = ShellHelperClient(
+      callConnection: fake, signalConnection: nil,
+      timeout: .milliseconds(250), clipboardWriteTimeout: .milliseconds(1000))
+    _ = client.refreshCapabilities()
+
+    _ = client.readClipboard(selection: .clipboard, mimetype: "text/plain")
+    _ = client.setClipboard(mimetype: "text/plain", fileDescriptor: 999)
+
+    // Two `refreshCapabilities` calls first, then readClipboard, then
+    // setClipboard — matches `makeClientWithClipboardCapability`'s own
+    // two-plain-reply negotiation shape, inlined here so this test can
+    // control the two client-init timeouts independently of that helper.
+    #expect(fake.timeoutsPerCall.count == 4)
+    #expect(fake.timeoutsPerCall[2] == .milliseconds(250), "ReadClipboard: small shared default")
+    #expect(
+      fake.timeoutsPerCall[3] == .milliseconds(1000), "SetClipboard: the larger write timeout")
   }
 }

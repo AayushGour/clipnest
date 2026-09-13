@@ -103,6 +103,21 @@ public struct ClipnestLogger: Sendable {
     #endif
   }
 
+  /// Sits between `.info` and `.warning` on `os.Logger`'s own level scale —
+  /// for events worth surfacing by default (unlike `.debug`) that aren't
+  /// themselves a failure (unlike `.error`), e.g. `Paster` falling through
+  /// to an unverified-target synthesis on a session that can't verify a
+  /// paste target at all (T-WLPASTE-NIL1). Always surfaces, on every
+  /// platform, exactly like `info`/`debug` above — same metadata-only
+  /// discipline applies.
+  public func notice(_ message: String) {
+    #if canImport(os)
+      logger.notice("\(message, privacy: .public)")
+    #else
+      Self.emit(level: "NOTICE", category: category, message: message)
+    #endif
+  }
+
   #if !canImport(os)
     /// Writes one `"[category] LEVEL: message\n"` line straight to file
     /// descriptor 2 (`write(2)`, via `FileHandle.standardError` — never

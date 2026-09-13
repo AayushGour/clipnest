@@ -63,6 +63,15 @@ final class LinuxAppEnvironment {
   /// `settingsWindow`, held for the identical reason).
   let snippetEditorWindow: SnippetEditorWindow
   let snippetExpander: SnippetExpander
+  /// T-SNIPPET-FF1: held so `LinuxAppLifecycle.wireShellHelper` can set
+  /// `clipboardReplacer.privilegedTextWriter` once a `ShellHelperClient`
+  /// exists — which happens strictly AFTER this `init` returns (see that
+  /// method's own doc comment on ordering), so it cannot be wired here.
+  /// `nil` (this property's own default) until then is correct, not a gap:
+  /// see `LinuxClipboardSelectionReplacer.privilegedTextWriter`'s doc
+  /// comment for why a missing Shell extension is a legitimate, graceful
+  /// degradation rather than a forgotten wiring.
+  let clipboardReplacer: LinuxClipboardSelectionReplacer
   let updateChecker: UpdateChecker
 
   /// Which paste backend `LinuxEventSynthesizerFactory` selected — logged
@@ -211,11 +220,30 @@ final class LinuxAppEnvironment {
       pasteboardChangeCount: { X11ClipboardConnection.shared.changeSerial })
 
     let frontmostAppProvider = LinuxFrontmostAppReferenceProvider()
+    // T-WLPASTE-NIL1 (P0): explicit, never relying on `Paster`'s own
+    // refuse-by-default fallback — see `Paster.synthesizesWithoutVerifiedTarget`'s
+    // doc comment. `LinuxFrontmostAppReferenceProvider` resolves a target
+    // through X11's `_NET_ACTIVE_WINDOW`, so it can only ever verify a
+    // target on an X11 session (including an XWayland client under
+    // Wayland); a native-Wayland client is not an X11 client at all and
+    // always resolves to `nil` there — indistinguishable, from `Paster`'s
+    // side, from "nothing is focused." `sessionType != .x11` (Wayland OR
+    // `.unknown` — the SAME fail-closed-toward-Wayland convention
+    // `LinuxEventSynthesizerFactory`'s XTEST gating already uses for the
+    // identical "can't prove X11 is safe to assume" reasoning) is therefore
+    // the correct trigger: on those sessions, a `nil` target must still get
+    // a best-effort, un-targeted synthesized paste (uinput posts through
+    // the kernel to whatever actually holds focus) instead of the silent
+    // no-op T-WLPASTE-NIL1 reported — confirmed live on the VM: a native-
+    // Wayland GTK4 target received nothing before this fix, an XWayland
+    // target (`GDK_BACKEND=x11`) already worked.
+    let sessionType = SessionType.detect(environment: ProcessInfo.processInfo.environment)
     let paster = Paster(
       pasteboard: sharedWriter,
       eventSynthesizer: synthesizerResult.synthesizer,
       isAccessibilityGranted: { synthesizerResult.kind != .clipboardOnly },
-      frontmostAppProvider: frontmostAppProvider
+      frontmostAppProvider: frontmostAppProvider,
+      synthesizesWithoutVerifiedTarget: sessionType != .x11
     )
     self.paster = paster
 
@@ -259,6 +287,7 @@ final class LinuxAppEnvironment {
       pasteboard: LinuxPasteboard(), writer: sharedWriter,
       frontmostAppProvider: frontmostAppProvider
     )
+    self.clipboardReplacer = clipboardReplacer
     self.snippetExpander = SnippetExpander(
       snippetStore: snippetStore, selectedText: selectedTextAccessing,
       clipboardReplacer: clipboardReplacer)

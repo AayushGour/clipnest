@@ -820,7 +820,7 @@ to "it's on the clipboard" otherwise.
 **Key files**
 - `Sources/ClipnestCore/Paste/Paster.swift:136-210`
 - `Sources/ClipnestCore/Paste/FrontmostAppTracker.swift:55-79`
-- `Sources/ClipnestCore/Paste/EventSynthesizing.swift:12-17`
+- `Sources/ClipnestCore/Paste/EventSynthesizing.swift:12-30`
 - `ClipnestApp/Sources/UI/Picker/PickerViewModel.swift:875-978` (`select`/`pasteContent`/`pasteAndDismiss`)
 
 **How it works.**
@@ -1298,7 +1298,7 @@ dependency — the pasteboard (`PasteboardReading`/`MonitoredPasteboard`,
 `ClipboardMonitor.swift:7-37`), persistence (`ClipStore`/`SnippetStore`,
 `ClipStore.swift:35-86`/`SnippetStore.swift:16-45`), pasteboard writes
 (`PasteboardWriting`, `Paster.swift:37-59`), key-event synthesis
-(`EventSynthesizing`, `EventSynthesizing.swift:12-17`), frontmost-app
+(`EventSynthesizing`, `EventSynthesizing.swift:12-30`), frontmost-app
 lookup (`FrontmostApplicationProviding`/`FrontmostAppReferenceProviding`,
 `ClipboardMonitor.swift:12-15`/`FrontmostAppTracker.swift:32-34`), and
 Accessibility-based selection access (`SelectedTextAccessing`/

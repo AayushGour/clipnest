@@ -8,6 +8,18 @@ public enum SelectionReplaceResult: Sendable, Equatable {
   case noSelection
   /// A selection was read but `bodyForSelection` returned no body for it.
   case noMatch
+  /// A selection was read and matched a snippet, and a paste WAS attempted
+  /// (best effort — see `LinuxClipboardSelectionReplacer.replaceSelection`),
+  /// but the replacement body's clipboard write could never be confirmed
+  /// before that paste was posted. T-SHELLHELPER-TIMEOUT1: a privileged
+  /// write that silently fails (or times out) and degrades to a
+  /// known-broken fallback must not be indistinguishable from a real
+  /// success — the target app may have pasted stale, pre-transaction
+  /// content instead of the snippet body. Treat this as a failure exactly
+  /// like `.noSelection`/`.noMatch` (e.g. `SnippetExpander.expand()`'s own
+  /// `if result != .replaced { beep() }` already does, with no code change
+  /// needed there), never as `.replaced`.
+  case writeUnconfirmed
 }
 
 /// Universal, works-in-any-app fallback for replacing the current selection —

@@ -62,22 +62,38 @@ public final class SnippetExpander {
 
   /// Reads the current selection and replaces it with the matched snippet
   /// body; beeps if nothing was selected or nothing matched.
+  ///
+  /// **Tier-decision logging (routed bug report, 2026-09):** this method
+  /// previously gave no indication which of the two strategies ran, which
+  /// made a Firefox-only clipboard-fallback failure indistinguishable from
+  /// the Accessibility path silently misbehaving. Every `.notice` line
+  /// below logs only a tier name and a boolean/outcome — never the
+  /// selection text or the snippet body — matching coding-standards.md's
+  /// privacy rule and every existing `ClipnestLogger` call site in this
+  /// codebase.
   public func expand() async {
     // 1) Accessibility path — no clipboard side effect where it works.
     if let selection = selectedText.readSelectedText(),
       !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     {
+      Self.logger.notice("tier=accessibility: selection read succeeded")
       guard let snippetBody = await body(for: selection) else {
         // AX read succeeded, so the keyword is real — a clipboard re-read
         // would yield the same non-match. Beep and stop.
+        Self.logger.notice("tier=accessibility: outcome=noMatch")
         beep()
         return
       }
       if selectedText.replaceSelectedText(with: snippetBody) {
+        Self.logger.notice("tier=accessibility: outcome=replaced")
         return
       }
       // AX read worked but the write was refused — fall through to the
       // clipboard path, which pastes the body via a synthesized ⌘V.
+      Self.logger.notice("tier=accessibility: write refused, falling through to clipboard tier")
+    } else {
+      Self.logger.notice(
+        "tier=accessibility: no selection readable, falling through to clipboard tier")
     }
 
     // 2) Clipboard fallback — works in ANY app (Electron/Chrome/etc.), and
@@ -85,6 +101,7 @@ public final class SnippetExpander {
     // selection at all, or read it but couldn't write.
     let result = await clipboardReplacer.replaceSelection(
       bodyForSelection: { await self.body(for: $0) })
+    Self.logger.notice("tier=clipboard: outcome=\(String(describing: result))")
     if result != .replaced {
       beep()
     }

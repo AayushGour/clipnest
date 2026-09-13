@@ -16,6 +16,7 @@ module drives, and [`docs/API.md`](API.md) for the shared, cross-platform
 
 ## Contents
 - [`LinuxAppUpdater`](#linuxappupdater)
+- [`ShellHelperClient.setClipboardText(_:)`](#shellhelperclientsetclipboardtext_)
 - [Working example](#working-example)
 
 ## `LinuxAppUpdater`
@@ -124,6 +125,91 @@ on any thread — hop to your own actor/thread before touching UI):
 
 `LinuxUpdateOutcome` is `.upToDate` / `.succeeded(installedVersion:)` /
 `.failed(LinuxAppUpdaterError)`.
+
+## `ShellHelperClient.setClipboardText(_:)`
+
+Added for T-SNIPPET-FF1 (`DBus/ShellHelperClient.swift`). Writes plain text to
+the system clipboard via the optional GNOME Shell extension's PRIVILEGED
+`Meta.Selection.set_owner` API (`extension/src/core/clipboard.js`'s
+`ClipboardWatcher.setClipboard`, over the existing `SetClipboard(mimetype, fd)
+-> serial` D-Bus method) instead of GDK's client-side Wayland clipboard write.
+
+```swift
+public func setClipboardText(_ text: String) -> Bool
+```
+
+**Why this exists, not just what it does:** GDK's Wayland clipboard backend
+(`gdk_clipboard_set_text` → `gdk_wayland_device_set_selection`) requires a
+FRESH input-event serial from the calling process's own `GdkWaylandSeat`
+before it will call `wl_data_device_set_selection` at all — confirmed against
+GTK's own Wayland backend source. A background process that never holds a
+Clipnest window's keyboard focus (e.g. reacting to a global hotkey) never has
+one, and the compositor then SILENTLY drops the request: no error, no `false`
+return, nothing. `Meta.Selection.set_owner` is the compositor's own internal
+API — no client-side Wayland protocol round trip, hence no serial gate — so
+this method works from exactly that unfocused-background context where GDK's
+write cannot.
+
+- **Returns `false`** (never throws/crashes) whenever the extension isn't
+  installed/active (`ShellHelperCapabilities`'s `.clipboard` capability isn't
+  negotiated), the internal pipe write fails, or the underlying `SetClipboard`
+  D-Bus call doesn't reply within `ShellHelperClient.defaultClipboardWriteTimeout`
+  — callers are expected to fall back to their own ordinary clipboard-write
+  path in that case, exactly as `LinuxClipboardSelectionReplacer
+  .privilegedTextWriter`'s consumer does (see
+  `Clipboard/LinuxClipboardSelectionReplacer.swift`).
+- Mimetype is fixed at `text/plain;charset=utf-8` — this method is a
+  plain-text convenience only; richer types still go through
+  `GTKClipboardWriting`'s existing multi-representation write.
+- The Shell extension is optional and per-user-installable, no root needed:
+  copy `extension/dist/esm/` (GNOME Shell 45+) or `extension/dist/legacy/`
+  (Shell 42–44) to `~/.local/share/gnome-shell/extensions/clipnest@clipnest.app/`
+  and `gnome-extensions enable clipnest@clipnest.app` (a session
+  logout/login is needed the first time a brand-new extension UUID is added,
+  since GNOME Shell only rescans that directory at its own startup — see
+  `extension/README.md`).
+
+**T-SHELLHELPER-TIMEOUT1 (timeout + honest failure reporting):**
+`setClipboardText`'s underlying `SetClipboard(mimetype, fd) -> serial` D-Bus
+call is the one `ShellHelper1` member whose reply waits on real asynchronous
+GIO work in the extension (draining the incoming pipe before the compositor
+can take clipboard ownership), not an instant synchronous reply like every
+other member on this client — so it gets its own, larger timeout rather than
+sharing the default:
+
+```swift
+public init(
+  callConnection: any DBusCalling, signalConnection: DBusConnection?,
+  timeout: Duration = ShellHelperClient.defaultTimeout,               // 250ms — every OTHER member
+  clipboardWriteTimeout: Duration = ShellHelperClient.defaultClipboardWriteTimeout  // 1000ms — SetClipboard only
+)
+```
+
+Measured live against a real GNOME 46 VM (19 real, successful round trips
+across multiple sessions): 2–70ms, so 1000ms carries >14x headroom. See
+`ShellHelperClient.defaultClipboardWriteTimeout`'s doc comment for the full
+measurement writeup, including a real, separate bug this task found and
+fixed along the way: `ClipnestControlService` (the `callConnection` this
+client is wired to in production) never implemented `DBusCalling`'s
+fd-attaching overload at all, so `SetClipboard`/`ReadClipboard` silently
+never reached the wire — no timeout value could have fixed that; see
+`ClipnestControlService.swift`'s own doc comment.
+
+Callers must also not assume "a paste was posted" means "the write
+succeeded" — `LinuxClipboardSelectionReplacer.replaceSelection` still
+attempts the paste even when this write's propagation couldn't be confirmed
+(best effort), but now reports that case as `SelectionReplaceResult
+.writeUnconfirmed`, never `.replaced` — see that enum's doc comment.
+
+**Working example:**
+
+```swift
+// Composition root (LinuxAppLifecycle.wireShellHelper) — wired once a
+// ShellHelperClient exists (strictly after LinuxAppEnvironment.init returns):
+environment.clipboardReplacer.privilegedTextWriter = { [weak client] text in
+  client?.setClipboardText(text) ?? false
+}
+```
 
 ## Working example
 

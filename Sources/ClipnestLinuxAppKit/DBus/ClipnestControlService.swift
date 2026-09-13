@@ -140,27 +140,49 @@ public final class ClipnestControlService: @unchecked Sendable {
   // some other thread call `connection.receiveOneMessage(_:)` directly and
   // race it for the next buffered message.
   //
-  // Scope: only the non-fd `DBusCalling.call(_:timeout:)` overload is
-  // implemented (`SendKeyChord`/`GetPointer`/`PlaceWindow`/etc. — every
-  // ShellHelper1 member the hotkey/paste/placement path needs). The
-  // fd-attaching overload (`ReadClipboard`/`SetClipboard`) is NOT — it
-  // would need `receiveLoop()` switched to the fd-aware receive path too,
-  // a larger, separate change out of this task's scope (clipboard-via-
-  // extension was already just as broken before this fix, for the
-  // identical sender-mismatch reason — this is not a regression).
+  // T-SHELLHELPER-TIMEOUT1 correction: the doc comment that used to sit
+  // here claimed the fd-attaching overload (`ReadClipboard`/`SetClipboard`)
+  // was DELIBERATELY left unimplemented, "out of this task's scope," and
+  // that this was "not a regression" because clipboard-via-extension was
+  // supposedly already broken the same way. That claim was never re-
+  // verified after `T-SNIPPET-FF1` built `ShellHelperClient
+  // .setClipboardText` on top of exactly this connection — and it was
+  // WRONG: live instrumentation (`ShellHelperClient.setClipboard`'s own
+  // round-trip log) showed `SetClipboard` returning in `elapsedMs=0` with
+  // `gotReply=false` on every single attempt, on a real GNOME 46 VM with
+  // the extension active and correctly negotiating `.clipboard` — i.e. the
+  // call never reached the wire at all, regardless of any timeout value.
+  // Root cause: `DBusCalling`'s default `call(_:attachingFileDescriptors
+  // :timeout:)` (this protocol's own "unsupported" no-op, see
+  // `DBusCalling.swift`) was silently doing exactly what its doc comment
+  // promises — returning `nil` for every conformer that doesn't override
+  // it — and `ClipnestControlService` never did. So `T-SNIPPET-FF1`'s
+  // fix could not have worked on ANY machine, extension active or not,
+  // until this override existed; the originally-reported "SetClipboard
+  // measures ~600ms" data point was real, but described the EXTENSION's
+  // own latency in isolation (a probe that bypassed this connection), not
+  // what the shipped Swift call path actually did. Fixed by extracting the
+  // shared serial-allocate/register/send/wait/resolve shape from
+  // `call(_:timeout:)` below into `sendAndAwaitReply(_:timeout:send:)` and
+  // giving both overloads their own thin wrapper around it — the ONLY
+  // difference is which `DBusConnection.send` overload does the actual
+  // write, since a conforming `ShellHelper1` reply never itself carries
+  // fds (`ShellHelperClient.setClipboard`'s own doc comment) and so needs
+  // no separate receive-side handling from `call(_:timeout:)`'s existing
+  // path.
   private let pendingCallCondition = NSCondition()
   private var pendingCallSerials: Set<UInt32> = []
   private var resolvedReplies: [UInt32: DBusMessage] = [:]
 
-  /// Sends `message` on the SAME connection that owns `app.clipnest
-  /// .Clipnest` (see the "T-P10I" doc comment above) and blocks (up to
-  /// `timeout`) for its `METHOD_RETURN`/`ERROR` reply, which `receiveLoop()`
-  /// resolves on this service's own receive thread. `nil` on send failure
-  /// or timeout — matches `DBusConnection.call(_:timeout:)`'s own contract,
-  /// so every degrade-per-feature caller in `ShellHelperClient` (built
-  /// against the `DBusCalling` protocol, not a concrete connection type)
-  /// needs no change to use this instead.
-  public func call(_ message: DBusMessage, timeout: Duration) -> DBusMessage? {
+  /// Shared shape behind both `DBusCalling` overloads below: allocate a
+  /// serial, register it as pending, hand the outgoing message to `send`
+  /// (the one part that differs between the plain and fd-attaching forms),
+  /// then block (up to `timeout`) for `receiveLoop()` to resolve it. `nil`
+  /// on send failure or timeout, matching `DBusConnection.call`'s own
+  /// contract.
+  private func sendAndAwaitReply(
+    _ message: DBusMessage, timeout: Duration, send: (DBusMessage) -> Bool
+  ) -> DBusMessage? {
     var outgoing = message
     let serial = connection.allocateSerial()
     outgoing.serial = serial
@@ -169,7 +191,7 @@ public final class ClipnestControlService: @unchecked Sendable {
     pendingCallSerials.insert(serial)
     pendingCallCondition.unlock()
 
-    guard connection.send(outgoing) else {
+    guard send(outgoing) else {
       pendingCallCondition.lock()
       pendingCallSerials.remove(serial)
       pendingCallCondition.unlock()
@@ -187,6 +209,41 @@ public final class ClipnestControlService: @unchecked Sendable {
     let reply = resolvedReplies.removeValue(forKey: serial)
     pendingCallSerials.remove(serial)
     return reply
+  }
+
+  /// Sends `message` on the SAME connection that owns `app.clipnest
+  /// .Clipnest` (see the "T-P10I" doc comment above) and blocks (up to
+  /// `timeout`) for its `METHOD_RETURN`/`ERROR` reply, which `receiveLoop()`
+  /// resolves on this service's own receive thread. `nil` on send failure
+  /// or timeout — matches `DBusConnection.call(_:timeout:)`'s own contract,
+  /// so every degrade-per-feature caller in `ShellHelperClient` (built
+  /// against the `DBusCalling` protocol, not a concrete connection type)
+  /// needs no change to use this instead.
+  public func call(_ message: DBusMessage, timeout: Duration) -> DBusMessage? {
+    sendAndAwaitReply(message, timeout: timeout) { connection.send($0) }
+  }
+
+  /// Same contract as `call(_:timeout:)`, for `ShellHelper1` members that
+  /// attach real UNIX file descriptors to the OUTGOING call
+  /// (`ReadClipboard`/`SetClipboard` — see `ShellHelperClient`'s own doc
+  /// comments). See the "T-SHELLHELPER-TIMEOUT1 correction" doc comment
+  /// above for why this override didn't exist before and what broke as a
+  /// result. `fileDescriptors` in the return value is always `[]`: a
+  /// conforming extension never attaches fds to one of these replies
+  /// (`ShellHelperClient.setClipboard`'s own doc comment on this exact
+  /// point), and `receiveLoop()`'s existing `connection.receiveOneMessage`
+  /// read already safely closes any fd a non-conforming reply attached
+  /// anyway (see that method's own doc comment) rather than leaking it —
+  /// there is no real descriptor for this method to ever hand back.
+  public func call(
+    _ message: DBusMessage, attachingFileDescriptors: [Int32], timeout: Duration
+  ) -> (message: DBusMessage, fileDescriptors: [Int32])? {
+    guard
+      let reply = sendAndAwaitReply(
+        message, timeout: timeout,
+        send: { connection.send($0, attachingFileDescriptors: attachingFileDescriptors) })
+    else { return nil }
+    return (reply, [])
   }
 
   public var onTogglePicker: () -> Void {
@@ -274,8 +331,9 @@ public final class ClipnestControlService: @unchecked Sendable {
 /// its privileged, sender-checked calls through THIS service's identity
 /// connection instead of an uncorrelated one of its own — see the
 /// "T-P10I: demuxed outgoing calls" doc comment on `ClipnestControlService`
-/// for why that's required, not optional. Only the plain `call(_:timeout:)`
-/// overload is implemented above; the fd-attaching overload falls through
-/// to `DBusCalling`'s own default (`nil` — "unsupported"), same as every
-/// other non-fd-aware conformer.
+/// for why that's required, not optional. BOTH `DBusCalling` overloads are
+/// implemented above as of T-SHELLHELPER-TIMEOUT1 (the fd-attaching one
+/// used to silently fall through to `DBusCalling`'s own "unsupported"
+/// default — see that doc comment for why that was a real, live bug, not
+/// a documented scope cut).
 extension ClipnestControlService: DBusCalling {}

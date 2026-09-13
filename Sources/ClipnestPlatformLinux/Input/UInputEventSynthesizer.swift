@@ -12,13 +12,13 @@ public final class UInputEventSynthesizer: EventSynthesizing, SyntheticKeystroke
   private let device: UInputDevice
   private let layoutResolver: any KeyboardLayoutResolving
   private let modifierWaiter: ModifierReleaseWaiter
-  private let terminalIdentifier: @Sendable (FrontmostAppRef) -> String?
+  private let terminalIdentifier: @Sendable (FrontmostAppRef?) -> String?
 
   public init(
     device: UInputDevice,
     layoutResolver: any KeyboardLayoutResolving,
     modifierWaiter: ModifierReleaseWaiter,
-    terminalIdentifier: @escaping @Sendable (FrontmostAppRef) -> String? = { $0.bundleID }
+    terminalIdentifier: @escaping @Sendable (FrontmostAppRef?) -> String? = { $0?.bundleID }
   ) {
     self.device = device
     self.layoutResolver = layoutResolver
@@ -26,7 +26,18 @@ public final class UInputEventSynthesizer: EventSynthesizing, SyntheticKeystroke
     self.terminalIdentifier = terminalIdentifier
   }
 
-  public func synthesizeCommandV(targeting app: FrontmostAppRef) throws {
+  /// `app == nil` (T-WLPASTE-NIL1: `Paster.synthesizesWithoutVerifiedTarget`)
+  /// means "post globally, no specific target to identify" — this device
+  /// already posts through `/dev/uinput`'s kernel-level injection, which
+  /// has no concept of a target process at all (unlike `CGEvent.postToPid`),
+  /// so the ONLY thing `app` actually informs here is the terminal-modifier
+  /// guess below. `terminalIdentifier(nil)`'s default (`{ $0?.bundleID }`)
+  /// returns `nil`, and `TerminalAppRegistry.modifiers(forAppIdentifier:)`
+  /// already defaults an unknown/`nil` identifier to plain Ctrl+V — the
+  /// same "never assume a target is a terminal without a positive match"
+  /// contract every other unrecognized app already gets, not a special case
+  /// for the unverified-target path.
+  public func synthesizeCommandV(targeting app: FrontmostAppRef?) throws {
     let modifiers = TerminalAppRegistry.modifiers(forAppIdentifier: terminalIdentifier(app))
     guard post(KeyChord(modifiers: modifiers, character: "v")) else {
       throw PasteError.eventPostFailed

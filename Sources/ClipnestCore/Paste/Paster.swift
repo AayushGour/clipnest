@@ -118,12 +118,51 @@ public struct Paster: Sendable {
   /// instead of wherever else currently holds focus.
   public static let defaultSynthesisDelay: Duration = .milliseconds(40)
 
+  private static let logger = ClipnestLogger(subsystem: ClipnestLog.subsystem, category: "Paster")
+
   private let pasteboard: any PasteboardWriting
   private let eventSynthesizer: any EventSynthesizing
   private let isAccessibilityGranted: @Sendable () -> Bool
   private let synthesisDelay: Duration
   private let frontmostAppProvider: any FrontmostAppReferenceProviding
   private let imageNormalizer: any ImageNormalizing
+
+  /// When `true`, `paste()` synthesizes ⌘V with **no specific target**
+  /// (`EventSynthesizing.synthesizeCommandV(targeting: nil)`) even when
+  /// `targetingFrontmostApp` came back `nil` — instead of the silent
+  /// "clipboard-only, no synthesized keystroke" fallback every other
+  /// nil-target case takes (see `paste()`'s doc comment). Named for what it
+  /// MEANS ("this session cannot verify a synthesis target at all"), not
+  /// for a platform — per coding-standards.md's cross-platform-seam rule, a
+  /// platform-named flag invites exactly the "one platform forgot to set
+  /// it" class of bug that rule exists to prevent.
+  ///
+  /// **Defaults to `false` on every platform, including macOS and every
+  /// existing call site that doesn't set it — the original, unchanged
+  /// refuse-to-guess behavior.** This deliberately does NOT route through
+  /// `PlatformDefaults` the way `pasteboard`/`eventSynthesizer`/
+  /// `frontmostAppProvider` above do: there is no macOS-specific value to
+  /// differ, because macOS can always tell "nothing to target" apart from
+  /// "a real app is frontmost but this process can't identify it" — the
+  /// latter case doesn't exist there. It DOES exist on Linux: a native-
+  /// Wayland client is not an X11 client, so `LinuxFrontmostAppReferenceProvider`
+  /// (X11 `_NET_ACTIVE_WINDOW`-based) always resolves it to `nil`, even
+  /// though a real paste backend (uinput) is available and
+  /// `isAccessibilityGranted()` is already `true` — this used to make
+  /// `paste()` silently do nothing for nearly every GNOME app on a default
+  /// Ubuntu Wayland session (T-WLPASTE-NIL1, P0). Only the Linux
+  /// composition root (`LinuxAppEnvironment.swift`) has a reason to
+  /// override this, and does so EXPLICITLY (never relying on this
+  /// default) — see that file's `Paster(...)` construction — only when the
+  /// session genuinely cannot verify a target (not X11).
+  ///
+  /// Skips H-1's re-verification for this path only: there is no captured
+  /// target pid to re-check focus against in the first place (see
+  /// `paste()`'s `else` branch). A verified target — macOS always, Linux
+  /// whenever the target IS an X11/XWayland client — keeps the exact same
+  /// H-1 protection as before, unconditionally; this flag only changes
+  /// what happens when `frontmostApp` is `nil`.
+  private let synthesizesWithoutVerifiedTarget: Bool
 
   /// Every default below resolves through `PlatformDefaults` rather than
   /// naming a concrete AppKit/Linux type directly — see
@@ -140,7 +179,8 @@ public struct Paster: Sendable {
     synthesisDelay: Duration = Paster.defaultSynthesisDelay,
     frontmostAppProvider: any FrontmostAppReferenceProviding = PlatformDefaults
       .frontmostAppProvider,
-    imageNormalizer: any ImageNormalizing = PlatformDefaults.imageNormalizer
+    imageNormalizer: any ImageNormalizing = PlatformDefaults.imageNormalizer,
+    synthesizesWithoutVerifiedTarget: Bool = false
   ) {
     self.pasteboard = pasteboard
     self.eventSynthesizer = eventSynthesizer
@@ -148,6 +188,7 @@ public struct Paster: Sendable {
     self.synthesisDelay = synthesisDelay
     self.frontmostAppProvider = frontmostAppProvider
     self.imageNormalizer = imageNormalizer
+    self.synthesizesWithoutVerifiedTarget = synthesizesWithoutVerifiedTarget
   }
 
   /// Whether `current` — the app that actually holds focus right now, read
@@ -161,14 +202,21 @@ public struct Paster: Sendable {
   }
 
   /// Writes `content` to the pasteboard, then — only if Accessibility is
-  /// granted and a target app was provided — waits `synthesisDelay`,
-  /// re-verifies `frontmostApp` is STILL the app that holds focus, and only
-  /// then synthesizes ⌘V targeting it (typically
-  /// `FrontmostAppTracker.consume()`'s result).
+  /// granted — waits `synthesisDelay` and synthesizes ⌘V. When a target app
+  /// was provided, it re-verifies `frontmostApp` is STILL the app that
+  /// holds focus (H-1) before posting, targeting it specifically (typically
+  /// `FrontmostAppTracker.consume()`'s result). When no target is available
+  /// but `synthesizesWithoutVerifiedTarget` is `true` (see that property's
+  /// doc comment — `false` by default on every platform; only Linux, and
+  /// only on a session that genuinely cannot verify a target, ever sets it),
+  /// it posts globally with no target instead, skipping H-1 (there is
+  /// nothing to re-check against).
   ///
-  /// If Accessibility is not granted, or no target is available, this stops
-  /// after the pasteboard write: no error, no crash, no delay — the
-  /// documented fallback.
+  /// If Accessibility is not granted, or no target is available AND
+  /// `synthesizesWithoutVerifiedTarget` is `false` (every macOS `Paster`,
+  /// and every other caller that never sets it), this stops after the
+  /// pasteboard write: no error, no crash, no delay — the documented
+  /// fallback.
   ///
   /// `async` for three reasons: `synthesisDelay`, `onPasteboardWrite`'s
   /// hop back onto its caller's actor (below), and — for `.image` — the
@@ -268,19 +316,36 @@ public struct Paster: Sendable {
     // (including `synthesisDelay`'s sleep) — see this method's doc comment.
     await onPasteboardWrite?(pasteboard.changeCount)
 
-    guard isAccessibilityGranted(), let frontmostApp else { return }
+    guard isAccessibilityGranted() else { return }
+    // T-WLPASTE-NIL1: a `nil` target used to always mean "nothing to
+    // target, stop here" — now it only means that when this session CAN
+    // verify a target and simply doesn't have one right now. When it can't
+    // verify one AT ALL (`synthesizesWithoutVerifiedTarget`), fall through
+    // to the unverified-target branch below instead of stopping silently.
+    guard frontmostApp != nil || synthesizesWithoutVerifiedTarget else { return }
 
     try? await Task.sleep(for: synthesisDelay)
 
-    // H-1: verify, immediately before posting, that focus hasn't moved to a
-    // different app during synthesisDelay. Do NOT post on a mismatch — see
-    // this method's `Throws` doc and `PasteError.targetNoLongerFrontmost`.
-    let currentFrontmost = frontmostAppProvider.currentFrontmostAppRef()
-    guard Self.isStillFrontmost(current: currentFrontmost, target: frontmostApp) else {
-      throw PasteError.targetNoLongerFrontmost
+    if let frontmostApp {
+      // H-1: verify, immediately before posting, that focus hasn't moved to
+      // a different app during synthesisDelay. Do NOT post on a mismatch —
+      // see this method's `Throws` doc and `PasteError.targetNoLongerFrontmost`.
+      let currentFrontmost = frontmostAppProvider.currentFrontmostAppRef()
+      guard Self.isStillFrontmost(current: currentFrontmost, target: frontmostApp) else {
+        throw PasteError.targetNoLongerFrontmost
+      }
+      try eventSynthesizer.synthesizeCommandV(targeting: frontmostApp)
+    } else {
+      // `synthesizesWithoutVerifiedTarget` is `true` here — the guard above
+      // already ruled out the `false`+`nil` combination. There is no
+      // captured target pid to re-verify (H-1 doesn't apply), so this posts
+      // straight through: metadata only in the log line, never clipboard
+      // content (coding-standards.md's privacy rule).
+      Self.logger.notice(
+        "posting synthesized paste with no verified target — session cannot verify a paste target"
+      )
+      try eventSynthesizer.synthesizeCommandV(targeting: nil)
     }
-
-    try eventSynthesizer.synthesizeCommandV(targeting: frontmostApp)
   }
 }
 

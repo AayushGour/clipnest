@@ -14,7 +14,7 @@ import Foundation
 final class FakeEventSynthesizing: EventSynthesizing, @unchecked Sendable {
   private(set) var invocationCount = 0
 
-  func synthesizeCommandV(targeting app: FrontmostAppRef) throws {
+  func synthesizeCommandV(targeting app: FrontmostAppRef?) throws {
     invocationCount += 1
   }
 }

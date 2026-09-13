@@ -10,7 +10,7 @@ import Foundation
 public struct NullClipboardOnlyEventSynthesizer: EventSynthesizing {
   public init() {}
 
-  public func synthesizeCommandV(targeting app: FrontmostAppRef) throws {
+  public func synthesizeCommandV(targeting app: FrontmostAppRef?) throws {
     throw PasteError.eventPostFailed
   }
 }

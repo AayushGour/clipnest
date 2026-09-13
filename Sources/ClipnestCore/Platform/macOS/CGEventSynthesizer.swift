@@ -32,7 +32,13 @@
     /// posts the chord, via the shared `SyntheticKeystroke` (see M-1: the same
     /// helper `ClipboardSelectionReplacer` uses for its ⌘C/⌘V, so there is one
     /// place that builds and posts synthetic modified keystrokes).
-    public func synthesizeCommandV(targeting app: FrontmostAppRef) throws {
+    ///
+    /// `app` is optional at the protocol level (`EventSynthesizing`'s doc
+    /// comment) so a Linux backend can accept "no verified target" — macOS
+    /// never reaches that case: `Paster.synthesizesWithoutVerifiedTarget`
+    /// defaults to `false` and is never overridden here, so `app` is always
+    /// non-`nil` in practice on this platform.
+    public func synthesizeCommandV(targeting app: FrontmostAppRef?) throws {
       guard SyntheticKeystroke.postCommandModified(Self.vKeyCode) else {
         throw PasteError.eventPostFailed
       }

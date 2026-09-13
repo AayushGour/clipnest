@@ -365,6 +365,17 @@ public enum LinuxAppLifecycle {
         windowToken: windowToken, x: Int32(x), y: Int32(y),
         flags: PlaceWindowFlag.above | PlaceWindowFlag.skipTaskbar)
     }
+    // T-SNIPPET-FF1: see `LinuxClipboardSelectionReplacer
+    // .privilegedTextWriter`'s doc comment for why this exists and
+    // `ShellHelperClient.setClipboardText`'s for the mechanism. No live
+    // re-wiring needed on `onCapabilitiesChanged` (unlike hotkeys above):
+    // `setClipboardText` re-checks `currentCapabilities.supports(.clipboard)`
+    // on every call already, so this closure naturally starts returning
+    // `false` (falling back to `writer.writeString`) the moment the
+    // extension is disabled, with no separate signal to react to.
+    environment.clipboardReplacer.privilegedTextWriter = { [weak client] text in
+      client?.setClipboardText(text) ?? false
+    }
   }
 
   private static func startTray(sessionBusAddress: String, environment: LinuxAppEnvironment) {
@@ -565,6 +576,42 @@ public enum LinuxAppLifecycle {
     thread.start()
   }
 
+  /// Resolves the accelerator to (re)install a GSettings floor binding
+  /// with at launch: the user's own stored value from the shared
+  /// `app.clipnest.Clipnest.Keybindings` schema (read via
+  /// `GlobalHotkeyAccelerator.current(_:)`, `ClipnestGTK`) when one is set,
+  /// falling back to `defaultValue` only when nothing is stored (first
+  /// launch, or the schema was never written to). Extracted as a small
+  /// pure decision — the same "pure logic separated from the real
+  /// GSettings/display I/O" shape `LinuxEventSynthesizerSelection.choose`
+  /// already uses — so the "stored wins, default is a fallback only"
+  /// contract is unit-testable without a real GSettings daemon (see
+  /// `AppLinuxAppLifecycleTests.swift`).
+  ///
+  /// **The bug this fixes:** `installGSettingsFloor()` used to call
+  /// `reinstallFloor(withAccelerator: defaultToggleAccelerator)`
+  /// unconditionally on EVERY launch, silently clobbering a rebind the user
+  /// had already made from Settings > Shortcuts (`GlobalHotkeyAccelerator
+  /// .write`, which persists to the exact same schema `current(_:)` reads
+  /// here) back to the hardcoded default the next time the app started.
+  /// Confirmed live on the VM: Clipnest's own schema held the user's
+  /// rebound `<Shift><Control>v` while GNOME's actual custom keybinding
+  /// still held the hardcoded default `<Super><Shift>v` — the rebind had
+  /// silently never taken effect past the first relaunch.
+  ///
+  /// `nonisolated`: pure `String?`/`String` logic with no actor-isolated
+  /// state to protect — same reasoning `LinuxAppEnvironment.installedVersion`
+  /// already documents for its own `nonisolated static let` on this
+  /// `@MainActor` type's sibling class. Lets `AppLinuxAppLifecycleTests`
+  /// call this from an ordinary synchronous (non-`@MainActor`) test
+  /// function instead of forcing every caller onto the main actor for a
+  /// computation that never touches it.
+  nonisolated static func resolvedAccelerator(storedValue: String?, defaultValue: String)
+    -> String
+  {
+    storedValue ?? defaultValue
+  }
+
   /// Installs BOTH global-hotkey GSettings-floor bindings — toggle-picker
   /// (unchanged) and, as of T-HOTKEY1, expand-snippet (new: previously the
   /// only way to reach `SnippetExpander` without the GNOME Shell extension
@@ -585,8 +632,19 @@ public enum LinuxAppLifecycle {
   /// `CommandLine.arguments.first` (used here previously) silently produced
   /// a non-existent `//clipnest` for the packaged bare-command launch this
   /// app actually ships as, disabling the universal hotkey floor.
+  ///
+  /// T-WLKEY-CLOBBER: now resolves each accelerator via
+  /// `resolvedAccelerator(storedValue:defaultValue:)` above instead of
+  /// passing the hardcoded default straight through — see that function's
+  /// doc comment for the bug this fixes.
   private static func installGSettingsFloor() {
-    ToggleHotkeyFloorBinding.reinstallFloor(withAccelerator: defaultToggleAccelerator)
-    ExpandSnippetHotkeyFloorBinding.reinstallFloor(withAccelerator: defaultExpandSnippetAccelerator)
+    ToggleHotkeyFloorBinding.reinstallFloor(
+      withAccelerator: resolvedAccelerator(
+        storedValue: GlobalHotkeyAccelerator.current(.togglePicker),
+        defaultValue: defaultToggleAccelerator))
+    ExpandSnippetHotkeyFloorBinding.reinstallFloor(
+      withAccelerator: resolvedAccelerator(
+        storedValue: GlobalHotkeyAccelerator.current(.expandSnippet),
+        defaultValue: defaultExpandSnippetAccelerator))
   }
 }

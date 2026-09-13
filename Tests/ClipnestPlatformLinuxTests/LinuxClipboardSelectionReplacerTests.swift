@@ -74,24 +74,38 @@ private final class FakePasteboardWriting: PasteboardWriting, @unchecked Sendabl
   private(set) var writes: [RecordedWrite] = []
   private(set) var changeCount = 0
 
+  /// T-SNIPPET-FF1 regression coverage: simulates the real, asynchronous
+  /// "mutter re-owns the X11 CLIPBOARD selection on this write" propagation
+  /// `GTKClipboardWriting`'s own doc comment describes — every real write
+  /// eventually bumps `X11ClipboardConnection`'s serial via an independent
+  /// XFixes event, just like `FakeSyntheticKeystrokePosting.onCopy` above
+  /// simulates the target app's Ctrl+C response. `nil` (the default) models
+  /// a write whose propagation is never observed, for the specific
+  /// best-effort-timeout test below.
+  var onWrite: (() -> Void)?
+
   func writeString(_ string: String, forType type: ClipMediaType) {
     writes.append(.string(string, type))
     changeCount += 1
+    onWrite?()
   }
 
   func writeData(_ data: Data, forType type: ClipMediaType) {
     writes.append(.data(data, type))
     changeCount += 1
+    onWrite?()
   }
 
   func writeRichText(rtf: Data, plain: String) {
     writes.append(.richText(rtf: rtf, plain: plain))
     changeCount += 1
+    onWrite?()
   }
 
   func writeFileURL(_ url: URL) {
     writes.append(.fileURL(url))
     changeCount += 1
+    onWrite?()
   }
 }
 
@@ -102,9 +116,19 @@ struct LinuxClipboardSelectionReplacerTests {
   private func makeReplacer(
     connection: FakeX11Connection,
     poster: FakeSyntheticKeystrokePosting,
-    writer: FakePasteboardWriting
+    writer: FakePasteboardWriting,
+    simulateWritePropagation: Bool = true
   ) -> LinuxClipboardSelectionReplacer {
-    LinuxClipboardSelectionReplacer(
+    // Realistic default: a real write eventually bumps the connection's
+    // serial via mutter's re-owning of the CLIPBOARD selection (see
+    // `FakePasteboardWriting.onWrite`'s doc comment) — every existing test
+    // below that reaches a write wants this simulated so it isn't paying
+    // the full `copyMaxWait` ceiling for no reason. Only the dedicated
+    // "write propagation times out" test passes `false`.
+    if simulateWritePropagation {
+      writer.onWrite = { connection.changeSerial += 1 }
+    }
+    return LinuxClipboardSelectionReplacer(
       poster: poster,
       pasteboard: LinuxPasteboard(connection: connection),
       writer: writer,
@@ -283,6 +307,105 @@ struct LinuxClipboardSelectionReplacerTests {
     let result = await replacer.replaceSelection { _ in "EXPANDED" }
 
     #expect(result == .noSelection)
+    #expect(writer.writes == [.string("original clip", .string)])
+  }
+
+  @Test(
+    "T-SHELLHELPER-TIMEOUT1: still pastes (best effort) when the expansion-body write's clipboard-ownership propagation is never observed, but reports .writeUnconfirmed (not .replaced) since success was never confirmed"
+  )
+  func stillPastesWhenWritePropagationTimesOut() async {
+    let connection = FakeX11Connection()
+    connection.targets = ["UTF8_STRING"]
+    connection.payloads["UTF8_STRING"] = Data("original clip".utf8)
+
+    let poster = FakeSyntheticKeystrokePosting()
+    poster.onCopy = {
+      connection.targets = ["UTF8_STRING"]
+      connection.payloads["UTF8_STRING"] = Data("selected text".utf8)
+      connection.changeSerial += 1
+    }
+    let writer = FakePasteboardWriting()
+    // `simulateWritePropagation: false` — the expansion-body write never
+    // bumps the connection's serial, modeling the ACTUAL T-SNIPPET-FF1
+    // defect this test guards against: `writer.writeString`
+    // (`gdk_clipboard_set_text`) silently never took effect at all for a
+    // background/unfocused caller like this one (GDK's Wayland clipboard
+    // backend needs a fresh input-event serial this class never has — see
+    // `LinuxClipboardSelectionReplacer.privilegedTextWriter`'s doc comment
+    // for the confirmed root cause). The fix must still attempt the paste
+    // rather than bail out — best-effort, since a target that reads the
+    // clipboard lazily could still get the right content even when this
+    // wait can't confirm it landed. T-SHELLHELPER-TIMEOUT1 fix: this used
+    // to also assert `result == .replaced` here — the exact dishonest-
+    // success bug that task fixed (a paste WAS attempted, but the caller
+    // has no way to know the target actually received the new body rather
+    // than pasting the pre-transaction clipboard back over itself, which is
+    // indistinguishable to the eye from a real success). Now asserts
+    // `.writeUnconfirmed` instead, while the paste-is-still-attempted
+    // behavior itself is unchanged.
+    let replacer = makeReplacer(
+      connection: connection, poster: poster, writer: writer, simulateWritePropagation: false)
+
+    let result = await replacer.replaceSelection { selection in
+      selection == "selected text" ? "EXPANDED" : nil
+    }
+
+    #expect(result == .writeUnconfirmed)
+    #expect(poster.postedChords.map(\.character) == ["c", "v"])
+    #expect(
+      writer.writes == [
+        .string("EXPANDED", .string),
+        .string("original clip", .string),
+      ])
+  }
+
+  // Note: `usesPrivilegedTextWriterWhenAvailable` below already covers the
+  // "propagation IS observed -> .replaced, not .writeUnconfirmed" case (its
+  // `privilegedTextWriter` bumps `connection.changeSerial`, so
+  // `writeObserved` is true) — no separate test duplicates that here.
+
+  @Test(
+    "T-SNIPPET-FF1 fix: when a privileged text writer is wired (the optional GNOME Shell extension is active), it is used INSTEAD of writer.writeString for the expansion body, and its propagation is observed"
+  )
+  func usesPrivilegedTextWriterWhenAvailable() async {
+    let connection = FakeX11Connection()
+    connection.targets = ["UTF8_STRING"]
+    connection.payloads["UTF8_STRING"] = Data("original clip".utf8)
+
+    let poster = FakeSyntheticKeystrokePosting()
+    poster.onCopy = {
+      connection.targets = ["UTF8_STRING"]
+      connection.payloads["UTF8_STRING"] = Data("selected text".utf8)
+      connection.changeSerial += 1
+    }
+    let writer = FakePasteboardWriting()
+    // No `onWrite` propagation simulation on the ordinary writer — if the
+    // privileged path is genuinely preferred, `writer.writeString` should
+    // never be called for the expansion body at all, so its own
+    // propagation would never fire regardless.
+    let replacer = makeReplacer(
+      connection: connection, poster: poster, writer: writer, simulateWritePropagation: false)
+
+    var privilegedWriterCalls: [String] = []
+    replacer.privilegedTextWriter = { text in
+      privilegedWriterCalls.append(text)
+      // Models `Meta.Selection.set_owner` firing the same
+      // `owner-changed`-driven XFixes notify a real write would (see
+      // `ShellHelperClient.setClipboardText`'s doc comment) — the
+      // connection serial DOES bump for this path, unlike the plain
+      // `writer.writeString` fake above.
+      connection.changeSerial += 1
+      return true
+    }
+
+    let result = await replacer.replaceSelection { selection in
+      selection == "selected text" ? "EXPANDED" : nil
+    }
+
+    #expect(result == .replaced)
+    #expect(privilegedWriterCalls == ["EXPANDED"])
+    // The expansion body is written via the privileged path only —
+    // `writer.writes` sees just the final restore, never "EXPANDED".
     #expect(writer.writes == [.string("original clip", .string)])
   }
 }

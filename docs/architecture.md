@@ -135,7 +135,7 @@ Key API surface:
 | `Paster` | `Paste/Paster.swift:136-210` | Writes `PasteContent` to the pasteboard, then — only if Accessibility is granted and a target is available — synthesizes ⌘V into the previously-frontmost app. |
 | `FrontmostAppTracker` | `Paste/FrontmostAppTracker.swift:55-79` | `@MainActor`. `record()`/`consume()` bridge "who was frontmost when the picker was about to open" to "who receives the synthesized paste." |
 | `SnippetExpander` | `Paste/SnippetExpander.swift:28-89` | `@MainActor`. Backs the global ⌥⌘E hotkey: AX-first selection read/replace, clipboard-with-restore fallback. |
-| `EventSynthesizing` (protocol) | `Paste/EventSynthesizing.swift:12-17` | Injectable ⌘V synthesis; real impl `CGEventSynthesizer` in `Paster.swift:91-126`. |
+| `EventSynthesizing` (protocol) | `Paste/EventSynthesizing.swift:12-30` | Injectable ⌘V synthesis; real impl `CGEventSynthesizer` in `Paster.swift:91-126`. |
 | `SelectedTextAccessing` (protocol) | `Paste/SelectedTextAccessing.swift:7-16` | Injectable AX-backed selection read/replace; real impl `AXSelectedTextAccessor` lives in `ClipnestApp` (App-only concrete type behind a Core protocol). |
 | `SelectionReplacing` (protocol) | `Paste/SelectionReplacing.swift:38-45` | `@MainActor` protocol for the universal clipboard-borrow-and-restore fallback; real impl `ClipboardSelectionReplacer` lives in `ClipnestApp`. |
 

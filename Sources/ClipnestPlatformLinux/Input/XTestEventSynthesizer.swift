@@ -34,7 +34,7 @@ public final class XTestEventSynthesizer: EventSynthesizing, SyntheticKeystrokeP
   private let display: OpaquePointer
   private let layoutResolver: any KeyboardLayoutResolving
   private let modifierWaiter: ModifierReleaseWaiter
-  private let terminalIdentifier: @Sendable (FrontmostAppRef) -> String?
+  private let terminalIdentifier: @Sendable (FrontmostAppRef?) -> String?
 
   /// - Returns: `nil` on a Wayland session (see this type's doc comment)
   ///   or if `display` is `nil` (no X server reachable at all).
@@ -43,7 +43,7 @@ public final class XTestEventSynthesizer: EventSynthesizing, SyntheticKeystrokeP
     sessionType: SessionType,
     layoutResolver: any KeyboardLayoutResolving,
     modifierWaiter: ModifierReleaseWaiter,
-    terminalIdentifier: @escaping @Sendable (FrontmostAppRef) -> String? = { $0.bundleID }
+    terminalIdentifier: @escaping @Sendable (FrontmostAppRef?) -> String? = { $0?.bundleID }
   ) {
     guard sessionType == .x11, let display else { return nil }
     self.display = display
@@ -52,7 +52,15 @@ public final class XTestEventSynthesizer: EventSynthesizing, SyntheticKeystrokeP
     self.terminalIdentifier = terminalIdentifier
   }
 
-  public func synthesizeCommandV(targeting app: FrontmostAppRef) throws {
+  /// `app == nil` is unreachable in practice for this backend: `init?`
+  /// above only ever succeeds on an X11 session, and `LinuxAppEnvironment`
+  /// only sets `Paster.synthesizesWithoutVerifiedTarget` when the session
+  /// is NOT X11 (see that property's doc comment) — so `Paster` never has a
+  /// reason to call this with `nil` while an `XTestEventSynthesizer` is the
+  /// active backend. Handled anyway, the same way `UInputEventSynthesizer`
+  /// does, for type-safety and defense in depth rather than relying on that
+  /// invariant holding forever.
+  public func synthesizeCommandV(targeting app: FrontmostAppRef?) throws {
     let modifiers = TerminalAppRegistry.modifiers(forAppIdentifier: terminalIdentifier(app))
     guard post(KeyChord(modifiers: modifiers, character: "v")) else {
       throw PasteError.eventPostFailed

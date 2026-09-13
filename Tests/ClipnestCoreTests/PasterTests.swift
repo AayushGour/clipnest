@@ -66,7 +66,7 @@ private final class MockEventSynthesizing: EventSynthesizing, @unchecked Sendabl
   /// fires strictly before the synthesized keystroke.
   var onInvoke: (() -> Void)?
 
-  func synthesizeCommandV(targeting app: FrontmostAppRef) throws {
+  func synthesizeCommandV(targeting app: FrontmostAppRef?) throws {
     invocationCount += 1
     lastTarget = app
     onInvoke?()
@@ -202,6 +202,94 @@ struct PasterTests {
     try await paster.paste(.text("no target"), targetingFrontmostApp: nil)
 
     #expect(pasteboard.writtenString == "no target")
+    #expect(synthesizer.invocationCount == 0)
+  }
+
+  // MARK: - T-WLPASTE-NIL1: synthesizesWithoutVerifiedTarget
+
+  @Test(
+    "With Accessibility granted, no target, and synthesizesWithoutVerifiedTarget true, synthesizes targeting nil instead of skipping"
+  )
+  func noTargetStillSynthesizesWhenUnverifiedTargetAllowed() async throws {
+    let pasteboard = FakePasteboardWriting()
+    let synthesizer = MockEventSynthesizing()
+    let paster = Paster(
+      pasteboard: pasteboard,
+      eventSynthesizer: synthesizer,
+      isAccessibilityGranted: { true },
+      synthesisDelay: .zero,
+      synthesizesWithoutVerifiedTarget: true
+    )
+
+    try await paster.paste(.text("no verified target"), targetingFrontmostApp: nil)
+
+    #expect(pasteboard.writtenString == "no verified target")
+    #expect(synthesizer.invocationCount == 1)
+    #expect(synthesizer.lastTarget == nil)
+  }
+
+  @Test(
+    "Without Accessibility granted, synthesizesWithoutVerifiedTarget true still never calls the synthesizer"
+  )
+  func unverifiedTargetAllowedNeverOverridesAccessibilityGate() async throws {
+    let pasteboard = FakePasteboardWriting()
+    let synthesizer = MockEventSynthesizing()
+    let paster = Paster(
+      pasteboard: pasteboard,
+      eventSynthesizer: synthesizer,
+      isAccessibilityGranted: { false },
+      synthesisDelay: .zero,
+      synthesizesWithoutVerifiedTarget: true
+    )
+
+    try await paster.paste(.text("still clipboard only"), targetingFrontmostApp: nil)
+
+    #expect(pasteboard.writtenString == "still clipboard only")
+    #expect(synthesizer.invocationCount == 0)
+  }
+
+  @Test(
+    "With a verified target, synthesizesWithoutVerifiedTarget true does not change the verified-target path — H-1 still applies"
+  )
+  func verifiedTargetPathUnaffectedByUnverifiedTargetFlag() async throws {
+    let pasteboard = FakePasteboardWriting()
+    let synthesizer = MockEventSynthesizing()
+    let paster = Paster(
+      pasteboard: pasteboard,
+      eventSynthesizer: synthesizer,
+      isAccessibilityGranted: { true },
+      synthesisDelay: .zero,
+      frontmostAppProvider: stillFrontmostProvider,
+      synthesizesWithoutVerifiedTarget: true
+    )
+
+    try await paster.paste(.text("verified"), targetingFrontmostApp: target)
+
+    #expect(synthesizer.invocationCount == 1)
+    #expect(synthesizer.lastTarget == target)
+  }
+
+  @Test(
+    "With a verified target that is no longer frontmost, synthesizesWithoutVerifiedTarget true still throws targetNoLongerFrontmost rather than falling back to an unverified post"
+  )
+  func verifiedTargetStolenStillThrowsEvenWhenUnverifiedTargetAllowed() async {
+    let pasteboard = FakePasteboardWriting()
+    let synthesizer = MockEventSynthesizing()
+    let stealingApp = FrontmostAppRef(
+      bundleID: "com.example.Stealer", processIdentifier: target.processIdentifier + 1)
+    let paster = Paster(
+      pasteboard: pasteboard,
+      eventSynthesizer: synthesizer,
+      isAccessibilityGranted: { true },
+      synthesisDelay: .zero,
+      frontmostAppProvider: FakeFrontmostAppReferenceProviding(current: stealingApp),
+      synthesizesWithoutVerifiedTarget: true
+    )
+
+    await #expect(throws: PasteError.targetNoLongerFrontmost) {
+      try await paster.paste(.text("sensitive"), targetingFrontmostApp: target)
+    }
+
     #expect(synthesizer.invocationCount == 0)
   }
 

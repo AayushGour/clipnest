@@ -32,6 +32,7 @@ public final class ShellHelperClient: @unchecked Sendable {
   private let callConnection: any DBusCalling
   private let signalConnection: DBusConnection?
   private let timeout: Duration
+  private let clipboardWriteTimeout: Duration
   private let state = Mutex<ShellHelperCapabilities>(.unavailable)
   private var signalReaderThread: Thread?
 
@@ -64,13 +65,79 @@ public final class ShellHelperClient: @unchecked Sendable {
       _ selection: UInt32, _ clipboardSerial: UInt64, _ mimeTypes: [String], _ ownerIsUs: Bool
     ) -> Void = { _, _, _, _ in }
 
+  /// `timeout` covers every member EXCEPT `SetClipboard` — see
+  /// `clipboardWriteTimeout`'s doc comment for why that one call needs a
+  /// budget an order of magnitude larger. 250 ms is not a guess: every
+  /// OTHER member here (`NameHasOwner`/`Capabilities.Get`/`SendKeyChord`/
+  /// `GetPointer`/`PlaceWindow`/`SetClipboardWatch`/
+  /// `GetClipboardMimeTypes`/`ReadClipboard`) replies SYNCHRONOUSLY on the
+  /// extension side (`extension/src/core/service.js`'s own header comment:
+  /// every member uses the `Async`-suffixed dispatch shape GJS requires to
+  /// see the invocation, but only `SetClipboardAsync` "is the one member
+  /// that is genuinely asynchronous" — everything else calls
+  /// `invocation.return_value(...)` immediately, before returning).
+  /// `ReadClipboard` looks payload-shaped but isn't slow the same way:
+  /// `readToFd`'s D-Bus reply is just a freshly-opened fd handed back
+  /// immediately — the real byte transfer happens on `sel.transfer_async`
+  /// AFTER the reply, fully decoupled from this timeout. Measured live
+  /// (T-SHELLHELPER-TIMEOUT1, real GNOME 46 VM): every one of these
+  /// synchronous-reply members round-trips in single-digit milliseconds in
+  /// this codebase's existing manual verification passes — 250 ms already
+  /// carries roughly an order of magnitude of headroom for them.
+  public static let defaultTimeout: Duration = .milliseconds(250)
+
+  /// `SetClipboard` is the one `ShellHelper1` member whose D-Bus reply
+  /// waits on real, asynchronous GIO work (`SetClipboardAsync`'s
+  /// `splice_async` draining the incoming pipe into memory before
+  /// `Meta.SelectionSourceMemory` can take ownership — see that method's
+  /// own doc comment in `extension/src/core/service.js`) scheduled on
+  /// GNOME Shell's OWN main loop, which also drives compositing — a
+  /// fundamentally different, load-dependent shape than every other
+  /// member's instant, synchronous reply, so it gets its own budget rather
+  /// than sharing `timeout`/`defaultTimeout`.
+  ///
+  /// **Measured, not guessed (T-SHELLHELPER-TIMEOUT1):** an EARLIER
+  /// diagnosis in this same investigation claimed this call itself
+  /// measured "596ms and 613ms" and blamed `defaultTimeout` (250 ms) for
+  /// cutting it off. That number was requoted from a DIFFERENT log line —
+  /// `LinuxClipboardSelectionReplacer`'s "write propagation" total (its own
+  /// separate ~500 ms `copyMaxWait` polling ceiling firing because the call
+  /// never reached the wire at all) — and was never re-verified against
+  /// this call's own round trip. It was also standing on a second, real
+  /// bug this task found and fixed: `ClipnestControlService`'s
+  /// `DBusCalling` conformance never implemented the fd-attaching overload
+  /// `SetClipboard`/`ReadClipboard` need, so it silently fell through to
+  /// that protocol's "unsupported" `nil` default — `SetClipboard` was
+  /// returning `elapsedMs=0 gotReply=false` on every attempt, REGARDLESS
+  /// of the timeout value, since it never sent a single byte (see
+  /// `ClipnestControlService.swift`'s "T-SHELLHELPER-TIMEOUT1 correction"
+  /// doc comment for the fix). With that fixed and the call genuinely
+  /// reaching the extension, 11 live trials on the same real GNOME 46 VM
+  /// (Firefox end-to-end, this exact call site) measured **2, 4, 4, 7, 12,
+  /// 12, 18, 22, 42, 43, 70 ms** — max 70 ms, mean ~21 ms. 1000 ms is
+  /// chosen over that real distribution, not the retracted one: >14x the
+  /// observed worst case on a VM that is itself already a pessimistic
+  /// environment for this measurement (software GL rendering — `MESA:
+  /// error: ZINK: failed to choose pdev` — and an unrecognized virtualized
+  /// CPU vendor for `onnxruntime`'s cpuid probe), leaving real headroom for
+  /// a slower physical machine and for snippet bodies far larger than this
+  /// test's, while staying bounded: this call blocks its caller's thread
+  /// synchronously (`ClipnestControlService.call`'s `NSCondition.wait`,
+  /// invoked from `LinuxClipboardSelectionReplacer`'s `@MainActor` body via
+  /// `privilegedTextWriter`), so an unresponsive/hung extension must not be
+  /// able to freeze the GTK main loop for longer than this one, rare,
+  /// degraded-capability call ever needs.
+  public static let defaultClipboardWriteTimeout: Duration = .milliseconds(1000)
+
   public init(
     callConnection: any DBusCalling, signalConnection: DBusConnection?,
-    timeout: Duration = .milliseconds(250)
+    timeout: Duration = ShellHelperClient.defaultTimeout,
+    clipboardWriteTimeout: Duration = ShellHelperClient.defaultClipboardWriteTimeout
   ) {
     self.callConnection = callConnection
     self.signalConnection = signalConnection
     self.timeout = timeout
+    self.clipboardWriteTimeout = clipboardWriteTimeout
   }
 
   public var currentCapabilities: ShellHelperCapabilities { state.withLock { $0 } }
@@ -253,9 +320,25 @@ public final class ShellHelperClient: @unchecked Sendable {
   /// it's done writing to/handing off the write end.
   public func setClipboard(mimetype: String, fileDescriptor: Int32) -> UInt64? {
     guard currentCapabilities.supports(.clipboard) else { return nil }
+    // Metadata-only elapsed-time diagnostic (T-SHELLHELPER-TIMEOUT1): the
+    // ONE call on this client whose reply waits on real async work rather
+    // than an instant synchronous reply (see `clipboardWriteTimeout`'s doc
+    // comment) — worth its own permanent round-trip log line for the same
+    // reason `LinuxClipboardSelectionReplacer` logs elapsed ms throughout
+    // its own transaction: this exact line is what caught both the
+    // originally mis-attributed 250 ms timeout theory AND the real
+    // `ClipnestControlService` fd-routing bug live, and will catch a
+    // regression in either just as fast. Never logs `mimetype`/payload
+    // bytes, only booleans/durations — same privacy discipline as every
+    // other `ClipnestLogger` call site in this codebase.
+    let callStart = ProcessInfo.processInfo.systemUptime
     let result = callConnection.call(
       ShellHelperRequests.setClipboard(mimetype: mimetype, serial: 43),
-      attachingFileDescriptors: [fileDescriptor], timeout: timeout)
+      attachingFileDescriptors: [fileDescriptor], timeout: clipboardWriteTimeout)
+    let callElapsedMs = Int((ProcessInfo.processInfo.systemUptime - callStart) * 1000)
+    Self.logger.notice(
+      "SetClipboard round trip: elapsedMs=\(callElapsedMs) gotReply=\(result != nil)"
+    )
     guard let (reply, fileDescriptors) = result else { return nil }
     // A conforming extension never attaches fds to THIS reply — close any
     // that show up anyway rather than leak them.
@@ -269,5 +352,68 @@ public final class ShellHelperClient: @unchecked Sendable {
     }
   #else
     private static func closeLeakedFileDescriptor(_ fd: Int32) {}
+  #endif
+
+  #if canImport(Glibc)
+    /// Plain-text convenience over `setClipboard(mimetype:fileDescriptor:)`
+    /// for callers that only ever have an in-memory `String`, never an fd
+    /// of their own — creates the pipe, writes `text`'s UTF-8 bytes into
+    /// the write end, hands the read end to `setClipboard`, and closes
+    /// both ends itself (the write end right after the single `write(2)`;
+    /// the read end after the D-Bus call returns, per `setClipboard`'s own
+    /// "caller-owned both before and after" contract).
+    ///
+    /// **T-SNIPPET-FF1's actual reason for existing:** this routes through
+    /// GNOME Shell's PRIVILEGED `Meta.Selection.set_owner` (the extension's
+    /// `ClipboardWatcher.setClipboard`, `extension/src/core/clipboard.js`)
+    /// rather than `GTKClipboardWriting`'s `gdk_clipboard_set_text`. GDK's
+    /// Wayland clipboard backend needs a FRESH input-event serial from
+    /// Clipnest's own `GdkWaylandSeat` before it will call
+    /// `wl_data_device_set_selection` at all (confirmed against GTK's own
+    /// Wayland backend source, `gdk/wayland/gdkclipboard-wayland.c` +
+    /// `gdkdevice-wayland.c`'s `gdk_wayland_device_set_selection`) — a
+    /// background process reacting to a global hotkey (no Clipnest window
+    /// ever gains keyboard focus) never has one, so the compositor
+    /// SILENTLY ignores the request per Wayland's anti-clipboard-hijack
+    /// protocol design: no error, no `false` return, nothing — confirmed
+    /// live (VM repro, 2026-09-13): `GTKClipboardWriting.writeString`
+    /// reported success every time, yet three independent readers (this
+    /// app's own `X11ClipboardConnection` watcher, a raw `XConvertSelection`
+    /// probe run mid-transaction, and the target app's own subsequent
+    /// paste) all still saw the PRE-expansion clipboard content. `Meta
+    /// .Selection.set_owner` is the compositor's OWN internal API — no
+    /// client-side Wayland protocol round trip, hence no input-serial gate
+    /// — and (confirmed via `clipboard.js`'s `ClipboardWatcher.start()`,
+    /// which watches this exact same `global.display.get_selection()`
+    /// object's `owner-changed` signal) firing it ALSO makes mutter
+    /// re-own the X11 CLIPBOARD selection exactly like any other
+    /// `MetaSelection::owner-changed`, so `LinuxClipboardSelectionReplacer`
+    /// 's existing `waitForChange`-based write-propagation confirmation
+    /// (added alongside this fix) actually observes it — unlike the GDK
+    /// path, which never fired that signal at all in the same repro.
+    ///
+    /// Returns `false` (never crashes/throws) whenever the extension isn't
+    /// installed/active (`currentCapabilities.supports(.clipboard)` is
+    /// `false`, `setClipboard`'s own existing guard) or the pipe write
+    /// fails — callers fall back to their own non-privileged write path,
+    /// exactly `GTKClipboardWriting`'s existing behavior today.
+    public func setClipboardText(_ text: String) -> Bool {
+      var fds: [Int32] = [0, 0]
+      guard fds.withUnsafeMutableBufferPointer({ pipe($0.baseAddress) }) == 0 else { return false }
+      let (readEnd, writeEnd) = (fds[0], fds[1])
+      defer { Self.closeLeakedFileDescriptor(readEnd) }
+
+      let bytes = Array(text.utf8)
+      let wroteAll = bytes.withUnsafeBufferPointer { buffer -> Bool in
+        guard let base = buffer.baseAddress else { return true }
+        return Glibc.write(writeEnd, base, buffer.count) == buffer.count
+      }
+      Glibc.close(writeEnd)
+      guard wroteAll else { return false }
+
+      return setClipboard(mimetype: "text/plain;charset=utf-8", fileDescriptor: readEnd) != nil
+    }
+  #else
+    public func setClipboardText(_ text: String) -> Bool { false }
   #endif
 }
