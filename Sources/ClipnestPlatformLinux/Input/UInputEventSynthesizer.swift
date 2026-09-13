@@ -11,18 +11,18 @@ import Foundation
 public final class UInputEventSynthesizer: EventSynthesizing, SyntheticKeystrokePosting {
   private let device: UInputDevice
   private let layoutResolver: any KeyboardLayoutResolving
-  private let modifierWaiter: ModifierReleaseWaiter
+  private let modifierGuard: any ModifierGuarding
   private let terminalIdentifier: @Sendable (FrontmostAppRef?) -> String?
 
   public init(
     device: UInputDevice,
     layoutResolver: any KeyboardLayoutResolving,
-    modifierWaiter: ModifierReleaseWaiter,
+    modifierGuard: any ModifierGuarding,
     terminalIdentifier: @escaping @Sendable (FrontmostAppRef?) -> String? = { $0?.bundleID }
   ) {
     self.device = device
     self.layoutResolver = layoutResolver
-    self.modifierWaiter = modifierWaiter
+    self.modifierGuard = modifierGuard
     self.terminalIdentifier = terminalIdentifier
   }
 
@@ -61,10 +61,13 @@ public final class UInputEventSynthesizer: EventSynthesizing, SyntheticKeystroke
     }
 
     // D16/D39 mitigation: never post with a physically-held modifier still
-    // asserted (see `ModifierReleaseWaiter`'s doc comment) — the kernel
-    // merges uinput's injected state with real physical state
-    // unconditionally, unlike macOS's `.privateState` `CGEventSource`.
-    guard modifierWaiter.waitForRelease() == .released else { return false }
+    // asserted (see `ModifierGuarding`'s doc comment) — the kernel merges
+    // uinput's injected state with real physical state unconditionally,
+    // unlike macOS's `.privateState` `CGEventSource`. Which STRATEGY runs
+    // here (wait-and-observe vs. force-release) is `modifierGuard`'s
+    // choice, made once at construction by `LinuxEventSynthesizerFactory`
+    // based on session type — this call site doesn't need to know which.
+    guard modifierGuard.clearInterferingModifiers() else { return false }
 
     for code in modifierCodes {
       guard device.postKeyEvent(code: code, isPress: true) else { return false }

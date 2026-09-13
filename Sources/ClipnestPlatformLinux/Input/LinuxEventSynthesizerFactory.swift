@@ -23,12 +23,24 @@ public enum LinuxEventSynthesizerFactory {
     if let device = UInputDevice.open() {
       let display = XOpenDisplay(nil)
       let layoutResolver = X11KeyboardLayoutResolver(display: display)
-      let reader: any ModifierMaskReading =
-        display.map { X11ModifierMaskReader(display: $0) } ?? NullModifierMaskReader()
-      let modifierWaiter = ModifierReleaseWaiter(reader: reader)
+      // T-MODWAIT-WAYLAND1: `XQueryPointer` only reflects true physical
+      // modifier state on a real X11 session — under Wayland (XWayland
+      // reachable or not) it reports an empty mask while modifiers are
+      // physically held whenever a native-Wayland window has focus, so
+      // `WaitForReleaseModifierGuard` would be inert there. Branch on
+      // `sessionType`, not display reachability, per that finding.
+      let modifierGuard: any ModifierGuarding
+      switch sessionType {
+      case .x11:
+        let reader: any ModifierMaskReading =
+          display.map { X11ModifierMaskReader(display: $0) } ?? NullModifierMaskReader()
+        modifierGuard = WaitForReleaseModifierGuard(waiter: ModifierReleaseWaiter(reader: reader))
+      case .wayland, .unknown:
+        modifierGuard = ForceReleaseModifierGuard(device: device)
+      }
       return (
         UInputEventSynthesizer(
-          device: device, layoutResolver: layoutResolver, modifierWaiter: modifierWaiter),
+          device: device, layoutResolver: layoutResolver, modifierGuard: modifierGuard),
         .uinput
       )
     }

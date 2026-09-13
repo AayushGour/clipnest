@@ -25,11 +25,18 @@ import Foundation
 /// 100%-failure one for snippet expansion (see
 /// `LinuxClipboardSelectionReplacer`'s own notes). This is the
 /// coding-standards.md false-success family: a call that cannot express
-/// "I do not know" is forced to answer "nothing held". A correct fix needs
-/// a modifier source the compositor actually feeds — the Shell-extension
-/// companion `ModifierMaskReading`'s doc comment already names — plus a
-/// third state so an unknown reading can never be mistaken for an empty
-/// one.
+/// "I do not know" is forced to answer "nothing held".
+///
+/// **RESOLVED for the uinput backend (T-MODWAIT-WAYLAND1, 2026-09-14):**
+/// this class itself is unchanged and is still correct — and still used —
+/// for real `.x11` sessions (see `LinuxEventSynthesizerFactory`'s
+/// per-session-type branch); the fix does not touch it. What changed is
+/// that `.wayland`/`.unknown` sessions no longer route through this class
+/// at all: `ForceReleaseModifierGuard` (`ModifierGuarding.swift`) replaces
+/// the READ this class cannot make trustworthy on Wayland with an
+/// unconditional uinput-level RELEASE of every tracked modifier keycode
+/// before each chord, sidestepping the "I do not know" problem entirely
+/// rather than trying to answer it.
 ///
 /// Assumes the common `Mod1Mask` = Alt / `Mod4Mask` = Super convention —
 /// true for every mainstream desktop's default modifier mapping. A user

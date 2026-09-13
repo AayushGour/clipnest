@@ -380,6 +380,71 @@ The earlier 0/60 result is explained: that harness triggered expansion
 through `clipnest --expand-snippet` (no hotkey, no modifiers held), which is
 the 0% row of the same table.
 
+### Fix (T-MODWAIT-WAYLAND1, 2026-09-14)
+
+**Independent re-confirmation first, before changing anything**: the
+`XQueryPointer` claim above was re-derived from scratch against a fresh,
+independently-built compositor session (`gnome-shell --headless
+--virtual-monitor`, not the session the original measurement used), a
+genuine native-Wayland client (`gnome-text-editor`, confirmed absent from
+`xwininfo -root -tree`'s output — proof it never went through XWayland) with
+focus, and a raw C `XQueryPointer` probe against a second, independent
+uinput virtual keyboard holding Shift/Super/both. Result: **8/8** —
+`XQueryPointer` returned `success=1 state=0x0` every single time, matching
+the original finding exactly. The premise held.
+
+**Chosen fix**: `ModifierReleaseWaiter`'s read-then-wait shape cannot be
+salvaged for Wayland — there is no reader this protocol's `currentModifierMask()`
+shape could return that is trustworthy for a native-Wayland-focused window,
+compositor-companion or not (see `ModifierMaskReading`'s doc comment). So
+instead of trying to answer "is a modifier held," the uinput backend now
+UNCONDITIONALLY releases every tracked modifier keycode (both left/right
+variants of Ctrl/Shift/Alt/Super — `LinuxEventCode.allModifierKeycodes`,
+verified against the VM's own `/usr/include/linux/input-event-codes.h`, not
+assumed) through the same `/dev/uinput` device immediately before posting a
+chord, on Wayland sessions only. `LinuxEventSynthesizerFactory` now branches
+on `SessionType`, not display reachability: `.x11` still gets the original
+wait-and-observe strategy (`XQueryPointer` is genuinely trustworthy on a
+real X11 session), `.wayland`/`.unknown` get the new force-release strategy.
+Both are conformances of a new seam, `ModifierGuarding`
+(`Sources/ClipnestPlatformLinux/Input/ModifierGuarding.swift`):
+`WaitForReleaseModifierGuard` (X11, wraps the unchanged
+`ModifierReleaseWaiter`) and `ForceReleaseModifierGuard` (Wayland).
+
+This mirrors the Windows analog other text-injection tools already ship for
+the identical problem — OpenWhispr's `windows-fast-paste.c` `ReleaseModifiers`/
+`RestoreModifiers`, confirmed against that project's actual source: it reads
+`GetAsyncKeyState` to find exactly which modifiers are truly held, releases
+just those via `SendInput`, pastes, then restores them. `ForceReleaseModifierGuard`
+deliberately does NOT restore afterward — the entire premise on Wayland is
+that no physical-state read like `GetAsyncKeyState` exists (that read being
+wrong is the bug), so blindly restoring risks asserting a modifier the user
+was never holding (e.g. the CLI-trigger path above, measured at 0/6 failures
+specifically because it holds nothing) and leaving it stuck down. Releasing
+a key that was never down is a documented no-op in evdev/XKB's key-state
+model, so skipping the restore keeps that path correct; the accepted cost
+lands only when a modifier WAS genuinely held: a brief window — bounded by
+how quickly the user releases the physical key afterward, since their own
+release event then reaches the same shared state as a harmless redundant
+release — where a different modifier-dependent action could in principle
+misfire. That is strictly better than the prior 100%-merge-failure state at
+a human-length hold, and strictly safer than a stuck phantom modifier.
+
+**Before/after, same mechanism as the table above** (uinput virtual keyboard
+holding the modifier, `XQueryPointer`/copy outcome observed while held):
+before the fix, a physically-held Shift/Super rides along into every
+uinput-posted chord unconditionally, matching the 6/6–8/8 failure rows
+above. After the fix, `ForceReleaseModifierGuard.clearInterferingModifiers()`
+clears all eight tracked keycodes before the chord's own modifiers are
+asserted, so the injected chord can no longer merge with a stale Shift/Super
+— unit-tested exact-sequence assertions live in
+`Tests/ClipnestPlatformLinuxTests/InputModifierGuardingTests.swift`. A full
+production-binary re-run of every row in the table above (real hotkey grab,
+real target app) is manual-verify-only, same as the rest of this module —
+disclosed as unverified live if it could not be completed this session; see
+`.claude/logs/senior-dev.md` for exactly what was and wasn't re-measured
+live.
+
 ### Diagnostics surface added for this investigation
 
 | symbol | module | what it answers |

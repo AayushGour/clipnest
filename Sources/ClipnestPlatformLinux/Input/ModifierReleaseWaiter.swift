@@ -30,6 +30,14 @@ public enum ModifierWaitOutcome: Equatable, Sendable {
 /// `sleep` defaults to a real blocking implementation
 /// (`BlockingSleep.sleep`) and is injected here purely so tests run
 /// instantly with no real delay.
+///
+/// Trustworthy only when `reader` is: real on a genuine X11 session
+/// (`X11ModifierMaskReader`'s `XQueryPointer`), inert on Wayland (see that
+/// class's doc comment, T-MODWAIT-WAYLAND1). `LinuxEventSynthesizerFactory`
+/// therefore wraps this type in `WaitForReleaseModifierGuard` for `.x11`
+/// sessions only; Wayland sessions use the unrelated
+/// `ForceReleaseModifierGuard` strategy instead (`ModifierGuarding.swift`),
+/// which doesn't read anything. This type itself is otherwise unchanged.
 public struct ModifierReleaseWaiter: Sendable {
   private let reader: any ModifierMaskReading
   private let pollInterval: Duration

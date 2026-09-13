@@ -73,6 +73,17 @@ public enum UInputError: Error, Equatable, Sendable {
   }
 #endif
 
+/// Minimal seam over `UInputDevice.postKeyEvent`, injected so a
+/// collaborator's exact keycode/press sequence is unit-testable with a
+/// fake, instead of depending on the concrete manual-verify-only device —
+/// mirrors this module's existing pattern of injecting a protocol rather
+/// than a real I/O type (`KeyboardLayoutResolving`, `ModifierMaskReading`).
+/// `ForceReleaseModifierGuard` is the first conformer to need this.
+public protocol KeyEventPosting: Sendable {
+  @discardableResult
+  func postKeyEvent(code: UInt16, isPress: Bool) -> Bool
+}
+
 /// Owns ONE `/dev/uinput` virtual keyboard file descriptor for the whole
 /// process lifetime. Manual-verify only: there is no `/dev/uinput` in the
 /// CI container this ships to, so nothing here is exercised by
@@ -87,7 +98,7 @@ public enum UInputError: Error, Equatable, Sendable {
 /// (out of this module's scope) is responsible for calling `open()` once
 /// at app startup, off the main thread — this type itself has no
 /// threading opinion beyond "don't call this twice."
-public final class UInputDevice: Sendable {
+public final class UInputDevice: KeyEventPosting, Sendable {
   private let fileDescriptor: Int32
 
   private init(fileDescriptor: Int32) {

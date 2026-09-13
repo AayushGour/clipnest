@@ -30,14 +30,21 @@ public enum UInputDeviceSetupLayout {
 }
 
 /// Linux event-type and modifier/base keycodes this module ever emits —
-/// `linux/input-event-codes.h`'s stable numbering.
+/// `linux/input-event-codes.h`'s stable numbering. Verified against the
+/// actual kernel UAPI header (`/usr/include/linux/input-event-codes.h`)
+/// on the Ubuntu 24.04 arm64 test VM, not assumed from memory.
 public enum LinuxEventCode {
   public static let evSyn: UInt16 = 0x00
   public static let evKey: UInt16 = 0x01
   public static let synReport: UInt16 = 0
   public static let keyLeftCtrl: UInt16 = 29
+  public static let keyRightCtrl: UInt16 = 97
   public static let keyLeftShift: UInt16 = 42
+  public static let keyRightShift: UInt16 = 54
+  public static let keyLeftAlt: UInt16 = 56
+  public static let keyRightAlt: UInt16 = 100
   public static let keyLeftMeta: UInt16 = 125  // Super/Windows key
+  public static let keyRightMeta: UInt16 = 126
   /// Highest kernel keycode this device registers via `UI_SET_KEYBIT` at
   /// setup — covers every standard key (letters, digits, punctuation,
   /// modifiers, function keys). The exact keycode sent for the base
@@ -46,6 +53,21 @@ public enum LinuxEventCode {
   /// before `UI_DEV_CREATE`: uinput refuses to emit an unregistered keycode
   /// later.
   public static let maxRegisteredKeycode: UInt16 = 255
+
+  /// Every modifier keycode `ForceReleaseModifierGuard` clears before a
+  /// uinput-posted chord — both left/right variants of all four
+  /// `ModifierMask` families. A GNOME accelerator string
+  /// (`<Super><Shift>E`) never says which physical key satisfies it, and
+  /// this module has no reliable way to ask which one the user actually
+  /// pressed on Wayland (see `ModifierMaskReading`'s Wayland-gap doc
+  /// comment) — so every variant is cleared unconditionally rather than
+  /// guessing.
+  public static let allModifierKeycodes: [UInt16] = [
+    keyLeftCtrl, keyRightCtrl,
+    keyLeftShift, keyRightShift,
+    keyLeftAlt, keyRightAlt,
+    keyLeftMeta, keyRightMeta,
+  ]
 }
 
 /// `linux/input.h`'s `BUS_VIRTUAL` — the one bus-type value this module
