@@ -18,6 +18,7 @@ module drives, and [`docs/API.md`](API.md) for the shared, cross-platform
 - [`LinuxAppUpdater`](#linuxappupdater)
 - [`ShellHelperClient.setClipboardText(_:)`](#shellhelperclientsetclipboardtext_)
 - [`LinuxClipboardSelectionReplacer`'s copy-sentinel detection (T-COPYFLAKE1)](#linuxclipboardselectionreplacers-copy-sentinel-detection-t-copyflake1)
+- [`GSettingsCustomKeybinding` — the GSettings hotkey floor stayed dead after the Shell extension was disabled (T-HOTKEYFLOOR-GAP1)](#gsettingscustomkeybinding--the-gsettings-hotkey-floor-stayed-dead-after-the-shell-extension-was-disabled-t-hotkeyfloor-gap1)
 - [Working example](#working-example)
 
 ## `LinuxAppUpdater`
@@ -452,12 +453,82 @@ live.
 | `LinuxPasteboard.selectionOwnerWindowID` / `X11SelectionConnecting.selectionOwnerWindowID()` | `ClipnestPlatformLinux` | which X11 window owns CLIPBOARD right now (`XGetSelectionOwner`). On a GNOME Wayland session this is always mutter's own selection-bridge window, for every client — so it cannot identify WHICH app answered a copy, and that is itself worth knowing before anyone designs around it. |
 | `LinuxClipboardSelectionReplacer.focusProbe` | `ClipnestLinuxAppKit` | optional hook, wired by `LinuxAppLifecycle.wireShellHelper`, returning the compositor's own focused-window identity at the instant of the synthesized Ctrl+C. |
 | `ShellHelperClient.getFocusedApp()` / `ShellFocusedApp` | `ClipnestLinuxAppKit` | decoded `GetFocusedApp()` reply (app id, human-readable app name, WM class, pid, mutter window serial, x11-vs-wayland client type). This is `GetFocusedApp`'s FIRST Swift caller — the method had been implemented, tested and shipped in the extension with no reader at all, one of the dead paths `coding-standards.md` lists. `logDescription` (N3 fix) now renders every field including `name` — it was decoded and stored but left out of this rendering with no other reader anywhere, the same dead-path shape one level down. |
-| `GSettingsCustomKeybinding`'s `gsettings floor install: … bindingChanged=<bool>` log line | `ClipnestLinuxAppKit` | whether the floor re-install actually CHANGED the stored accelerator. gnome-settings-daemon re-grabs on a GSettings `changed` signal, so a value-identical re-write produces no re-grab — "Clipnest wrote the floor" and "gsd holds the grab" are different facts and now read differently. |
+| `GSettingsCustomKeybinding`'s `gsettings floor install: … bindingChanged=<bool>` log line | `ClipnestLinuxAppKit` | Swift's OWN diagnostic view of whether the stored accelerator differed from last time. As of the T-HOTKEYFLOOR-GAP1 fix below this **no longer gates whether a grab is attempted** — `install` always forces a fresh grab attempt regardless of this value, precisely because `bindingChanged=false` was shown to NOT mean "gsd's grab is fine." Kept for diagnostics only; see the dedicated section below for the full mechanism and fix. |
 
 Every field these emit is metadata — booleans, counts, elapsed ms, window
 ids, WM classes. No log line added here can carry clipboard or selection
 content; `isSentinelOnClipboard` reads the clipboard string but collapses it
 to a `Bool` before it can reach a log line.
+
+## `GSettingsCustomKeybinding` — the GSettings hotkey floor stayed dead after the Shell extension was disabled (T-HOTKEYFLOOR-GAP1)
+
+**Bug report**: after `gnome-extensions disable clipnest@clipnest.app`, both
+global hotkeys (`<Super><Shift>v` toggle, `<Super><Shift>e` expand) were
+observed dead on some retries while `dconf dump` showed the GSettings
+custom-keybinding floor values present and correct, and Clipnest's own state
+had already reconciled (`hotkey backend resolved: gsettingsFloor (was
+shellExtensionKeybinding)`). This directly contradicted
+`LinuxAppLifecycle.resolveAndApplyHotkeyBackend`'s own doc-comment guarantee
+that a user is never left with a dead hotkey and no fallback.
+
+### Root cause (measured live against a real `gnome-shell`/`gsd-media-keys`, not inferred from source)
+
+`gnome-settings-daemon`'s media-keys plugin only calls
+`org.gnome.Shell.GrabAccelerators` to (re-)acquire a custom keybinding's
+accelerator in reaction to a **genuine GSettings value change** on that
+binding's `binding` key — confirmed by capturing the real session bus with
+`dbus-monitor --session` while writing the key both ways: a value-identical
+`gsettings set` produced zero `GrabAccelerators` calls; a genuinely different
+value produced one within ~90 ms. `GSettingsCustomKeybinding.install` was
+writing the SAME accelerator on every steady-state reconcile (the floor is
+(re)installed on every hotkey-backend reconcile, not just once — see
+`LinuxAppLifecycle.resolveAndApplyHotkeyBackend`), so gsd never even
+attempted a re-grab after the Shell extension (which had been winning the
+single exclusive Mutter grab for that accelerator via its own
+`Main.wm.addKeybinding`, `extension/src/core/keybindings.js`) released it.
+
+This is a **permanent gap, not a narrow timing race**: a failure-rate-vs-delay
+sweep (12 trials/bucket, 72 trials total) pressing the hotkey at 0.0 / 0.2 /
+0.5 / 1.0 / 2.0 / 5.0 seconds after disabling the extension measured **0/72
+successes at every single delay** once the floor's Mutter grab had never been
+validly acquired — waiting longer never helped, because gsd was never asked
+to retry. The grab can also fail to be acquired in the FIRST place: if the
+Shell extension already holds the same accelerator at the moment gsd's one
+genuine attempt fires, that attempt loses the race, confirmed by
+`GrabAccelerators`' own return value — `0` (Shell's documented failure
+sentinel) when contended, a real nonzero action id (e.g. `766`) when
+uncontested.
+
+### Fix
+
+`GSettingsCustomKeybinding.install` now writes the `binding` key through
+`bindingWriteSequence(for:)` — a small pure, unit-tested helper
+(`Tests/ClipnestPlatformLinuxTests/AppGSettingsCustomKeybindingTests.swift`)
+that returns `["", binding]` for any non-empty accelerator (`""` is the
+schema's own "no binding" convention, the same one GNOME Settings' Keyboard
+panel uses to clear a shortcut — not an invented sentinel). Writing the empty
+value first, then the real value, forces a genuine transition on **every**
+call, regardless of whether the caller's value matches what was last
+installed, so gsd always gets a fresh reason to attempt the grab at exactly
+the moment the floor might be the only thing left holding the hotkey. The
+diagnostic `bindingChanged` field logged by `install` is unaffected and
+remains useful, but no longer gates the fix — see this file's diagnostics
+table above.
+
+**Before/after, same measurement**: re-running the identical
+disable-then-press sweep against the fixed binary reached **72/72** across
+every delay bucket (0.0 through 5.0 s), including the harder case where the
+Shell extension held the accelerator immediately before being disabled
+(reproduced end to end through the real `onCapabilitiesChanged` reconcile
+path, not a simulated write).
+
+**Rejected**: gating the forced write on `previousBinding != binding`. That
+comparison is exactly what let this bug ship — it reflects Swift's own
+cached value, not whether gsd's Mutter grab is actually live, and using it to
+skip the second write would silently reintroduce the gap for every
+steady-state reconcile (the common case this floor exists to cover). Also
+rejected: simply waiting longer before pressing — the sweep above shows the
+window never closes on its own, at any delay tested.
 
 ## Working example
 

@@ -504,8 +504,21 @@ public enum LinuxAppLifecycle {
   /// for its own call site (a user-initiated rebind, via a DIFFERENT
   /// accelerator than the extension's own keybinding schema uses — Mutter
   /// grants each its own grab); this generalizes it to every resolution.
-  /// `GSettingsCustomKeybinding.install` is idempotent — safe to call
-  /// repeatedly with no observable effect when nothing changed.
+  /// **T-HOTKEYFLOOR-GAP1 correction:** `GSettingsCustomKeybinding.install`
+  /// used to be describable as "idempotent — safe to call repeatedly with
+  /// no observable effect when nothing changed", but that "no observable
+  /// effect" framing was the bug: a value-identical rewrite is exactly what
+  /// every steady-state reconcile call here makes, and gnome-settings-daemon
+  /// only re-grabs the accelerator with Mutter on a genuine GSettings value
+  /// change — so "nothing changed" meant "gsd never even tries", which
+  /// left the floor holding no live grab at all after the Shell extension
+  /// (which had been winning the single exclusive grab for that
+  /// accelerator) was disabled. `install` now forces a real transition on
+  /// the `binding` key on every call specifically so this is always safe to
+  /// call repeatedly, INCLUDING when nothing looks like it changed — see
+  /// that method's own doc comment for the live D-Bus evidence
+  /// (`org.gnome.Shell.GrabAccelerators` returning a failed `0` vs a real
+  /// action id).
   @discardableResult
   @MainActor
   private static func resolveAndApplyHotkeyBackend(shellHelperClient: ShellHelperClient?) -> Bool {

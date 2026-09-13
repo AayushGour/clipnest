@@ -44,9 +44,20 @@ public enum ToggleHotkeyFloorBinding {
   /// regardless of which hotkey tier is currently active
   /// (`HotkeyBackendResolver`) — if the Shell extension is live, Mutter's
   /// own single-grab-per-accelerator semantics mean this floor simply never
-  /// wins the grab; if the extension is absent or later disabled, the floor
-  /// already carries the correct, current accelerator rather than a stale
-  /// one from first launch.
+  /// wins the grab.
+  ///
+  /// **T-HOTKEYFLOOR-GAP1 correction:** the rest of this sentence used to
+  /// read "if the extension is absent or later disabled, the floor already
+  /// carries the correct, current accelerator rather than a stale one" —
+  /// true of the GSettings VALUE, false of the Mutter GRAB, and this file
+  /// conflated the two. Measured live: gnome-settings-daemon only calls
+  /// `org.gnome.Shell.GrabAccelerators` in reaction to a genuine value
+  /// change on the `binding` key, so "the floor already carries the
+  /// accelerator" said nothing about whether gsd ever actually held a live
+  /// grab for it — in 72/72 trials it had not, and the hotkey stayed dead
+  /// after the extension was disabled regardless of how long the wait was.
+  /// `GSettingsCustomKeybinding.install` now forces a real value transition
+  /// on every call for exactly this reason — see its own doc comment.
   public static func reinstallFloor(withAccelerator accelerator: String) {
     GSettingsCustomKeybinding.install(
       name: bindingLabel,
