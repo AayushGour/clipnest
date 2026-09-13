@@ -49,3 +49,8 @@ var InputSynthesizer = class InputSynthesizer {
     return this.sendChord(keyval, modifierKeyvals) ? 'ok' : 'unsupported';
   }
 };
+
+// Appended by build.sh for the esm variant only -- see this file's
+// header comment. src/core/input.js is unmodified; legacy's var globals are
+// untouched.
+export { InputSynthesizer };

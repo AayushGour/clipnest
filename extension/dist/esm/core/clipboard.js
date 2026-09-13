@@ -194,3 +194,8 @@ var ClipboardWatcher = class ClipboardWatcher {
     return this._serial;
   }
 };
+
+// Appended by build.sh for the esm variant only -- see this file's
+// header comment. src/core/clipboard.js is unmodified; legacy's var globals are
+// untouched.
+export { ClipboardWatcher };

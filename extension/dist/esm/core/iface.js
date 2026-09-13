@@ -101,3 +101,8 @@ var IFACE_XML = `<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introsp
   </interface>
 </node>
 `;
+
+// Appended by build.sh for the esm variant only -- see this file's
+// header comment. src/core/iface.js is unmodified; legacy's var globals are
+// untouched.
+export { IFACE_XML };

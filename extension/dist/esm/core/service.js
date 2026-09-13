@@ -340,3 +340,8 @@ var ShellHelperService = class ShellHelperService {
     this._replyVoid(invocation);
   }
 };
+
+// Appended by build.sh for the esm variant only -- see this file's
+// header comment. src/core/service.js is unmodified; legacy's var globals are
+// untouched.
+export { ShellHelperService };

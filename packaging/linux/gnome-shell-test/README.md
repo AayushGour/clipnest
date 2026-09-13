@@ -359,3 +359,105 @@ single serialized dispatch point), a file three other agents were working
 in concurrently with this task; reported for the owner of that file /
 architect to pick up, not patched piecemeal. Decision + full trial log:
 `.claude/project-context.md` (new decision) and `.claude/logs/senior-dev.md`.
+
+## Update 2026-09-13 (senior-dev): Shell 45+ leg added (noble / GNOME 46) — T-EXT-ESM-BROKEN1
+
+**The gap this leg closes.** Every container above is `ubuntu:22.04` (GNOME
+Shell 42.9), which only ever installs and exercises `extension/dist/legacy`.
+It has NEVER exercised `extension/dist/esm` — the variant every Shell 45+
+install actually loads (all current Ubuntu, including 24.04). That variant
+had zero ESM exports in its core modules and failed to load on every real
+Shell 45+ (`gnome-extensions enable` → `State: ERROR`, `SyntaxError:
+ambiguous indirect export: ClipboardWatcher @ .../extension.js:3:9`) for the
+extension's entire history, entirely unnoticed by this directory's own
+harness. Root cause and fix are in `extension/build.sh`'s header comment
+(short version: `src/core/*.js` is legacy-style with no `export` statements;
+`build.sh` now appends a generated `export { ... };` block to the copy it
+places under `dist/esm/core/` only — `dist/legacy` and `src/core/*.js`
+itself are untouched).
+
+**New files, mirroring this directory's existing systemd+Xvfb approach but
+targeting Shell 46:**
+- `Dockerfile.noble` — `ubuntu:24.04` + a real `gnome-shell`/mutter, same
+  systemd-as-PID-1 approach as the jammy `Dockerfile` above. Does **not**
+  install the `clipnest` .deb (building the Swift app is orthogonal to a
+  JS-parse-level defect in the extension itself); instead it bakes in
+  `extension/dist` and the compiled GSettings schemas directly, matching
+  what `debian/clipnest.install`/`debian/rules` place at
+  `/usr/share/clipnest/gnome-shell-extension/` and
+  `/usr/share/glib-2.0/schemas/` respectively. **Needed `gjs` added
+  explicitly to the package list** — noble's `gnome-shell` package does not
+  pull it in strongly enough to actually install it, and its absence breaks
+  the separate `org.gnome.Shell.Extensions` D-Bus-activatable app with a
+  confusingly generic "Failed to execute program ...: No such file or
+  directory" (really: `gjs` itself isn't installed) — found the hard way
+  bringing this leg up, not assumed.
+- `run-noble-esm-test.sh` — a real, scriptable, exit-code-driven gate (not
+  just documented manual steps like the jammy leg's "Running" section
+  above): builds the image, boots the container, creates the test user,
+  launches the typed logind session, installs+enables the `esm` variant,
+  restarts the session once (first-UUID-scan requirement, same as this
+  file's own Troubleshooting section below), then asserts the result. Exit
+  0 = pass, 1 = the extension failed to load correctly, 2 = an infra problem
+  before the assertion could even run.
+
+**Two real rough edges found and worked around, both documented in the
+script's own header comment:**
+1. `ubuntu:24.04`'s cloud image ships a pre-existing `ubuntu` user already
+   on uid 1000 — unlike jammy, so `useradd`'s new test user lands on
+   whatever uid is actually free (1001 observed). Hardcoding `1000`
+   throughout, as the jammy README's manual steps do, silently targets the
+   WRONG user's `/run/user/<uid>` for the rest of the script (surfaced as
+   `dconf-CRITICAL: unable to create directory '/run/user/1000/dconf':
+   Permission denied`). Fixed by reading the real uid back with `id -u`
+   instead of assuming it.
+2. On Shell 45+, `gnome-extensions enable`/`list`/`info` are no longer
+   answered directly by `gnome-shell` for CLI purposes — the CLI D-Bus-
+   activates a separate, GTK-based `org.gnome.Shell.Extensions` app, which
+   needs `DISPLAY`/`HOME` threaded all the way into `dbus-daemon`'s own
+   activation environment (`dbus-update-activation-environment`, not just
+   the `docker exec` environment) to even start, and — even once started —
+   still failed to see a just-installed extension in this minimal harness
+   (a real but separate rough edge in that standalone app's own extension
+   scan, unrelated to the ESM defect this leg exists to catch). Worked
+   around entirely: the script enables via `gsettings set org.gnome.shell
+   enabled-extensions` directly (confirmed to be literally what the CLI's
+   own `enable` subcommand does — see this file's Troubleshooting section
+   above) and asserts via a **direct `gdbus call` to the real, already-
+   running `org.gnome.Shell` process's own `/org/gnome/Shell` object**
+   (`org.gnome.Shell.Extensions.GetExtensionInfo`), mirroring how
+   `probe_shell_helper.py` etc. already talk to the shell for the jammy leg
+   above: call the real object directly, don't go through a wrapper that
+   adds its own failure modes.
+
+**Verified as a real gate, both directions, live in this Docker harness —
+not assumed:**
+- With the ORIGINAL (pre-fix), zero-export `src/core/*.js` copied verbatim
+  into the esm bundle (i.e. exactly what shipped before this task):
+  `GetExtensionInfo` returns `state: <3.0>` (ERROR) with
+  `error: <'SyntaxError: ambiguous indirect export: ClipboardWatcher @
+  file:///home/gtester/.local/share/gnome-shell/extensions/
+  clipnest@clipnest.app/extension.js:3:9'>` — the **exact** error reported
+  live on the real Ubuntu 24.04 / GNOME Shell 46 VM that opened this task.
+- With `build.sh`'s generated `export { ... };` block restored:
+  `GetExtensionInfo` returns `state: <1.0>` (ENABLED — "ACTIVE" in
+  `gnome-extensions info`'s own wording) and `error: <''>`.
+- `run-noble-esm-test.sh` run end-to-end, clean, twice in a row: `PASS:
+  clipnest@clipnest.app (esm variant) is state ENABLED/ACTIVE on GNOME
+  Shell 46 / Ubuntu 24.04, no error, no JS ERROR`, exit code 0.
+
+A second, faster, no-Docker-needed check for the same class of defect —
+`extension/test/build.esm-exports.test.sh` (mechanically confirms every
+`src/core/*.js` top-level `var` gets a matching `dist/esm` export and that
+every `entry-esm.js` import from `./core/` resolves to one) — lives next to
+the existing `test/*.test.js` gjs tests; see `extension/README.md`'s Tests
+section.
+
+**Not covered by this leg** (same limitation the jammy leg already has,
+unrelated to the ESM fix): the actual `clipnest` binary / real hotkey and
+D-Bus-method dispatch against the `esm` variant specifically — this leg
+only proves the extension *loads and stays error-free*, matching Task 2's
+"at minimum" bar. Full app-level parity re-verification of every
+`ShellHelper1` method against a real Shell-46 Mutter, the way the jammy
+container's Findings section above did for Shell 42, was out of this task's
+scope.

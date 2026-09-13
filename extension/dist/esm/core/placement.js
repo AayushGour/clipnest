@@ -205,3 +205,8 @@ var Placement = class Placement {
     return info;
   }
 };
+
+// Appended by build.sh for the esm variant only -- see this file's
+// header comment. src/core/placement.js is unmodified; legacy's var globals are
+// untouched.
+export { Placement };

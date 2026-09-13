@@ -54,3 +54,8 @@ var Keybindings = class Keybindings {
     this._changedId = 0;
   }
 };
+
+// Appended by build.sh for the esm variant only -- see this file's
+// header comment. src/core/keybindings.js is unmodified; legacy's var globals are
+// untouched.
+export { Keybindings };
