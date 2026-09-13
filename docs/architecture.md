@@ -137,7 +137,7 @@ Key API surface:
 | `SnippetExpander` | `Paste/SnippetExpander.swift:28-89` | `@MainActor`. Backs the global ⌥⌘E hotkey: AX-first selection read/replace, clipboard-with-restore fallback. |
 | `EventSynthesizing` (protocol) | `Paste/EventSynthesizing.swift:12-30` | Injectable ⌘V synthesis; real impl `CGEventSynthesizer` in `Paster.swift:91-126`. |
 | `SelectedTextAccessing` (protocol) | `Paste/SelectedTextAccessing.swift:7-16` | Injectable AX-backed selection read/replace; real impl `AXSelectedTextAccessor` lives in `ClipnestApp` (App-only concrete type behind a Core protocol). |
-| `SelectionReplacing` (protocol) | `Paste/SelectionReplacing.swift:38-45` | `@MainActor` protocol for the universal clipboard-borrow-and-restore fallback; real impl `ClipboardSelectionReplacer` lives in `ClipnestApp`. |
+| `SelectionReplacing` (protocol) | `Paste/SelectionReplacing.swift:99-106` | `@MainActor` protocol for the universal clipboard-borrow-and-restore fallback; real impl `ClipboardSelectionReplacer` lives in `ClipnestApp`. `SelectionReplaceResult` (`:4-72`) gained `.declinedTerminalTarget` (T-TERMPASTE1) — the transaction declines outright, before any clipboard I/O, when the frontmost app is a known terminal emulator, since its copy-then-paste-with-no-delete-step mechanism corrupts text there instead of replacing it. |
 
 `PasteContent` (`Paste/Paster.swift:27-32`) has **four** cases — `.text(String)`, `.image(Data)`, `.file(URL)`, `.richText(rtf: Data, plain: String)` — the last of which post-dates `docs/API.md`'s documented three-case enum; `Paster.paste(_:targetingFrontmostApp:)` (`Paste/Paster.swift:179-209`) handles all four, writing both `.rtf` and `.string` representations for `.richText` via `PasteboardWriting.writeRichText(rtf:plain:)` (`Paste/Paster.swift:56-59, 78-82`).
 
@@ -223,13 +223,13 @@ Both SwiftData stores share a package-internal `deleteBlobs(for:using:)` helper 
 | `HotkeyManager` | `System/HotkeyManager.swift:54-66` | Registers the two global hotkeys via `KeyboardShortcuts`. |
 | `PermissionsManager` | `System/PermissionsManager.swift:42-89` | Thin wrapper over `AXIsProcessTrusted()`/`AXIsProcessTrustedWithOptions(_:)` — the single place Accessibility trust state is read. |
 | `AXSelectedTextAccessor` | `System/SelectedTextAccessing.swift:20-52` | Concrete `SelectedTextAccessing`, backed by the system-wide AX focused element. |
-| `ClipboardSelectionReplacer` | `System/ClipboardSelectionReplacer.swift:22-134` | Concrete `SelectionReplacing` — the universal synthesized-copy/paste-with-restore fallback. |
+| `ClipboardSelectionReplacer` | `System/ClipboardSelectionReplacer.swift:108-296` | Concrete `SelectionReplacing` — the universal synthesized-copy/paste-with-restore fallback. Declines outright (no clipboard I/O) when the frontmost app is a known terminal emulator (`MacTerminalAppRegistry`, T-TERMPASTE1). |
 
 `HotkeyManager` defines two `KeyboardShortcuts.Name`s: `.togglePicker` (default **⌥⌘V**) and `.expandSnippet` (default **⌥⌘E**) (`System/HotkeyManager.swift:29-40`); `register(onToggle:)`/`registerExpandSnippet(onExpand:)` are thin `KeyboardShortcuts.onKeyDown` calls (`System/HotkeyManager.swift:57-65`).
 
 `PermissionsManager` exposes two distinct checks with different UX consequences: `isGranted` (silent — feeds the picker's paste-availability check and must never prompt) and `isGrantedPromptingIfNeeded()` (prompts macOS's "grant access" dialog if not already granted — used **only** from an actual paste attempt, never from launch or opening the picker) (`System/PermissionsManager.swift:49-89`).
 
-`ClipboardSelectionReplacer.replaceSelection(bodyForSelection:)` (`System/ClipboardSelectionReplacer.swift:50-84`) owns the entire clipboard-borrow transaction: suppress → snapshot → synthesize ⌘C → resolve body → write body + synthesize ⌘V → restore snapshot → re-enable, all under one `defer`.
+`ClipboardSelectionReplacer.replaceSelection(bodyForSelection:)` (`System/ClipboardSelectionReplacer.swift:163-243`) first checks whether the frontmost app (`FrontmostAppReferenceProviding`) is a known terminal emulator (`MacTerminalAppRegistry.isTerminal(bundleIdentifier:)`, T-TERMPASTE1) and returns `.declinedTerminalTarget` immediately if so — no suppression, no snapshot, no synthesized keystroke, since this transaction's copy-then-paste-with-no-delete-step mechanism would corrupt text there instead of replacing it. Otherwise it owns the entire clipboard-borrow transaction: suppress → snapshot → synthesize ⌘C → resolve body → write body + synthesize ⌘V → restore snapshot → re-enable, all under one `defer`.
 
 #### UI/Picker (+ UI/Components) — `ClipnestApp/Sources/UI/`
 
@@ -386,28 +386,33 @@ sequenceDiagram
         end
     else AX can't read a selection (Electron/Chrome/Java apps)
         Exp->>CR: replaceSelection(bodyForSelection:)
-        CR->>Monitor: beginSuppression() -> pause()
-        CR->>CR: snapshot current clipboard
-        CR->>CR: synthesize ⌘C, poll for pasteboard change (<=500ms)
-        alt clipboard changed
-            CR->>Store: bodyForSelection(selection) -> findByKeyword
-            alt match
-                CR->>CR: write body to clipboard, synthesize ⌘V, settle 120ms
-            else no match
-                Note over CR: returns .noMatch
+        CR->>CR: is frontmost app a known terminal? (MacTerminalAppRegistry, T-TERMPASTE1)
+        alt frontmost app is a terminal
+            Note over CR: returns .declinedTerminalTarget — NO clipboard I/O at all
+        else not a terminal
+            CR->>Monitor: beginSuppression() -> pause()
+            CR->>CR: snapshot current clipboard
+            CR->>CR: synthesize ⌘C, poll for pasteboard change (<=500ms)
+            alt clipboard changed
+                CR->>Store: bodyForSelection(selection) -> findByKeyword
+                alt match
+                    CR->>CR: write body to clipboard, synthesize ⌘V, settle 120ms
+                else no match
+                    Note over CR: returns .noMatch
+                end
+            else no change
+                Note over CR: returns .noSelection
             end
-        else no change
-            Note over CR: returns .noSelection
+            CR->>CR: restore original clipboard snapshot
+            CR->>Monitor: ignore(changeCount) + resume()
         end
-        CR->>CR: restore original clipboard snapshot
-        CR->>Monitor: ignore(changeCount) + resume()
         alt result != .replaced
             Exp->>Exp: beep()
         end
     end
 ```
 
-Grounding: `SnippetExpander.expand()` (`Sources/ClipnestCore/Paste/SnippetExpander.swift:62-88`); `ClipboardSelectionReplacer.replaceSelection(bodyForSelection:)` (`ClipnestApp/Sources/System/ClipboardSelectionReplacer.swift:50-84`); `SnippetStore.findByKeyword(_:)` (`Sources/ClipnestCore/Store/SnippetStore.swift:40-44`, implemented at `Sources/ClipnestCore/Store/SwiftDataSnippetStore.swift:195-215`). The suppression wiring (`beginSuppression`/`endSuppression` → `ClipboardMonitor.pause()`/`.ignore(changeCount:)`+`.resume()`) is set up in `AppEnvironment.init` (`ClipnestApp/Sources/App/AppEnvironment.swift:238-247`) so the transient copy/paste never lands in captured history and the restored clipboard isn't itself recaptured.
+Grounding: `SnippetExpander.expand()` (`Sources/ClipnestCore/Paste/SnippetExpander.swift:74-108`); `ClipboardSelectionReplacer.replaceSelection(bodyForSelection:)` (`ClipnestApp/Sources/System/ClipboardSelectionReplacer.swift:163-243`, terminal-decline gate at `:163-178`); `MacTerminalAppRegistry.isTerminal(bundleIdentifier:)` (`Sources/ClipnestCore/Platform/macOS/MacTerminalAppRegistry.swift`); `SelectionReplaceResult.declinedTerminalTarget` (`Sources/ClipnestCore/Paste/SelectionReplacing.swift:35-71`); `SnippetStore.findByKeyword(_:)` (`Sources/ClipnestCore/Store/SnippetStore.swift:40-44`, implemented at `Sources/ClipnestCore/Store/SwiftDataSnippetStore.swift:195-215`). The suppression wiring (`beginSuppression`/`endSuppression` → `ClipboardMonitor.pause()`/`.ignore(changeCount:)`+`.resume()`) is set up in `AppEnvironment.init` (`ClipnestApp/Sources/App/AppEnvironment.swift:238-247`) so the transient copy/paste never lands in captured history and the restored clipboard isn't itself recaptured — none of it runs at all on the terminal-decline path.
 
 ---
 

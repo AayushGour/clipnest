@@ -17,6 +17,7 @@ module drives, and [`docs/API.md`](API.md) for the shared, cross-platform
 ## Contents
 - [`LinuxAppUpdater`](#linuxappupdater)
 - [`ShellHelperClient.setClipboardText(_:)`](#shellhelperclientsetclipboardtext_)
+- [`LinuxClipboardSelectionReplacer` declines terminal-class targets before any I/O (T-TERMPASTE1)](#linuxclipboardselectionreplacer-declines-terminal-class-targets-before-any-io-t-termpaste1)
 - [`LinuxClipboardSelectionReplacer`'s copy-sentinel detection (T-COPYFLAKE1)](#linuxclipboardselectionreplacers-copy-sentinel-detection-t-copyflake1)
 - [`GSettingsCustomKeybinding` — the GSettings hotkey floor stayed dead after the Shell extension was disabled (T-HOTKEYFLOOR-GAP1)](#gsettingscustomkeybinding--the-gsettings-hotkey-floor-stayed-dead-after-the-shell-extension-was-disabled-t-hotkeyfloor-gap1)
 - [Working example](#working-example)
@@ -212,6 +213,63 @@ environment.clipboardReplacer.privilegedTextWriter = { [weak client] text in
   client?.setClipboardText(text) ?? false
 }
 ```
+
+## `LinuxClipboardSelectionReplacer` declines terminal-class targets before any I/O (T-TERMPASTE1)
+
+`replaceSelection` checks the frontmost app FIRST, before any of the
+copy-sentinel/write machinery documented below ever runs:
+
+```swift
+let isTerminalTarget =
+  TerminalAppRegistry.modifiers(forAppIdentifier: frontmostRef?.bundleID) == [.control, .shift]
+guard !isTerminalTarget else {
+  return .declinedTerminalTarget   // no suppression, no snapshot, no keystroke
+}
+```
+
+**Why:** this class's only replace mechanism is Copy-then-Paste with no
+explicit delete step — it relies on "paste replaces the OS-level
+selection," which is false for terminal emulators, where a mouse-drag
+highlight is a cosmetic, copy-only artifact disconnected from the shell's
+real cursor. Left unguarded, every expansion in a terminal corrupts the
+line into `<keyword><body>` instead of replacing it (this is the SAME
+defect macOS's `ClipboardSelectionReplacer` has — confirmed live there,
+2/2 trials, Terminal.app — present here by identical construction, per
+this task's routing brief). `TerminalAppRegistry` is reused for this check
+purely because its identifier vocabulary already exists (WM_CLASS/desktop-
+file identifiers), NOT for its usual reason (picking Ctrl+Shift+C/V so
+copy/paste functions at all in a terminal) — a positive match here means
+"never attempt this transaction," full stop, since chord selection alone
+never fixes the missing-delete-step corruption. Once past this gate,
+`runTransaction` always uses plain `.control` for both keystrokes — the
+Ctrl+Shift chord path is dead for this specific caller and was removed
+from it rather than left unreachable.
+
+Sending backspaces first (to erase the highlighted text before pasting)
+was considered and rejected — verified against real prior art (espanso,
+AutoKey, both checked against their actual source, not marketing docs):
+both erase-then-inject only because they track the trigger being TYPED,
+keystroke by keystroke, so the backspace count is a known quantity tied to
+the real cursor. This class's "keyword" is whatever the user mouse-drag-
+highlighted — a quantity never observed being typed, whose position
+relative to the real cursor is unknowable in a terminal (the whole reason
+this bug exists). Backspacing that many characters would delete that many
+WRONG characters at the actual cursor position: silent, wrong-location data
+destruction, strictly worse than the visible append it would replace.
+
+**Reachability:** requires a PRE-EXISTING drag selection — the ordinary
+flow (type keyword, press the hotkey with nothing selected) already
+returns `.noSelection` and beeps, unaffected. Not exercised on the real
+GNOME VM for this task (no display attached in that session at the time),
+but the decision itself and its "zero clipboard I/O on decline" contract
+are covered by `LinuxClipboardSelectionReplacerTests`
+(`declinesTerminalTargetBeforeAnyClipboardIO`,
+`nonTerminalFrontmostAppStillRunsNormalTransaction`) and were run against a
+real aarch64 Ubuntu build on the project's GNOME VM (full `clipnest`
+binary + full test target build succeeded; the affected suite plus the
+untouched `TerminalAppRegistryTests` were run directly rather than the
+whole `ClipnestPlatformLinuxTests` target, to avoid the known pre-existing
+GSettings-mutating test elsewhere in that target).
 
 ## `LinuxClipboardSelectionReplacer`'s copy-sentinel detection (T-COPYFLAKE1)
 

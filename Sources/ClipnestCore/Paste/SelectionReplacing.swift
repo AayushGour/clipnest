@@ -32,6 +32,43 @@ public enum SelectionReplaceResult: Sendable, Equatable {
   /// `SnippetExpander.expand()`'s existing `if result != .replaced {
   /// beep() }` already does, with no code change needed there.
   case copyUnconfirmed
+  /// T-TERMPASTE1: the target app is a known terminal emulator, so this
+  /// transaction was declined BEFORE any clipboard I/O — no synthesized
+  /// ⌘C/Ctrl+C, no synthesized ⌘V/Ctrl+V, no snapshot/restore, nothing.
+  ///
+  /// Every other case in this enum describes an outcome of RUNNING the
+  /// copy → match → paste transaction. This one exists because the
+  /// transaction's only replace mechanism — paste, with no explicit delete
+  /// step, relying on "paste replaces the OS-level selection" — is true for
+  /// AppKit/WebKit/Electron controls but categorically FALSE for terminal
+  /// emulators: a mouse-drag highlight there is a cosmetic, copy-only
+  /// artifact with no tie to the shell's real cursor position (confirmed
+  /// live, 2/2 trials, Terminal.app: the highlighted keyword stayed put and
+  /// the snippet body was appended right after it — a corrupting APPEND,
+  /// not a replace, every single time this app's own drag-select-then-
+  /// hotkey UX is used in a terminal). Sending N backspaces first (N = the
+  /// highlighted text's length) was considered and rejected: verified
+  /// against real source for both espanso and AutoKey (via DeepWiki, not
+  /// assumed from marketing docs), every prior-art text expander that
+  /// erases-then-injects does so ONLY because it tracked every keystroke of
+  /// the trigger AS IT WAS TYPED, so the backspace count is a known,
+  /// trusted quantity tied to the real cursor. This app's "keyword" is
+  /// whatever the user mouse-drag-highlighted — a quantity never observed
+  /// being typed and whose position relative to the real cursor is
+  /// unknowable in a terminal. Backspacing that many characters would
+  /// delete that many WRONG characters at the actual cursor position:
+  /// silent, wrong-location data destruction, strictly worse than the
+  /// visible append it would replace. Declining outright — the only choice
+  /// that leaves the terminal byte-identical to before the hotkey was
+  /// pressed — is the fix. Treated as a failure exactly like every other
+  /// non-`.replaced` case: `SnippetExpander.expand()`'s existing `if result
+  /// != .replaced { beep() }` already does this, no code change needed
+  /// there. Kept as its own case (not folded into `.noSelection`, which
+  /// would be false here — something WAS selected) for the same reason
+  /// `.writeUnconfirmed`/`.copyUnconfirmed` are their own cases: a future
+  /// reader/caller/log needs to be able to tell "declined, nothing
+  /// touched" apart from "attempted and failed."
+  case declinedTerminalTarget
 }
 
 /// Universal, works-in-any-app fallback for replacing the current selection —

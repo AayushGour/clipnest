@@ -27,7 +27,7 @@ own `Error` enum — see [Error handling](#error-handling).
 - [Media](#media) — `ImagePixelHashing`, `CoreGraphicsImagePixelHasher`
 - [OCR](#ocr) — `TextRecognizing`, `VisionTextRecognizer`, `OCRBackfillCoordinator`
 - [Search](#search) — `SearchQuery`, `SearchHighlighter`
-- [Paste](#paste) — `Paster`, `PasteContent`, `FrontmostAppTracker`
+- [Paste](#paste) — `Paster`, `PasteContent`, `FrontmostAppTracker`, `SnippetExpander`, `SelectionReplacing`
 - [Error handling](#error-handling)
 - [Working example — capture → search → paste, end to end](#working-example--capture--search--paste-end-to-end)
 
@@ -664,6 +664,95 @@ should receive the synthesized paste" — `record()`/`consume()` are
 deliberately separate calls (not a lazy read at paste time) because the
 picker panel doesn't itself steal focus, but focus can still shift
 transiently before the user makes a selection.
+
+### `SnippetExpander` + `SelectionReplacing`
+
+```swift
+@MainActor
+public final class SnippetExpander {
+  public init(
+    snippetStore: any SnippetStore,
+    selectedText: any SelectedTextAccessing,
+    clipboardReplacer: any SelectionReplacing,
+    beep: @escaping () -> Void = PlatformDefaults.beep
+  )
+  public func expand() async
+}
+
+public enum SelectionReplaceResult: Sendable, Equatable {
+  case replaced             // selection was read, matched, and replaced
+  case noSelection          // nothing readable was selected
+  case noMatch              // a selection was read but matched no snippet
+  case writeUnconfirmed     // paste WAS attempted, but the body write could
+                            // never be confirmed before it was posted
+  case copyUnconfirmed      // content changed but neither wait strategy
+                            // could confirm it landed before the ceiling
+  case declinedTerminalTarget  // frontmost app is a known terminal — declined
+                                // BEFORE any clipboard I/O (see below)
+}
+
+@MainActor
+public protocol SelectionReplacing {
+  func replaceSelection(bodyForSelection: (String) async -> String?) async
+    -> SelectionReplaceResult
+}
+```
+Backs the global snippet-expansion hotkey (⌥⌘E). `expand()` tries two
+strategies in order:
+1. **Accessibility first** (`SelectedTextAccessing`) — reads/replaces the
+   selection directly, no clipboard side effect, on native/most Cocoa text.
+2. **Clipboard fallback** (`SelectionReplacing`) — reached when AX can't
+   read the selection, reads an untrusted role, or the AX write is refused/
+   unverifiable. The concrete `ClipboardSelectionReplacer` (macOS, App-only)
+   synthesizes ⌘C, matches the copied text against `SnippetStore
+   .findByKeyword(_:)`, writes the matched body, synthesizes ⌘V, and
+   restores the original clipboard byte-for-byte around the whole
+   transaction (capture is suppressed for its duration so the transient
+   copy/paste never lands in history).
+
+Every non-`.replaced` result beeps (`if result != .replaced { beep() }`) —
+`.replaced` is the only case that means "the user's text actually changed."
+
+**`.declinedTerminalTarget` (T-TERMPASTE1):** the clipboard-fallback
+transaction's only replace mechanism is Copy-then-Paste with **no explicit
+delete step** — it relies on "paste replaces the OS-level selection," which
+holds for AppKit/WebKit/Electron controls but is **false** for terminal
+emulators, where a mouse-drag highlight is a cosmetic, copy-only artifact
+disconnected from the shell's real cursor. Left unhandled, this always
+corrupts the line into `<keyword><body>` instead of replacing it (confirmed
+live, 2/2 trials, Terminal.app). `ClipboardSelectionReplacer.replaceSelection`
+checks the frontmost app against `MacTerminalAppRegistry.isTerminal(bundleIdentifier:)`
+**before any clipboard I/O** and returns `.declinedTerminalTarget`
+immediately on a match — no suppression, no snapshot, no synthesized
+keystroke, so the terminal is left byte-identical to before the hotkey was
+pressed. Sending backspaces first (to erase the highlighted text before
+pasting) was considered and rejected: verified against real prior art
+(espanso, AutoKey), both erase-then-inject only because they track the
+trigger being TYPED, keystroke by keystroke, so the backspace count is a
+known quantity tied to the real cursor; this app's "keyword" is whatever
+the user mouse-drag-highlighted, a quantity never observed being typed and
+whose position relative to the real cursor is unknowable in a terminal —
+backspacing would delete the WRONG characters at the actual cursor, turning
+a visible corruption into silent, invisible data loss elsewhere on the
+line.
+
+```swift
+public enum MacTerminalAppRegistry {
+  public static let terminalBundleIdentifiers: Set<String>  // Terminal.app,
+    // iTerm2, Warp, kitty, Alacritty (+ its pre-0.11 id), WezTerm, Ghostty —
+    // each verified against that project's own build metadata, not guessed
+  public static func isTerminal(bundleIdentifier: String?) -> Bool
+}
+```
+The macOS terminal registry the decline check above consults — `nil` or an
+unrecognized identifier is never assumed to be a terminal (guessing wrong
+would decline an ordinary app's snippet expansion). The Linux analogue,
+`TerminalAppRegistry` (`ClipnestPlatformLinux`), exists for a *different*
+reason (picking Ctrl+Shift+C/V over plain Ctrl+C/V, since a terminal
+reassigns plain Ctrl+C to SIGINT) — `LinuxClipboardSelectionReplacer` reuses
+that same registry for an *additional*, decline-first check ahead of running
+its own copy/paste transaction, for the identical T-TERMPASTE1 reason as
+macOS; see `docs/API-ClipnestLinuxAppKit.md` for the Linux-side detail.
 
 ---
 

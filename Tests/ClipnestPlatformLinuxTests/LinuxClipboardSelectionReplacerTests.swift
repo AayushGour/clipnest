@@ -637,4 +637,84 @@ struct LinuxClipboardSelectionReplacerTests {
     // fail, satisfied on tick 1 with no wait at all.
     #expect(result == .noSelection)
   }
+
+  // MARK: - T-TERMPASTE1: decline terminal-class targets before any I/O
+
+  @Test(
+    "T-TERMPASTE1: a terminal-class frontmost app declines the replace BEFORE any clipboard I/O — no synthesized keystroke, no snapshot/restore write, and the original clipboard content is left completely untouched"
+  )
+  func declinesTerminalTargetBeforeAnyClipboardIO() async {
+    let connection = FakeX11Connection()
+    connection.targets = ["UTF8_STRING"]
+    connection.payloads["UTF8_STRING"] = Data("original clip".utf8)
+
+    let poster = FakeSyntheticKeystrokePosting()
+    let writer = FakePasteboardWriting()
+    let frontmostProvider = FakeFrontmostAppReferenceProviding()
+    // "org.gnome.Terminal" is one of `TerminalAppRegistry.terminalIdentifiers`
+    // — the exact identifier vocabulary this decline check reuses.
+    frontmostProvider.ref = FrontmostAppRef(
+      bundleID: "org.gnome.Terminal", processIdentifier: 4242)
+    let replacer = LinuxClipboardSelectionReplacer(
+      poster: poster,
+      pasteboard: LinuxPasteboard(connection: connection),
+      writer: writer,
+      frontmostAppProvider: frontmostProvider
+    )
+
+    let result = await replacer.replaceSelection { _ in "EXPANDED" }
+
+    #expect(result == .declinedTerminalTarget)
+    // No copy/paste keystroke was ever posted...
+    #expect(poster.postedChords.isEmpty)
+    // ...and no write (not even the copy sentinel or a restore) ever
+    // touched the clipboard — the strongest possible proof this is a
+    // genuine decline, not merely a fast failure partway through the
+    // existing transaction.
+    #expect(writer.writes.isEmpty)
+    // The connection's own serial never moved either.
+    #expect(connection.changeSerial == 0)
+  }
+
+  @Test(
+    "A non-terminal frontmost app (an ordinary bundle identifier, not just nil) is unaffected by the terminal-decline check and still runs the normal transaction"
+  )
+  func nonTerminalFrontmostAppStillRunsNormalTransaction() async {
+    let connection = FakeX11Connection()
+    connection.targets = ["UTF8_STRING"]
+    connection.payloads["UTF8_STRING"] = Data("original clip".utf8)
+
+    let poster = FakeSyntheticKeystrokePosting()
+    poster.onCopy = {
+      connection.targets = ["UTF8_STRING"]
+      connection.payloads["UTF8_STRING"] = Data("selected text".utf8)
+      connection.changeSerial += 1
+    }
+    let writer = FakePasteboardWriting()
+    let frontmostProvider = FakeFrontmostAppReferenceProviding()
+    frontmostProvider.ref = FrontmostAppRef(
+      bundleID: "org.gnome.TextEditor", processIdentifier: 99)
+    let replacer = LinuxClipboardSelectionReplacer(
+      poster: poster,
+      pasteboard: LinuxPasteboard(connection: connection),
+      writer: writer,
+      frontmostAppProvider: frontmostProvider
+    )
+    // Same write-propagation realism `makeReplacer` provides — inlined here
+    // since this test needs a specific `frontmostAppProvider`, which
+    // `makeReplacer` doesn't take a parameter for.
+    writer.onWrite = { connection.changeSerial += 1 }
+    writer.onWriteString = { text in
+      connection.targets = ["UTF8_STRING"]
+      connection.payloads["UTF8_STRING"] = Data(text.utf8)
+    }
+
+    let result = await replacer.replaceSelection { selection in
+      selection == "selected text" ? "EXPANDED" : nil
+    }
+
+    #expect(result == .replaced)
+    // Plain Ctrl (not Ctrl+Shift) — this frontmost app isn't a terminal.
+    #expect(poster.postedChords.map(\.modifiers) == [[.control], [.control]])
+  }
 }

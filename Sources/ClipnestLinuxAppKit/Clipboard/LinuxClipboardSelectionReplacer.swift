@@ -17,11 +17,21 @@ import Foundation
 /// comment names this exact future caller: "a Linux clipboard-selection
 /// replacer, out of this module's scope, reuses the same backend
 /// instance's `post(_:)`") — never a second uinput/XTEST call site.
-/// `TerminalAppRegistry.modifiers(forAppIdentifier:)` decides Ctrl+C/
-/// Ctrl+V vs. Ctrl+Shift+C/Ctrl+Shift+V for BOTH copy and paste from the
-/// same terminal-identifier list (a terminal emulator reassigns plain
-/// Ctrl+C to SIGINT and plain Ctrl+V to nothing useful, exactly the same
-/// reason `Paster`'s own paste chord needs it).
+///
+/// T-TERMPASTE1: `TerminalAppRegistry.modifiers(forAppIdentifier:)` is
+/// consulted in `replaceSelection`, but for a DIFFERENT reason than its
+/// usual Ctrl+C/Ctrl+V-vs-Ctrl+Shift+C/Ctrl+Shift+V chord-selection role
+/// (still exactly what `Paster`'s own paste-from-picker chord needs, since
+/// a terminal reassigns plain Ctrl+C to SIGINT and plain Ctrl+V to nothing
+/// useful): a positive match here means this class DECLINES the whole
+/// transaction instead of running it with a different chord. Reason: this
+/// class's only replace mechanism is Copy-then-Paste with no delete step,
+/// which relies on "paste replaces the OS-level selection" — true
+/// everywhere else, false in a terminal, where a mouse-drag highlight is a
+/// cosmetic, copy-only artifact disconnected from the shell's real cursor.
+/// No chord fixes that; see `SelectionReplaceResult.declinedTerminalTarget`
+/// for the full writeup, including why sending backspaces first was
+/// considered and rejected.
 ///
 /// Snapshots and restores the clipboard around the whole transaction via
 /// `GTKClipboardWriting` + the injected pasteboard reader, so the user's
@@ -37,8 +47,8 @@ import Foundation
 /// + `resume()`, mirroring `AppEnvironment`'s wiring exactly.
 ///
 /// Manual-verify only for the actual synthesized keystrokes/clipboard
-/// I/O (no display in CI); the terminal-vs-plain chord decision it
-/// delegates to is `TerminalAppRegistryTests`' existing coverage.
+/// I/O (no display in CI); `TerminalAppRegistryTests` already covers the
+/// underlying identifier-matching logic this class's decline check reuses.
 @MainActor
 public final class LinuxClipboardSelectionReplacer: SelectionReplacing {
   private let poster: any SyntheticKeystrokePosting
@@ -167,6 +177,36 @@ public final class LinuxClipboardSelectionReplacer: SelectionReplacing {
   public func replaceSelection(bodyForSelection: (String) async -> String?) async
     -> SelectionReplaceResult
   {
+    // T-TERMPASTE1: decided BEFORE anything else touches the clipboard. The
+    // full writeup lives on `SelectionReplaceResult.declinedTerminalTarget`
+    // and on macOS's `ClipboardSelectionReplacer` file header, which this
+    // class mirrors. Short version: this transaction's only replace
+    // mechanism is Copy-then-Paste with NO delete step, which relies on
+    // "paste replaces the OS-level selection" — true everywhere else, false
+    // for terminal emulators, where a mouse-drag highlight is a cosmetic,
+    // copy-only artifact disconnected from the shell's real cursor. Reusing
+    // `TerminalAppRegistry` here for a completely different reason than its
+    // usual one: normally a positive match decides Ctrl+Shift+C/V vs. plain
+    // Ctrl+C/V (chord selection) so copy/paste FUNCTIONS at all in a
+    // terminal; here a positive match instead means "never attempt this
+    // transaction," full stop — chord selection only fixes whether
+    // copy/paste fires, never the missing-delete-step corruption once it
+    // does.
+    let frontmostRef = frontmostAppProvider.currentFrontmostAppRef()
+    let isTerminalTarget =
+      TerminalAppRegistry.modifiers(forAppIdentifier: frontmostRef?.bundleID) == [
+        .control, .shift,
+      ]
+    Self.logger.notice(
+      "terminal-target check: isTerminalTarget=\(isTerminalTarget) x11FrontmostBundleID=\(frontmostRef?.bundleID ?? "?") x11FrontmostPID=\(frontmostRef.map { String($0.processIdentifier) } ?? "?")"
+    )
+    guard !isTerminalTarget else {
+      // Decline BEFORE any clipboard I/O — no suppression, no snapshot, no
+      // synthesized keystroke, nothing for a failed restore to strand.
+      Self.logger.notice("outcome=declinedTerminalTarget")
+      return .declinedTerminalTarget
+    }
+
     let transactionStart = ProcessInfo.processInfo.systemUptime
     Self.logger.notice(
       "clipboard-fallback tier: transaction started serial=\(pasteboard.changeCount) owner=\(Self.ownerDescription(pasteboard.selectionOwnerWindowID)) load1=\(Self.loadAverage1) \(Self.focusDescription(focusProbe))"
@@ -198,17 +238,19 @@ public final class LinuxClipboardSelectionReplacer: SelectionReplacing {
   /// `await`ed after this returns (see that method's own comment for why).
   /// No behavior here differs from before this task's fixes except where a
   /// `// B1`/`// N1`/`// N2` comment below marks one.
+  ///
+  /// T-TERMPASTE1: only ever reached for a NON-terminal frontmost target —
+  /// `replaceSelection` above declines and returns before calling this for
+  /// any target `TerminalAppRegistry` matches. Copy/paste below always uses
+  /// plain `.control`; the Ctrl+Shift chord `TerminalAppRegistry` can also
+  /// return is for a DIFFERENT caller (the picker's own paste-from-history
+  /// flow, which has no delete step to get wrong) and is never reachable
+  /// from here anymore, so computing it in this method would just be dead
+  /// code asserting a branch that can never be taken.
   private func runTransaction(
     snapshot: PasteboardReader.RawPayload?,
     bodyForSelection: (String) async -> String?
   ) async -> SelectionReplaceResult {
-    let frontmostRef = frontmostAppProvider.currentFrontmostAppRef()
-    let modifiers = TerminalAppRegistry.modifiers(forAppIdentifier: frontmostRef?.bundleID)
-    let isTerminalChord = modifiers == [.control, .shift]
-    Self.logger.notice(
-      "copy/paste chord: terminalMatch=\(isTerminalChord) (chord=\(isTerminalChord ? "ctrl+shift" : "ctrl")) x11FrontmostBundleID=\(frontmostRef?.bundleID ?? "?") x11FrontmostPID=\(frontmostRef.map { String($0.processIdentifier) } ?? "?")"
-    )
-
     // T-COPYFLAKE1 ROOT CAUSE: `waitForChange` below used to poll
     // `pasteboard.changeCount` (`X11ClipboardConnection.changeSerial`),
     // which only advances on an observed `XFixesSelectionNotify` EVENT.
@@ -312,7 +354,7 @@ public final class LinuxClipboardSelectionReplacer: SelectionReplacing {
     // would record the consequence rather than the cause.
     let focusAtCopy = Self.focusDescription(focusProbe)
     let copyPostStart = ProcessInfo.processInfo.systemUptime
-    let copyPosted = poster.post(KeyChord(modifiers: modifiers, character: "c"))
+    let copyPosted = poster.post(KeyChord(modifiers: .control, character: "c"))
     Self.logger.notice(
       "copy keystroke: posted=\(copyPosted) elapsedMs=\(Self.elapsedMs(since: copyPostStart)) serialBefore=\(beforeCopy) ownerBefore=\(Self.ownerDescription(ownerBeforeCopy)) load1=\(Self.loadAverage1) \(focusAtCopy)"
     )
@@ -475,7 +517,7 @@ public final class LinuxClipboardSelectionReplacer: SelectionReplacing {
       Self.logger.notice("write propagation: proceeding to paste anyway (best effort)")
     }
 
-    let pastePosted = poster.post(KeyChord(modifiers: modifiers, character: "v"))
+    let pastePosted = poster.post(KeyChord(modifiers: .control, character: "v"))
     Self.logger.notice("paste keystroke: posted=\(pastePosted)")
     guard pastePosted else {
       Self.logger.notice("outcome=noMatch reason=pastePostFailed")

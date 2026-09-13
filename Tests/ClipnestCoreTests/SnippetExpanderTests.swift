@@ -27,11 +27,19 @@ private final class MockClipboardReplacer: SelectionReplacing {
   var simulatedSelection: String?
   private(set) var wasCalled = false
   private(set) var pastedBody: String?
+  /// T-TERMPASTE1: models a terminal-class frontmost app — when set, the
+  /// transaction is declined exactly like the real `ClipboardSelectionReplacer`
+  /// / `LinuxClipboardSelectionReplacer` do, before `simulatedSelection` is
+  /// even consulted (a real decline never reaches the copy step either).
+  var declinesTerminalTarget = false
 
   func replaceSelection(bodyForSelection: (String) async -> String?) async
     -> SelectionReplaceResult
   {
     wasCalled = true
+    guard !declinesTerminalTarget else {
+      return .declinedTerminalTarget
+    }
     guard let selection = simulatedSelection,
       !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     else {
@@ -121,6 +129,26 @@ struct SnippetExpanderTests {
 
     #expect(clipboard.wasCalled == true)
     #expect(beeped == true)  // clipboard read nothing → .noSelection → beep
+  }
+
+  @Test(
+    "T-TERMPASTE1: AX can't read and the clipboard tier declines a terminal-class target: beeps, does NOT report a false success"
+  )
+  func clipboardTierDeclinesTerminalTargetBeeps() async throws {
+    let ax = MockSelectedText()
+    ax.selection = nil
+    let clipboard = MockClipboardReplacer()
+    clipboard.declinesTerminalTarget = true
+    var beeped = false
+    let expander = SnippetExpander(
+      snippetStore: try await store(), selectedText: ax, clipboardReplacer: clipboard,
+      beep: { beeped = true })
+
+    await expander.expand()
+
+    #expect(clipboard.wasCalled == true)
+    #expect(clipboard.pastedBody == nil)  // nothing was ever pasted
+    #expect(beeped == true)
   }
 
   @Test("AX reads + matches but the AX WRITE is refused: falls back to the clipboard")
