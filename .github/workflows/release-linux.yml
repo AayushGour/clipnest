@@ -11,7 +11,7 @@ name: Release (Linux)
 # `workflow_run` guarantees release.yml has already finished (and, if a new
 # version was due, already created the release + tag) before this runs.
 #
-# Two independent outputs, matching the two distribution channels this
+# Three independent outputs, matching the distribution channels this
 # project uses (see debian/README.source):
 #   1. Per-series .deb + .sha256 uploaded to the GitHub Release — the
 #      "raw-.deb install path" whatever script/doc uses UpdateChecker's
@@ -28,6 +28,21 @@ name: Release (Linux)
 #      correctly now means zero further workflow changes are needed once
 #      it's resolved (an external-dependency PPA added to the target PPA's
 #      settings, or archive-Swift landing on a target series).
+#   3. The two per-arch install-anywhere tarballs
+#      (clipnest-$VERSION-linux-{amd64,arm64}.tar.gz), uploaded to the same
+#      GitHub Release. Before this job existed these were hand-built on a
+#      developer's machine and checked into dist/ in git (see dist/README.md
+#      and this repo's history for why that was always meant to be
+#      temporary — ~170 MB of permanent history cost for two versions'
+#      worth of tarballs). packaging/linux/dist/build-tarball.sh is the ONE
+#      recipe for assembling these — the same script a local rebuild would
+#      run — so this job and a hand-built tarball can never drift into two
+#      different layouts. Each arch gets a single generic build on the
+#      *jammy* base (not a jammy+noble matrix like the apt .debs above):
+#      jammy's glibc/GTK4 are older, so a jammy-built binary also runs on
+#      noble (verified in debian/README.source), making one build per arch
+#      the widest-compatible choice for a self-contained tarball a user
+#      just downloads and runs, independent of the per-series apt path.
 
 on:
   workflow_run:
@@ -180,8 +195,80 @@ jobs:
           debuild -S -sa -d -k"${PPA_GPG_KEY_ID}"
           dput "${PPA_TARGET}" "../clipnest_${VERSION}~${{ matrix.series }}1_source.changes"
 
+  build-tarball:
+    needs: check
+    if: ${{ needs.check.outputs.release_exists == 'true' }}
+    # amd64: the standard hosted runner (x64). arm64: GitHub's native
+    # `ubuntu-24.04-arm` hosted runner, NOT QEMU. Verified before relying on
+    # it (2026-09-13, against this repo, which is public): GitHub's own
+    # actions/runner-images README lists ubuntu-24.04-arm/ubuntu-22.04-arm
+    # as GA (no beta/preview tag), and github/docs'
+    # data/reusables/actions/supported-github-runners.md states plainly
+    # "Use of the standard GitHub-hosted runners is free and unlimited on
+    # public repositories" for that exact arm64 row alongside the amd64 one
+    # — no larger-runner purchase or opt-in needed. A private fork of this
+    # repo would still get arm64 runners, just billed per-minute like its
+    # amd64 minutes (same reference). If this ever moves to a private repo
+    # and that stops being true, switch this leg to
+    # docker/setup-qemu-action + `ubuntu-latest` instead — that fallback
+    # path is deliberately not wired here to avoid two untested code paths
+    # for the same job.
+    runs-on: ${{ matrix.runner }}
+    # jammy only, both arches — see the header comment above for why a
+    # single jammy build (not a jammy+noble matrix) is correct here.
+    container: swift:6.0-jammy
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    env:
+      VERSION: ${{ needs.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build + packaging dependencies
+        run: |
+          apt-get update -qq
+          apt-get install -y -qq \
+            debhelper \
+            devscripts \
+            pkg-config \
+            libgtk-4-dev \
+            libx11-dev \
+            libxfixes-dev \
+            libxtst-dev \
+            libsqlite3-dev
+
+      - name: Build the .debs (unsigned, binary-only, unsuffixed — for the tarball)
+        # `-d`: same apt-unregistered-but-present toolchain reason as the
+        # `build` job above (debian/README.source, "Known gap #1"). No
+        # DEB_BUILD_OPTIONS=parallel=2 here: that workaround was needed for
+        # a real swift-build deadlock reproduced under local QEMU
+        # (Apple Silicon host emulating amd64) — both runners here are
+        # genuine hardware for their own architecture, not emulated, so the
+        # condition that caused it doesn't apply.
+        run: dpkg-buildpackage -us -uc -b -d
+
+      - name: Assemble the tarball (one recipe, shared with a local rebuild)
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          bash packaging/linux/dist/build-tarball.sh \
+            "${VERSION}" "${{ matrix.arch }}" .. dist
+
+      - name: Upload tarball artifact (handed to the publish job on the bare runner)
+        uses: actions/upload-artifact@v4
+        with:
+          name: tarball-${{ matrix.arch }}
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
   publish:
-    needs: [check, build]
+    needs: [check, build, build-tarball]
     runs-on: ubuntu-latest
     env:
       VERSION: ${{ needs.check.outputs.version }}
@@ -193,10 +280,18 @@ jobs:
           pattern: debs-*
           merge-multiple: true
 
-      - name: Upload .debs + .sha256 to the GitHub Release
+      - name: Download the per-arch tarballs
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: tarball-*
+          merge-multiple: true
+
+      - name: Upload .debs + .sha256 + tarballs to the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           ls -la dist
-          gh release upload "v${VERSION}" dist/*.deb dist/*.sha256 --clobber
+          gh release upload "v${VERSION}" \
+            dist/*.deb dist/*.sha256 dist/*.tar.gz --clobber

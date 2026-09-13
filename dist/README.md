@@ -1,11 +1,21 @@
 # Prebuilt Clipnest 0.9.2 for Ubuntu
 
-**Temporary.** These binaries live in git only so they are easy to grab for
-testing; they are meant to be removed once testing is done, and replaced by a
-GitHub Release. Each pair adds ~84 MB to history permanently -- and replacing
-them does not reclaim the old ones, so 0.9.1's pair is still in history too,
-putting this at ~170 MB total. Do not treat this as the pattern for future
-builds.
+**Temporary, and now superseded.** These binaries were hand-built and
+checked into git only so they were easy to grab for testing before
+`.github/workflows/release-linux.yml` could produce them itself. That gap is
+closed: the workflow's `build-tarball` job now builds both
+`clipnest-$VERSION-linux-amd64.tar.gz` and `...-arm64.tar.gz` on every
+release (via `packaging/linux/dist/build-tarball.sh`, the same recipe that
+built the files in this directory) and attaches them to the GitHub Release
+alongside the per-series `.deb`s. **Get them from the
+[GitHub Release](https://github.com/AayushGour/clipnest/releases/latest)
+going forward, not from this directory.** The pair checked in here should
+be deleted from git once 0.9.2 has a real tagged Release carrying the
+CI-built equivalents -- history already carries the cost either way: each
+pair added ~84 MB permanently, replacing one pair does not reclaim the
+last one, and 0.9.1's pair is still in history too, putting this at
+~170 MB total. Do not add a third pair here; that cost does not go away
+by adding more, only by removing this directory once CI's copies exist.
 
     clipnest-0.9.2-linux-amd64.tar.gz    Intel/AMD PCs, cloud VMs  (most machines)
     clipnest-0.9.2-linux-arm64.tar.gz    Raspberry Pi, Graviton, Ubuntu on Apple Silicon
