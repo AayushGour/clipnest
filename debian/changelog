@@ -1,3 +1,21 @@
+clipnest (0.9.3) jammy; urgency=medium
+
+  * fix(linux): snippet expansion (select text, press the expand-snippet
+    shortcut) now works on GNOME Wayland even while you are still holding
+    the shortcut's modifier keys. It now delivers the replacement through
+    IBus as a direct D-Bus commit instead of a synthesized Ctrl+C/Ctrl+V
+    keystroke, so it no longer depends on Mutter's per-device modifier
+    state. Previously, if the expand-snippet hold lasted as long as a
+    realistic press (Super+Shift held down), Mutter would merge those
+    still-held keys into the synthesized Ctrl+C and the expansion silently
+    failed every time. Verified 8/8 exact matches with modifiers held
+    through the whole gesture, against a known-bad control on the old
+    keystroke path that still failed 0/8 under the same conditions. Falls
+    back to the previous copy/paste behavior when no receptive IBus target
+    is found; picker auto-paste is unaffected.
+
+ -- Aayush Gour <ag14906@gmail.com>  Mon, 14 Sep 2026 00:00:00 +0000
+
 clipnest (0.9.2) jammy; urgency=medium
 
   * fix(linux): the picker's Enter hint now says "Enter copy" instead of

@@ -1,4 +1,4 @@
-# Testing Clipnest 0.9.2 on Linux
+# Testing Clipnest 0.9.3 on Linux
 
 **Temporary file** — delete this and `dist/` once testing is done.
 
@@ -16,8 +16,8 @@ git clone -b linux-migration https://github.com/AayushGour/clipnest.git
 cd clipnest/dist
 
 uname -m                       # x86_64 -> amd64,  aarch64 -> arm64
-tar xzf clipnest-0.9.2-linux-amd64.tar.gz
-cd clipnest-0.9.2-linux-amd64
+tar xzf clipnest-0.9.3-linux-amd64.tar.gz
+cd clipnest-0.9.3-linux-amd64
 ./install.sh
 ```
 
