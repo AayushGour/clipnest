@@ -121,6 +121,16 @@ let package = Package(
       dependencies: [
         "ClipnestCore", "ClipnestSQLite", "ClipnestViewModels",
         "ClipnestPlatformLinux", "ClipnestGTK", "ClipnestLinuxOCR", "CXlib",
+        // T-IBUS-CRASHWIRE: `ProcessSignalShutdown.swift` (`App/`) needs
+        // raw `g_io_channel_unix_new`/`g_io_add_watch` to bridge a
+        // self-pipe SIGTERM/SIGINT handler onto the GLib main loop — every
+        // other GTK/GLib C-interop call in this app already goes through
+        // `ClipnestGTK`'s Swift wrappers, but that module has no reason to
+        // own raw POSIX signal-handling plumbing (it isn't GTK view-layer
+        // code), so this target gets its own direct edge to the same
+        // system-library target `ClipnestGTK` already depends on — no new
+        // dependency, just a new caller of an existing one.
+        "CGtk4",
       ]),
     .executableTarget(name: "ClipnestLinuxApp", dependencies: ["ClipnestLinuxAppKit"]),
     .testTarget(

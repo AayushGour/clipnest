@@ -45,6 +45,17 @@ final class LinuxAppEnvironment {
   /// API on this property.
   let clipStore: any ClipStore
   let snippetStore: SQLiteSnippetStore
+  /// The ONE `SynchronizedKeyValueStore`-wrapped instance every settings
+  /// write in this process goes through (`settingsStore` below,
+  /// `IBusCommitClient`'s crash-safety marker writes) — see this file's
+  /// own `init` doc comment at its construction site for why sharing one
+  /// instance (not just one on-disk path) is load-bearing.
+  ///
+  /// Held (not just a local in `init`) so `restoreIBusEngineIfNeeded()`
+  /// below can route the quit-time IBus crash-safety restore through THIS
+  /// instance too — see that method's own doc comment for the data-loss
+  /// bug this closes.
+  private let keyValueStore: any KeyValueStore
   let ocrBackfillViewModel: OCRBackfillViewModel
   let privacyFilter: PrivacyFilter
   let settingsStore: SettingsStore
@@ -166,7 +177,43 @@ final class LinuxAppEnvironment {
 
     let blobStore = BlobStore(baseDirectory: BlobStore.defaultBaseDirectory())
     let privacyFilter = PrivacyFilter()
-    let settingsStore = SettingsStore()
+    // T-IBUS-REPLACER: constructed explicitly (rather than left to
+    // `SettingsStore.init`'s own default) so the EXACT SAME instance can
+    // also back `IBusCrashSafetyStateMachine`'s persisted-marker seam
+    // below — `JSONFileKeyValueStore` loads the whole settings file into
+    // memory once at construction and rewrites the whole file on every
+    // `set(_:forKey:)` (coding-standards.md's "config in one place"); two
+    // independent instances pointed at the same file would each hold a
+    // stale view of the other's writes and silently clobber them on the
+    // next save. One shared instance closes that hazard, mirroring this
+    // file's own top doc comment's "one shared `BlobStore` instance"
+    // precedent for the identical reason.
+    //
+    // Wrapped in `SynchronizedKeyValueStore` (security/correctness pass,
+    // T-IBUS-REPLACER): `JSONFileKeyValueStore`'s own doc comment states
+    // its thread safety rests ENTIRELY on "every real caller is
+    // `@MainActor`-isolated" — true before this task, when `SettingsStore`
+    // was its only caller. Sharing it with `IBusCrashSafetyStateMachine`
+    // breaks that invariant: `IBusCommitClient.replaceSelection` runs
+    // nonisolated, off the `@MainActor` this environment otherwise
+    // constructs everything on (real blocking `NSCondition.wait()` calls
+    // inside it must never block the GTK main thread — see that class's
+    // own top doc comment), so its crash-safety persist/restore writes can
+    // land on a genuinely different thread than a concurrent Settings
+    // change. Wrapping closes the race without touching
+    // `IBusCrashSafetyStateMachine`'s own pure/synchronous contract (its
+    // existing unit tests drive it directly with a fake store and plain
+    // sync closures) or `SettingsStore`'s.
+    //
+    // Stored as `self.keyValueStore` (reviewer pass, not just a local) so
+    // `restoreIBusEngineIfNeeded()` below can route the quit-time IBus
+    // crash-safety restore through this SAME instance too — see that
+    // method's own doc comment for the data-loss bug a second,
+    // independently-constructed instance caused at quit time.
+    let keyValueStore: any KeyValueStore = SynchronizedKeyValueStore(
+      wrapping: PlatformDefaults.keyValueStore)
+    self.keyValueStore = keyValueStore
+    let settingsStore = SettingsStore(defaults: keyValueStore)
     let pasteboardReader = PasteboardReader()
 
     async let clipStoreSetup: SQLiteClipStore = Task.detached(priority: .userInitiated) {
@@ -288,9 +335,33 @@ final class LinuxAppEnvironment {
       frontmostAppProvider: frontmostAppProvider
     )
     self.clipboardReplacer = clipboardReplacer
+
+    // T-IBUS-REPLACER (D-IBUS-1..6): snippet expansion's tier 2, an IBus
+    // commit — immune to Wayland's per-device modifier merging BY
+    // CONSTRUCTION (a D-Bus signal, never a synthesized keystroke), unlike
+    // `clipboardReplacer` above. Degrades to a permanent no-op tier on any
+    // failure (no `ibus-daemon`, unresolvable address, failed connect,
+    // failed registration) — the same graceful-nil convention
+    // `makeSelectedTextAccessing()` already uses for AT-SPI, so a missing
+    // IBus daemon never blocks snippet expansion, it just skips straight
+    // to the clipboard tier every time.
+    let ibusReplacer: any SelectionReplacing
+    if let ibusClient = IBusCommitClient.resolveAndConnect(store: keyValueStore) {
+      ibusReplacer = LinuxIBusSelectionReplacer(
+        client: ibusClient, frontmostAppProvider: frontmostAppProvider)
+      Self.logger.info("IBus commit tier available for snippet expansion")
+    } else {
+      ibusReplacer = NullIBusSelectionReplacer()
+      Self.logger.info(
+        "IBus commit tier unavailable this session — snippet expansion is AT-SPI + clipboard only"
+      )
+    }
+    let tieredSelectionReplacer = LinuxTieredSelectionReplacer(
+      ibusReplacer: ibusReplacer, clipboardReplacer: clipboardReplacer)
+
     self.snippetExpander = SnippetExpander(
       snippetStore: snippetStore, selectedText: selectedTextAccessing,
-      clipboardReplacer: clipboardReplacer)
+      clipboardReplacer: tieredSelectionReplacer)
 
     let monitor = clipboardMonitor
     clipboardReplacer.beginSuppression = { [weak monitor] in monitor?.pause() }
@@ -602,6 +673,36 @@ final class LinuxAppEnvironment {
     updateChecker.start(settings: settingsStore)
   }
 
+  /// **Reviewer fix (data-loss bug, T-IBUS-CRASHWIRE follow-up):**
+  /// `LinuxAppLifecycle`'s quit path (`restoreIBusEngineBeforeQuit()`) used
+  /// to construct its OWN fresh `PlatformDefaults.keyValueStore()` — a
+  /// brand-new `JSONFileKeyValueStore` that loads its own in-memory
+  /// snapshot of the settings file at construction — rather than reusing
+  /// THIS environment's single `keyValueStore` above. That is a real,
+  /// non-theoretical data-loss bug, not just a lint nit: `JSONFileKeyValueStore
+  /// .persist()` rewrites the WHOLE settings file on every write, so once
+  /// `LinuxAppEnvironment` exists, a concurrent settings write through
+  /// `keyValueStore` (this instance) and a quit-time write through a
+  /// SEPARATE, stale-snapshotted instance can silently revert each other —
+  /// last write wins, no error, the user just loses a setting they changed
+  /// moments before quitting.
+  ///
+  /// Exposed so `LinuxAppLifecycle.restoreIBusEngineBeforeQuit()` can route
+  /// through THIS instance once `environment` exists, instead of ever
+  /// constructing a second one post-launch. `launch()`'s own STARTUP
+  /// reconciliation call (`IBusCrashSafetyReconciler.restoreIfMarkerPresent
+  /// (store: PlatformDefaults.keyValueStore)`) is deliberately NOT routed
+  /// through here and keeps its own fresh instance — that call runs before
+  /// this environment (and therefore `keyValueStore`) exists at all, and at
+  /// that point in `launch()` nothing else in the process could possibly be
+  /// writing settings concurrently (provably sequential: this environment's
+  /// `init` — the only other writer — hasn't even started yet). Do not
+  /// "fix" that startup call to match this one; they differ because the
+  /// hazard this method closes genuinely does not exist yet at startup.
+  func restoreIBusEngineIfNeeded() {
+    IBusCrashSafetyReconciler.restoreIfMarkerPresent(store: keyValueStore)
+  }
+
   /// Set by `LinuxAppLifecycle` once a `ShellHelperClient` exists — see
   /// `PickerWindow.swift`'s own doc comment (the OTHER agent's file):
   /// GTK4 dropped `gtk_window_move`/keep-above/skip-taskbar entirely (no
@@ -726,6 +827,73 @@ private struct NullSelectedTextAccessing: SelectedTextAccessing {
 private struct NullSyntheticKeystrokePosting: SyntheticKeystrokePosting {
   @discardableResult
   func post(_ chord: KeyChord) -> Bool { false }
+}
+
+/// Degrades `LinuxTieredSelectionReplacer`'s IBus tier to "always fall
+/// through, zero I/O" when `IBusCommitClient.resolveAndConnect` fails (no
+/// `ibus-daemon`, unresolvable address, failed connect/registration) — the
+/// same graceful-nil convention `NullSelectedTextAccessing` above already
+/// uses for AT-SPI. Always returns `.noSelection`, the SAME case
+/// `LinuxIBusSelectionReplacer` returns for every one of its own
+/// non-terminal reasons (D-IBUS-1's fall-through table), so
+/// `LinuxTieredSelectionReplacer` cannot tell "IBus is unavailable this
+/// session" apart from "IBus tried and found nothing" without reading the
+/// log line either type emits — an intentional, cheap distinction that
+/// never needs to reach the composer's own decision, only diagnostics.
+@MainActor
+private struct NullIBusSelectionReplacer: SelectionReplacing {
+  func replaceSelection(bodyForSelection: (String) async -> String?) async
+    -> SelectionReplaceResult
+  {
+    .noSelection
+  }
+}
+
+/// Wraps any `KeyValueStore` with a `Mutex` so it's genuinely safe to share
+/// across actor-isolation boundaries (T-IBUS-REPLACER security/correctness
+/// pass) — see `LinuxAppEnvironment.init`'s own comment at its one call
+/// site for the specific race this closes: `JSONFileKeyValueStore`'s
+/// thread safety otherwise rests entirely on every caller being
+/// `@MainActor`-isolated, an invariant `IBusCrashSafetyStateMachine`'s
+/// nonisolated background use would silently violate if the shared
+/// instance were passed through unwrapped. Every call serializes through
+/// one lock; `JSONFileKeyValueStore` itself stays completely unaware this
+/// wrapper exists.
+///
+/// **Why one shared instance (not just this wrapper) is the actual fix
+/// (reviewer pass):** the `Mutex` only protects concurrent access to ONE
+/// instance's own in-memory `storage`. Two SEPARATE `SynchronizedKeyValueStore`s
+/// (or two raw `JSONFileKeyValueStore`s) each wrapping a fresh load of the
+/// SAME on-disk file are still unsafe together — each holds its own
+/// snapshot, and whichever persists last silently wins, discarding
+/// whatever the other wrote. That is exactly the bug `LinuxAppEnvironment
+/// .restoreIBusEngineIfNeeded()` exists to close: routing the quit-time
+/// restore through `LinuxAppEnvironment`'s own single instance (this
+/// class), never a second one. See `SynchronizedKeyValueStoreTests.swift`
+/// for both halves pinned directly: two independent instances over the
+/// same file DO lose a write; the same shared instance, hit concurrently
+/// from two threads, does not.
+///
+/// Not `private`: `@testable import ClipnestLinuxAppKit` needs `internal`
+/// visibility to construct this directly in
+/// `SynchronizedKeyValueStoreTests.swift` — `LinuxAppEnvironment.init`
+/// itself does real SQLite/uinput/X11 I/O and cannot be constructed in a
+/// unit test (manual-verify only, same as `IBusCommitClient`), so this
+/// wrapper's own correctness is the testable surface for that fix.
+final class SynchronizedKeyValueStore: KeyValueStore, @unchecked Sendable {
+  private let mutex: Mutex<any KeyValueStore>
+
+  init(wrapping store: any KeyValueStore) {
+    self.mutex = Mutex(store)
+  }
+
+  func object(forKey key: String) -> Any? { mutex.withLock { $0.object(forKey: key) } }
+  func string(forKey key: String) -> String? { mutex.withLock { $0.string(forKey: key) } }
+  func stringArray(forKey key: String) -> [String]? {
+    mutex.withLock { $0.stringArray(forKey: key) }
+  }
+  func bool(forKey key: String) -> Bool { mutex.withLock { $0.bool(forKey: key) } }
+  func set(_ value: Any?, forKey key: String) { mutex.withLock { $0.set(value, forKey: key) } }
 }
 
 /// A thread-safe `Bool` box — see `LinuxAppEnvironment.isPickerVisibleBox`'s

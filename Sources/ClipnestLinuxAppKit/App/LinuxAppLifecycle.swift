@@ -1,6 +1,7 @@
 import ClipnestCore
 import ClipnestGTK
 import ClipnestPlatformLinux
+import ClipnestViewModels
 import Foundation
 
 /// Owns process startup end-to-end, in the order this task's build steps
@@ -175,6 +176,20 @@ public enum LinuxAppLifecycle {
       displayName: ClipnestControlName.displayName)
     GTKMainActorBridge.install()
 
+    // T-IBUS-CRASHWIRE: installed as early as this process's own startup
+    // allows — a live `GMainContext` (from `initializeGTK()` above) is the
+    // only real precondition, matching `GTKMainActorBridge.install()`'s
+    // identical requirement one line up. `restoreIBusEngineBeforeQuit()` is
+    // the SAME routine the tray's "Quit" item calls (`startTray` below) and
+    // `IBusCrashSafetyReconciler.restoreIfMarkerPresent` (this function's
+    // startup counterpart, called from `launch()`) both funnel through —
+    // see `ProcessSignalShutdown.swift`'s top doc comment for the full
+    // design and what SIGTERM/SIGINT catching does and does not cover.
+    ProcessSignalShutdown.install(onShutdownSignal: {
+      restoreIBusEngineBeforeQuit()
+      ClipnestGTKApplication.quitMainLoop()
+    })
+
     let sessionBusAddress = ProcessInfo.processInfo.environment[
       sessionBusAddressEnvironmentVariableName]
     let instanceConnection = sessionBusAddress.flatMap {
@@ -208,6 +223,21 @@ public enum LinuxAppLifecycle {
     sessionBusAddress: String?, controlConnection: DBusConnection?,
     initialCommand: LinuxAppCLICommand
   ) async {
+    // T-IBUS-CRASHWIRE (D-IBUS-3): must run before any other subsystem —
+    // if the persisted crash-safety marker is non-empty, a previous run
+    // died (or was SIGKILLed) mid-transaction, leaving the global IBus
+    // engine switched away from the user's real one; force-restoring here,
+    // before `LinuxAppEnvironment` (which owns the REAL, long-lived
+    // `IBusCommitClient` — T-IBUS-REPLACER) or anything else stands up,
+    // closes that window as early as this process's own startup allows.
+    // Deliberately triggered off OUR OWN persisted marker, never
+    // `GetGlobalEngine`'s live value — see `IBusCrashSafetyStateMachine`'s
+    // own doc comment for why that value is unreliable after a crash.
+    // Cheap in the overwhelmingly common case: `IBusCrashSafetyReconciler
+    // .restoreIfMarkerPresent` reads the marker FIRST and never touches
+    // the network at all when nothing is pending.
+    IBusCrashSafetyReconciler.restoreIfMarkerPresent(store: PlatformDefaults.keyValueStore)
+
     let environment: LinuxAppEnvironment
     do {
       environment = try await LinuxAppEnvironment()
@@ -410,7 +440,21 @@ public enum LinuxAppLifecycle {
     let tray = StatusNotifierTray(ownConnection: ownConnection, watchConnection: watchConnection)
     tray.onOpenClipnest = { Task { @MainActor in environment.togglePicker() } }
     tray.onOpenSettings = { Task { @MainActor in environment.openSettings() } }
-    tray.onQuit = { Task { @MainActor in ClipnestGTKApplication.quitMainLoop() } }
+    // T-IBUS-CRASHWIRE: routes through the SAME shared restore
+    // (`restoreIBusEngineBeforeQuit()`) the SIGTERM/SIGINT path uses
+    // (`run(arguments:)`'s `ProcessSignalShutdown.install` call above), so
+    // graceful quit and signal-triggered quit can never drift apart — this
+    // task's own brief. The only behavior change versus before: one extra
+    // `KeyValueStore` read (cheap) ahead of the existing `quitMainLoop()`
+    // call; a healthy quit with no in-flight IBus transaction finds no
+    // marker and does nothing further, so ordinary "click Quit" behavior is
+    // otherwise unchanged.
+    tray.onQuit = {
+      Task { @MainActor in
+        restoreIBusEngineBeforeQuit()
+        ClipnestGTKApplication.quitMainLoop()
+      }
+    }
     tray.start()
     // See the "Process-lifetime ownership" doc comment above `environment`
     // — without this, `tray`'s receive thread has the identical unowned-
@@ -695,5 +739,61 @@ public enum LinuxAppLifecycle {
       withAccelerator: resolvedAccelerator(
         storedValue: GlobalHotkeyAccelerator.current(.expandSnippet),
         defaultValue: defaultExpandSnippetAccelerator))
+  }
+
+  // MARK: - T-IBUS-CRASHWIRE: shared quit-time restore
+
+  /// The ONE routine both a caught SIGTERM/SIGINT
+  /// (`ProcessSignalShutdown.install`'s closure, `run(arguments:)`) and the
+  /// tray's "Quit" item (`startTray`) call immediately before
+  /// `ClipnestGTKApplication.quitMainLoop()` — see this task's own brief
+  /// ("graceful quit and signal quit share one path rather than drifting
+  /// apart"). Still true after the reviewer fix below: this remains the
+  /// single implementation of "is there a dangling IBus crash-safety
+  /// marker, and if so restore it," checked at both ends of this process's
+  /// life (startup AND every quit path) — only WHICH `KeyValueStore`
+  /// backs that check changed, not the fact that there is exactly one
+  /// routine.
+  ///
+  /// **Reviewer fix (data-loss bug, not a theoretical race):** once
+  /// `environment` exists, route through `LinuxAppEnvironment
+  /// .restoreIBusEngineIfNeeded()` — its own single, `SynchronizedKeyValueStore`-
+  /// wrapped instance — rather than constructing a second, unsynchronized
+  /// `PlatformDefaults.keyValueStore()` here. `JSONFileKeyValueStore
+  /// .persist()` rewrites the WHOLE settings file per write; a write
+  /// through a fresh, independently-snapshotted second instance can
+  /// silently revert a concurrent settings write made through
+  /// `environment`'s shared one — the user loses a setting they just
+  /// changed, no error. The ORIGINAL author's "provably sequential"
+  /// argument holds for `launch()`'s own startup call (below `environment`
+  /// doesn't exist yet, so nothing else could be writing concurrently
+  /// either) but not here: by the time either quit path fires, `environment`
+  /// has been live for the whole session, `SettingsWindow` writes through
+  /// its `keyValueStore` on ordinary use, and `IBusCommitClient`'s own
+  /// crash-safety marker writes run off-`@MainActor` — a real, not
+  /// theoretical, overlap window. See `LinuxAppEnvironment
+  /// .restoreIBusEngineIfNeeded()`'s own doc comment for the mirror image
+  /// of this note (why that startup call is correct to keep its own
+  /// instance) — the two are DELIBERATELY asymmetric; do not "fix" them
+  /// to match.
+  ///
+  /// Before `environment` exists (a shutdown signal arriving in the narrow
+  /// startup window before `launch()` finishes constructing it), there is
+  /// no shared synchronized instance to route through yet — and, by the
+  /// same "provably sequential" reasoning, nothing else could be writing
+  /// settings concurrently at that point either — so a fresh
+  /// `PlatformDefaults.keyValueStore()` there is still safe, not a
+  /// reintroduction of this bug.
+  ///
+  /// Cheap on the overwhelmingly common path either way: a healthy quit
+  /// with no in-flight IBus commit transaction finds an empty marker and
+  /// this call does nothing beyond one `KeyValueStore` read — see
+  /// `IBusCrashSafetyReconciler.restoreIfMarkerPresent`'s own doc comment.
+  private static func restoreIBusEngineBeforeQuit() {
+    if let environment {
+      environment.restoreIBusEngineIfNeeded()
+    } else {
+      IBusCrashSafetyReconciler.restoreIfMarkerPresent(store: PlatformDefaults.keyValueStore)
+    }
   }
 }

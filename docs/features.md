@@ -1053,7 +1053,53 @@ write are independently verified rather than trusted on a bare `AXError`.
    XWayland clients whose window properties are readable, but **does not
    fire for a native-Wayland terminal** — the line still corrupts there.
    See `docs/API-ClipnestLinuxAppKit.md`'s T-TERMPASTE1 section for the full
-   writeup and the board task.
+   writeup and the board task. **This gap is narrowed, but do not read it as
+   closed** (T-IBUS-TEST1, 2026-09-14). What is measured: a VTE terminal
+   does answer `SetSurroundingText`, so the IBus tier reaches it as a
+   receptive widget rather than declining (`outcome=noSelection`, never
+   `.noLiveRecipient`), and a terminal therefore does not fall through to
+   this clipboard tier from IBus. What is NOT measured: the shipped Swift
+   build actually committing replacement text into a VTE terminal or into
+   Firefox. The tester could not get either app to report a selection IBus
+   recognises — AT-SPI `add_selection`, a real Shift+Left keyboard
+   selection, and a `uinput` virtual-mouse double-click were all tried, and
+   no pointer-precision tool (`xdotool` or equivalent) was available to
+   rule out a harness limitation. **Unconfirmed, explicitly not falsified**:
+   the throwaway Python POC did commit into a VTE terminal end-to-end, so
+   the mechanism works there; what is unproven is this code doing it. Treat
+   native-Wayland terminal expansion as unverified until a session with
+   real pointer tooling closes it.
+
+   **Linux-only third tier, inserted BELOW strategy 1 above and ABOVE this
+   clipboard strategy (T-IBUS-REPLACER, D-IBUS-1..6, 2026-09-14):**
+   `ClipnestCore.SnippetExpander` itself is unaware of this — its own
+   "two-strategy design" (this section's own opening line) is unchanged;
+   what Linux passes as strategy 2's `clipboardReplacer` is actually
+   `LinuxTieredSelectionReplacer`
+   (`Sources/ClipnestLinuxAppKit/Clipboard/LinuxTieredSelectionReplacer.swift`),
+   which tries an **IBus commit** (`LinuxIBusSelectionReplacer` ->
+   `IBusCommitClient`) before falling back to the copy/paste strategy
+   documented above. The motivating bug: GNOME Wayland tracks keyboard
+   modifiers PER ORIGINATING DEVICE, so a synthesized Ctrl+C/Ctrl+V posted
+   while the user still holds a modifier from a DIFFERENT input device
+   merges into the wrong chord and silently fails (`T-CROSSDEVICE-MODIFIER1`,
+   `.claude/project-context.md`) — an IBus commit is a D-Bus SIGNAL, never a
+   keystroke, so it is immune to that class of bug BY CONSTRUCTION, not by
+   timing, and (unlike the clipboard strategy) reaches VTE terminals
+   correctly via a real delete-at-cursor protocol rather than
+   copy-then-paste. The gate proving a receptive recipient exists is
+   `SetSurroundingText` (not `FocusIn` — see `docs/API-ClipnestLinuxAppKit.md`'s
+   `IBusCommitClient` section for the full correction), and that SAME
+   answer recovers the highlighted keyword with **zero synthesized
+   keystrokes** — the underlying selection-read mechanism this tier relies
+   on is therefore also immune to the modifier-merge bug, not just the
+   commit. A real IBus commit is fire-and-forget with no acknowledgement,
+   so the outcome is `SelectionReplaceResult.committedUnconfirmed`, never
+   `.replaced`, and is TERMINAL — the clipboard tier is never ALSO tried
+   after it, since retrying after a real commit reached a live recipient
+   risks a genuine double insert. Degrades to permanently skipping straight
+   to the clipboard tier, with zero I/O, whenever no `ibus-daemon` is
+   reachable this session.
 
    Otherwise, it runs the entire transaction atomically from the clipboard's
    point of view: `beginSuppression()` (→ `ClipboardMonitor.pause()`),

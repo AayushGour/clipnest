@@ -69,6 +69,29 @@ public enum SelectionReplaceResult: Sendable, Equatable {
   /// reader/caller/log needs to be able to tell "declined, nothing
   /// touched" apart from "attempted and failed."
   case declinedTerminalTarget
+  /// Linux-only (T-IBUS-REPLACER): the IBus commit tier (D-IBUS-1..6,
+  /// `.claude/project-context.md`) found a receptive, text-editable widget
+  /// via `SetSurroundingText`, matched a snippet, and issued
+  /// `DeleteSurroundingText`+`CommitText` — both fire-and-forget D-Bus
+  /// SIGNALS with no acknowledgement, so this can never be upgraded to a
+  /// confirmed `.replaced` the way a verified AX/clipboard write can.
+  /// Cross-platform-inert: no macOS conformer of `SelectionReplacing`
+  /// produces this case, since macOS has no IBus. Mirrors
+  /// `.writeUnconfirmed`'s own convention exactly — see that case's doc
+  /// comment for the general "believed but unconfirmed is not the same as
+  /// confirmed" reasoning this one applies to a different write mechanism.
+  ///
+  /// **Terminal — never retried via another tier.** Unlike every other
+  /// case above, a caller composing multiple `SelectionReplacing` tiers
+  /// (`LinuxTieredSelectionReplacer`) MUST NOT fall through to a further
+  /// tier on this outcome: a real commit already reached a live recipient,
+  /// and retrying (e.g. the clipboard tier's own copy/paste) risks a
+  /// genuine DOUBLE INSERT if the IBus commit actually landed — strictly
+  /// worse than the bug this whole tier exists to fix. Every other
+  /// non-`.replaced` case in this enum is safe to retry via a further
+  /// tier; this one is the sole exception, which is why it is its own
+  /// case rather than folded into `.writeUnconfirmed`.
+  case committedUnconfirmed
 }
 
 /// Universal, works-in-any-app fallback for replacing the current selection —

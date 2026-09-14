@@ -20,6 +20,8 @@ module drives, and [`docs/API.md`](API.md) for the shared, cross-platform
 - [`LinuxClipboardSelectionReplacer` declines terminal-class targets before any I/O (T-TERMPASTE1)](#linuxclipboardselectionreplacer-declines-terminal-class-targets-before-any-io-t-termpaste1)
 - [`LinuxClipboardSelectionReplacer`'s copy-sentinel detection (T-COPYFLAKE1)](#linuxclipboardselectionreplacers-copy-sentinel-detection-t-copyflake1)
 - [`GSettingsCustomKeybinding` — the GSettings hotkey floor stayed dead after the Shell extension was disabled (T-HOTKEYFLOOR-GAP1)](#gsettingscustomkeybinding--the-gsettings-hotkey-floor-stayed-dead-after-the-shell-extension-was-disabled-t-hotkeyfloor-gap1)
+- [`IBusCommitClient` — the IBus commit-tier live connection (T-IBUS-CLIENT, corrected by T-IBUS-REPLACER)](#ibuscommitclient--the-ibus-commit-tier-live-connection-t-ibus-client-corrected-by-t-ibus-replacer)
+- [`LinuxIBusSelectionReplacer` / `LinuxTieredSelectionReplacer` / `IBusCommitPolicy` — the IBus + clipboard composer (T-IBUS-REPLACER)](#linuxibusselectionreplacer--linuxtieredselectionreplacer--ibuscommitpolicy--the-ibus--clipboard-composer-t-ibus-replacer)
 - [Working example](#working-example)
 
 ## `LinuxAppUpdater`
@@ -650,6 +652,438 @@ skip the second write would silently reintroduce the gap for every
 steady-state reconcile (the common case this floor exists to cover). Also
 rejected: simply waiting longer before pressing — the sweep above shows the
 window never closes on its own, at any delay tested.
+
+## `IBusCommitClient` — the IBus commit-tier live connection (T-IBUS-CLIENT, corrected by T-IBUS-REPLACER)
+
+`Sources/ClipnestLinuxAppKit/InputMethod/IBusCommitClient.swift`. The live
+connection layer the pure protocol layer
+([`docs/API-ClipnestPlatformLinux-IBus.md`](API-ClipnestPlatformLinux-IBus.md))
+was built for. Performs snippet expansion's tier-2 D-Bus commit (D-IBUS-1..6,
+`.claude/project-context.md`): **switch the global IBus engine to ours ->
+wait for a receptive widget to answer `SetSurroundingText` -> recover the
+selected keyword from it (no synthesized keystroke) -> ask the caller for a
+replacement -> delete the keyword + commit the replacement -> switch back**,
+with a crash-safety state machine so a mid-transaction crash never leaves the
+user on a dead engine.
+
+**Correction (T-IBUS-REPLACER, superseding T-IBUS-CLIENT's original
+design):** the gate is `SetSurroundingText`, not `FocusIn`. The client task's
+own VM measurement — `FocusIn` arriving ~1ms after `SetGlobalEngine` **even
+with no GUI text field focused at all** (a bare SSH session against an idle
+desktop) — proves `FocusIn` only confirms "the daemon bound our engine to
+SOME input context," never "a receptive text-editable widget is ready."
+Gating on `FocusIn` alone would have made the clipboard-tier fall-through
+essentially never trigger while reporting the terminal, no-retry
+`.committedUnconfirmed` outcome — strictly worse than the bug this feature
+exists to fix. The real gate (D-IBUS-5): once `FocusIn` confirms the engine
+is bound, the client emits `RequireSurroundingText`; a REAL text-editable
+widget answers with a genuine `SetSurroundingText(text, cursor_pos,
+anchor_pos)` round trip. That answer's `cursor_pos`/`anchor_pos` ALSO recover
+the highlighted keyword with zero synthesized keystrokes — the same
+"immune by construction" property that makes this whole tier exist.
+
+```swift
+public enum IBusCommitOutcome: Sendable, Equatable {
+  case noLiveRecipient       // FocusIn or SetSurroundingText never arrived — fall through
+  case noSelection           // SetSurroundingText arrived but cursor_pos == anchor_pos — fall through
+  case noMatch               // a real selection was recovered but bodyForSelection found no snippet — TERMINAL
+  case committedUnconfirmed  // a real, matched selection — delete+commit issued — TERMINAL, never retry
+  case unavailable           // IBus couldn't even be asked — fall through, same as noLiveRecipient
+}
+
+public final class IBusCommitClient: @unchecked Sendable {
+  public static let defaultCallTimeout: Duration             // .milliseconds(250)
+  public static let defaultFocusInTimeout: Duration           // .milliseconds(200)
+  public static let defaultSurroundingTextTimeout: Duration   // .milliseconds(200), NOT independently VM-measured — see this constant's own doc comment
+  public static let defaultConnectTimeout: Duration           // .seconds(2)
+
+  public init(
+    registrationConnection: DBusConnection, callConnection: any DBusCalling,
+    store: any KeyValueStore, focusInTimeout: Duration = defaultFocusInTimeout,
+    surroundingTextTimeout: Duration = defaultSurroundingTextTimeout,
+    callTimeout: Duration = defaultCallTimeout)
+
+  /// Resolves the IBus private-bus address, gates it on the daemon PID
+  /// actually being alive (T-IBUS-PIDLIVE), opens BOTH connections, and
+  /// calls `start()`. The one entry point a caller needs.
+  public static func resolveAndConnect(
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    store: any KeyValueStore,
+    connectTimeout: Duration = defaultConnectTimeout,
+    callTimeout: Duration = defaultCallTimeout,
+    focusInTimeout: Duration = defaultFocusInTimeout,
+    surroundingTextTimeout: Duration = defaultSurroundingTextTimeout
+  ) -> IBusCommitClient?
+
+  @discardableResult public func start() -> Bool   // reconcile -> register -> reader thread
+
+  /// Recovers the selection from `SetSurroundingText`, asks `bodyForSelection`
+  /// for a replacement, and on a match delete+commits it. Replaces the
+  /// pre-T-IBUS-REPLACER `commit(replacingKeyword:withReplacementText:)`,
+  /// which required the caller to already know the keyword — impossible
+  /// once the keyword itself comes from the surrounding-text answer, not a
+  /// synthesized copy.
+  public func replaceSelection(bodyForSelection: sending @escaping (String) async -> String?) async
+    -> IBusCommitOutcome
+}
+```
+
+**Usage** (`LinuxIBusSelectionReplacer`, below, is the one real caller):
+
+```swift
+guard let client = IBusCommitClient.resolveAndConnect(store: keyValueStore) else {
+  // IBus unavailable this session — fall through to the next tier.
+  return .noSelection
+}
+switch await client.replaceSelection(bodyForSelection: { selection in
+  await snippetStore.findByKeyword(selection)?.body
+}) {
+case .committedUnconfirmed, .noMatch:
+  return mapped   // TERMINAL — do not also try the clipboard tier
+case .noLiveRecipient, .noSelection, .unavailable:
+  // fall through to the next tier
+}
+```
+
+### Architecture — two connections, not one (D-IBUS-4)
+
+`registrationConnection` registers our component/engine and is the ONE
+connection whose reader thread ever calls `receiveOneMessage` on it — every
+inbound `Factory.CreateEngine`/`Engine.*` call arrives and is replied to
+here, and the outbound `DeleteSurroundingText`/`CommitText` SIGNALS are also
+sent on THIS connection (real ibus-daemon proxies an engine's signals through
+whichever connection registered it — emitting from a different connection
+would not reach the daemon's routing for this engine at all).
+`callConnection` only ever does blocking `SetGlobalEngine`/`GetGlobalEngine`
+calls, mirroring `ShellHelperClient.callConnection`'s identical role.
+
+**Verified, not just theorized** — against a real `ibus-daemon` (1.5.29-rc2)
+on the project's VM, with a raw two-connection probe mirroring this exact
+shape (not libibus's own GI sync-call wrapper, which is a different code
+path this app never uses): `RegisterComponent` and `SetGlobalEngine`
+(issued on the separate outbound connection) both completed in low
+single-digit milliseconds while `CreateEngine`/`Enable`/`FocusIn` were served
+concurrently on the registration connection's own independent reader thread
+— 3/3 clean runs, zero deadlocks, zero timeouts. `FocusIn` itself arrived
+~1ms after `SetGlobalEngine` was issued, 3/3 runs. See
+`.claude/logs/senior-dev.md` for the full measurement and the reasoning for
+why a single shared connection is unsafe here independent of any libibus
+quirk (`DBusConnection.call(_:timeout:)`'s own reader loop discards any
+message that isn't the specific reply it's waiting for).
+
+### Crash safety (D-IBUS-3) — `IBusCrashSafetyStateMachine`
+
+Pure, fully unit-tested (`IBusCrashSafetyStateMachineTests.swift`) against a
+fake `KeyValueStore` and fake `setGlobalEngine` closures — persists the
+previous engine name (under the existing `KeyValueStore` seam
+`SettingsStore` already uses, no new dotfile) before ever switching, clears
+that marker only after a CONFIRMED restore, and — critically — `start()`
+runs `reconcileAtStartup()` **before anything else**, so a process that died
+mid-transaction gets force-restored on the very next launch, keyed on this
+app's OWN persisted marker, never on `GetGlobalEngine`'s live value (which
+the architect's own POC measured reporting unreliably after a crash).
+
+### Wiring D-IBUS-3 to the process lifecycle (T-IBUS-CRASHWIRE)
+
+`IBusCrashSafetyStateMachine` itself only defines the state machine;
+`Sources/ClipnestLinuxAppKit/App/{SelfPipe,ProcessSignalShutdown}.swift` and
+`Sources/ClipnestLinuxAppKit/InputMethod/IBusCrashSafetyReconciler.swift` are
+the pieces that actually connect it to real process shutdown — SIGTERM,
+SIGINT, and the tray's "Quit" item — none of which existed before this task
+(there was no signal handler of any kind anywhere in this codebase).
+
+```swift
+// IBusCrashSafetyReconciler — the ONE routine LinuxAppLifecycle.launch()'s
+// startup reconciliation, the SIGTERM/SIGINT self-pipe dispatch, AND the
+// tray's "Quit" item all call, so all three can never drift apart.
+// Deliberately NOT IBusCommitClient.resolveAndConnect()+.start(): opens
+// exactly one short-lived connection, only when the marker is genuinely
+// pending (the internal IBusCrashSafetyStateMachine.reconcileAtStartup gate
+// checks the marker FIRST), and never registers a component/engine or
+// leaves a reader thread running.
+enum IBusCrashSafetyReconciler {
+  static func restoreIfMarkerPresent(
+    store: any KeyValueStore,
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    connectTimeout: Duration = IBusCommitClient.defaultConnectTimeout,
+    callTimeout: Duration = IBusCommitClient.defaultCallTimeout
+  )
+}
+
+// ProcessSignalShutdown — self-pipe + sigaction(SIGTERM/SIGINT) + a GLib
+// IO-watch dispatch. The raw signal handler does exactly ONE thing (write
+// one byte to the pipe) — every other coding-standards.md-mandated
+// restriction on signal-handler content applies here as it does to a GTK
+// signal handler; the actual restore + quit logic runs later, off the GLib
+// main loop, via `onShutdownSignal`.
+enum ProcessSignalShutdown {
+  static func install(onShutdownSignal: @escaping @MainActor () -> Void)
+}
+```
+
+**Call sites, `LinuxAppLifecycle.swift`:**
+- `run(arguments:)`, right after `GTKMainActorBridge.install()`:
+  `ProcessSignalShutdown.install(onShutdownSignal:)`, whose closure calls the
+  shared `restoreIBusEngineBeforeQuit()` helper then
+  `ClipnestGTKApplication.quitMainLoop()`.
+- `launch(...)`, as the literal FIRST statement — before `LinuxAppEnvironment`
+  or any other subsystem is constructed:
+  `IBusCrashSafetyReconciler.restoreIfMarkerPresent(store:
+  PlatformDefaults.keyValueStore)`.
+- `startTray(...)`: `tray.onQuit` now calls the SAME
+  `restoreIBusEngineBeforeQuit()` helper before `quitMainLoop()`, so graceful
+  quit and signal-triggered quit share one path.
+
+**What this covers, stated plainly, not implied:** SIGTERM and SIGINT — the
+signals a process supervisor/systemd stop or Ctrl-C actually send. **SIGKILL
+is uncatchable by definition** — no in-process hook can run before a
+SIGKILLed process's address space vanishes; the mitigation there is
+`launch()`'s startup reconciliation repairing a marker left dangling by ANY
+cause on the NEXT launch, plus IBus's own kernel-driven socket-disconnect
+detection, neither of which depends on this app doing anything at all.
+
+**Verified live on the real VM daemon** (no Swift toolchain exists on that
+VM — same "raw probe mirroring the Swift architecture" precedent
+`IBusCommitClient`'s own VM verification already used, not the compiled
+Swift binary): a Python harness reproducing this exact algorithm (self-pipe
++ `GLib.io_add_watch` + the marker-file read/write) against the real
+`ibus-daemon`, with the crash-safety marker deliberately dirtied to a
+DIFFERENT engine than the one currently active —
+1. **Startup-reconciliation path**: invoking the restore routine directly
+   (no signal involved) changed the real global engine from `xkb:us::eng` to
+   the dirtied marker's value (`xkb:us:haw:haw`) and cleared the marker —
+   confirmed via `ibus engine` and the settings file before/after.
+2. **SIGTERM path**: a real `kill -TERM` sent to a separate process running
+   the self-pipe/GLib dispatch loop produced the identical restore (log:
+   `self-pipe IO watch fired on the GLib main loop ... SetGlobalEngine(...)
+   CONFIRMED, marker cleared`), and the process exited cleanly afterward.
+
+Not literally verified: an actual in-flight `IBusCommitTransaction`
+interrupted mid-transaction by a real SIGTERM (that requires
+T-IBUS-REPLACER's live wiring into `LinuxAppEnvironment`, built concurrently
+with this task) — the marker-dirtying above simulates the EXACT on-disk
+state such a crash leaves behind (the mechanism this task builds doesn't
+care why the marker is set, only that it is), so this is a faithful proof of
+the recovery mechanism, not of the end-to-end feature. Named as the
+inference it is, not claimed as the literal scenario.
+
+**Fixed (reviewer REJECT, was: "known integration gap flagged for
+T-IBUS-REPLACER's `LinuxAppEnvironment`"):** the paragraph that used to sit
+here named a real data-loss bug, not a "theoretical OS-file-level race," and
+the reviewer rejected the softer framing — once `LinuxAppEnvironment` exists,
+`JSONFileKeyValueStore.persist()` rewrites the WHOLE settings file per
+write, so a quit-time write through a second, independently-snapshotted
+instance can silently REVERT a concurrent settings write made through
+`LinuxAppEnvironment`'s own shared one (the user loses a setting they just
+changed, no error — see `SynchronizedKeyValueStoreTests.swift` for both
+halves reproduced directly: two independent instances over the same file DO
+lose a write; the same shared instance does not, even hit concurrently from
+multiple real threads).
+
+`LinuxAppEnvironment` now exposes `restoreIBusEngineIfNeeded()`, which calls
+`IBusCrashSafetyReconciler.restoreIfMarkerPresent(store:)` using `self
+.keyValueStore` — the SAME `SynchronizedKeyValueStore`-wrapped instance
+`settingsStore`/`IBusCommitClient`'s crash-safety writes already share (see
+the `LinuxIBusSelectionReplacer` section's "Security/thread-safety note"
+below). `LinuxAppLifecycle.restoreIBusEngineBeforeQuit()` — still the ONE
+routine both the SIGTERM/SIGINT path and the tray's "Quit" item call, so
+that single-routine property is unchanged — now routes through it whenever
+`environment` already exists:
+
+```swift
+private static func restoreIBusEngineBeforeQuit() {
+  if let environment {
+    environment.restoreIBusEngineIfNeeded()
+  } else {
+    // No LinuxAppEnvironment yet (a shutdown signal arriving in the narrow
+    // startup window before launch() finishes constructing it) -- no
+    // shared synchronized instance exists either, and nothing else in the
+    // process could be writing settings concurrently at that point, so a
+    // fresh PlatformDefaults.keyValueStore() here is still safe.
+    IBusCrashSafetyReconciler.restoreIfMarkerPresent(store: PlatformDefaults.keyValueStore)
+  }
+}
+```
+
+`launch()`'s own STARTUP reconciliation call is deliberately left as-is,
+keeping its own fresh `PlatformDefaults.keyValueStore()` instance — it runs
+before `LinuxAppEnvironment` (and therefore `keyValueStore`) exists at all,
+so the hazard above genuinely does not exist yet at that point (provably
+sequential: this environment's `init` — the only other writer — hasn't
+started). The two call sites are deliberately asymmetric; both source files'
+own doc comments say so explicitly, so a future reader doesn't "fix" one to
+match the other and reintroduce the bug.
+
+### Confirmability (D-IBUS-6) and the corrected gate (D-IBUS-5)
+
+`CommitText`/`DeleteSurroundingText` are fire-and-forget signals with no
+ack. The gate proving a receptive recipient exists is `SetSurroundingText`
+arriving within `surroundingTextTimeout` — NOT `FocusIn` (see this section's
+parent for the full correction and the VM measurement that drove it:
+`FocusIn` arrived even with no specific GUI text field focused, confirming
+only "the daemon bound our engine to SOME context," not "ready to accept a
+commit"). Because a delete+commit is only ever issued once
+`SetSurroundingText` has answered, the outcome past that gate is
+`.committedUnconfirmed`, never `.replaced` (`CommitText`/
+`DeleteSurroundingText` still have no ack), and it is TERMINAL: retrying via
+another tier after a real commit reached a live recipient risks a double
+insert, strictly worse than the status quo bug this feature exists to fix.
+`.noMatch` (a real, recovered selection with no snippet match) is ALSO
+terminal for the same "the keyword is real" reason
+`SnippetExpander`'s Accessibility tier already applies.
+
+### `unicodeScalarCount(of:)`, `selectedText(in:cursorPos:anchorPos:)`, `deleteOffsetAndCount(cursorPos:anchorPos:)` — the delete-count/selection-recovery units
+
+`DeleteSurroundingText(offsetFromCursor:characterCount:)` takes caller-
+supplied integers with no type-level enforcement of their unit — the real
+deletion arithmetic in upstream `ibus_engine_delete_surrounding_text`
+indexes a UCS-4 array, i.e. Unicode SCALARS, never Swift's `String.count`
+(grapheme clusters) or `.utf16.count` (surrogate-pair-sensitive). Same unit
+for `SetSurroundingText`'s own `cursor_pos`/`anchor_pos` (confirmed against
+`ibusimcontext.c`'s `g_utf8_strlen` conversion — see
+`docs/API-ClipnestPlatformLinux-IBus.md`). Three pure, unit-tested helpers
+on `IBusCommitClient` (internal, exercised directly by
+`IBusCommitClientTests.swift`) own this arithmetic so it lives in exactly
+one place:
+
+```swift
+static func unicodeScalarCount(of text: String) -> UInt32
+static func selectedText(in text: String, cursorPos: UInt32, anchorPos: UInt32) -> String?
+static func deleteOffsetAndCount(cursorPos: UInt32, anchorPos: UInt32)
+  -> (offsetFromCursor: Int32, characterCount: UInt32)
+```
+
+`selectedText` recovers the highlighted substring by slicing `text
+.unicodeScalars` at `[min(cursorPos, anchorPos), max(cursorPos, anchorPos))`
+— `nil` (not the empty string) when `cursorPos == anchorPos` (nothing
+selected) or either offset is out of range (a malformed/stale snapshot).
+`deleteOffsetAndCount` covers BOTH selection directions: cursor after the
+anchor (the common drag-then-release case) gives a NEGATIVE offset reaching
+back to the anchor; cursor before the anchor gives offset `0` and the count
+reaches forward. Every test exercises a combining accent PLUS a non-BMP
+emoji specifically (never ASCII alone), since an ASCII-only fixture cannot
+distinguish grapheme, UTF-16, and scalar indexing (the exact D95/T-ATSPI1
+failure shape this codebase has already shipped once).
+
+### Cross-module visibility (T-IBUS-CLIENT widening)
+
+`IBusCommitClient` lives in `ClipnestLinuxAppKit`; the pure protocol layer
+it drives lives in `ClipnestPlatformLinux`. Symbols widened from `internal`
+to `public` to make that possible (each carries its own "T-IBUS-CLIENT"
+doc-comment note at the widening site):
+`IBusPath.engine(id:)`; `IBusCapabilities`/`IBusText` (full types, including
+their static members/inits); `IBusRequests.registerComponent`/
+`.setGlobalEngine`/`.getGlobalEngine`/`.commitText`/`.deleteSurroundingText`
+plus `IBusComponentDescriptor`/`IBusEngineDescriptor` (full types); `IBusResponses
+.isSuccessReply`/`.parseGetGlobalEngineReply`; `IBusInboundRequest` (full
+enum + `.decode`); `IBusEngineDispatcher` (full class, `init`, `handle`,
+every `on...` closure property). **Also widened (T-IBUS-REPLACER):**
+`IBusRequests.requireSurroundingText(objectPath:serial:)` —
+`IBusCommitClient` emits it directly, once `FocusIn` confirms the engine is
+bound, as the corrected gate's own trigger. Everything else in that module
+(`IBusEngineReplies`, `parseCurrentInputContextReply`, `parseIBusText`,
+`currentInputContext`, `serializedText`) stays internal — nothing outside
+`ClipnestPlatformLinux` needs it yet.
+
+### T-IBUS-PIDLIVE — closed by this task
+
+`IBusAddressResolution` (`ClipnestPlatformLinux`) deliberately omitted the
+live-process liveness check upstream `ibus_get_address()` performs (a stale
+socket-address file after an `ibus-daemon` restart can point at a dead
+daemon). `IBusAddressResolution.resolveWithDaemonPID(environment:readFile:)`
+now pairs the resolved address with the SAME file's `IBUS_DAEMON_PID=` line
+(still pure — no syscall); the actual `kill(pid, 0)` liveness syscall
+(Linux/Glibc only) lives in `IBusDaemonLiveness.isDaemonProcessAlive(pid:)`
+(`IBusDaemonLiveness.swift`), called by both `IBusCommitClient
+.resolveAndConnect` and `IBusCrashSafetyReconciler.restoreIfMarkerPresent` to
+discard a stale address before ever dialing it. The two call sites used to
+carry a deliberate, disclosed duplicate copy of this one-line helper each
+(concurrent edits to `IBusCommitClient.swift`/`IBusCrashSafetyReconciler.swift`
+by two tasks in the same session made a shared call unsafe until both
+landed) — folded into this one shared helper once they had (reviewer
+non-blocking DRY finding).
+
+## `LinuxIBusSelectionReplacer` / `LinuxTieredSelectionReplacer` / `IBusCommitPolicy` — the IBus + clipboard composer (T-IBUS-REPLACER)
+
+`Sources/ClipnestLinuxAppKit/Clipboard/{LinuxIBusSelectionReplacer,LinuxTieredSelectionReplacer,IBusCommitPolicy}.swift`.
+The composing layer D-IBUS-1 calls for: a Linux-only `SelectionReplacing`
+composer that tries the IBus commit tier first and falls back to the
+existing clipboard copy/paste tier, WITHOUT touching `ClipnestCore`'s
+`SnippetExpander` (it still holds exactly one `clipboardReplacer` and has
+no idea this composition exists).
+
+```swift
+// IBusCommitPolicy — per-app eligibility, mirroring TerminalAppRegistry's
+// shape but inverted (exclude list, not include list): eligible by
+// default. Deliberately EMPTY — the Electron/Chromium POC found no app
+// class needing exclusion, and VTE terminals are the case this tier is
+// UNIQUELY good at (see the type's own doc comment for why it must never
+// grow a terminal-decline check of its own).
+public enum IBusCommitPolicy {
+  public static let excludedIdentifiers: Set<String>   // = []
+  public static func isEligible(appIdentifier identifier: String?) -> Bool
+}
+
+// LinuxIBusSelectionReplacer — drives IBusCommitClient (via the internal
+// IBusReplacing seam, for testability), runs the policy gate BEFORE any
+// IBus I/O, and maps IBusCommitOutcome onto SelectionReplaceResult — the
+// ONE place that mapping happens.
+public final class LinuxIBusSelectionReplacer: SelectionReplacing { }
+
+// LinuxTieredSelectionReplacer — the ONE SelectionReplacing LinuxAppEnvironment
+// hands SnippetExpander as clipboardReplacer.
+public final class LinuxTieredSelectionReplacer: SelectionReplacing {
+  public init(ibusReplacer: any SelectionReplacing, clipboardReplacer: any SelectionReplacing)
+}
+```
+
+**Fall-through table (D-IBUS-1)**, implemented in
+`LinuxTieredSelectionReplacer.isTerminal(_:)`:
+- IBus -> `.noSelection` (covers `IBusCommitOutcome.unavailable`/
+  `.noLiveRecipient`/`.noSelection` AND a policy-excluded target, per
+  `LinuxIBusSelectionReplacer.map(_:)`) -> fall through to the clipboard
+  tier, exactly as `SnippetExpander` already falls AT-SPI -> clipboard.
+- IBus -> `.committedUnconfirmed` / `.noMatch` (and defensively `.replaced`,
+  though IBus never actually produces it) -> **TERMINAL**, returned as-is.
+  Never also tries the clipboard tier: retrying after a real IBus commit
+  reached a live recipient risks a genuine DOUBLE INSERT.
+
+**Degradation** (no `ibus-daemon`, unresolvable address, or connect
+failure): `LinuxAppEnvironment.init` never constructs a real
+`LinuxIBusSelectionReplacer` in that case — it passes `NullIBusSelectionReplacer`
+(private to that file), which always returns `.noSelection` with zero I/O,
+the same graceful-nil convention `makeSelectedTextAccessing()` already
+uses for AT-SPI.
+
+**Security/thread-safety note (T-IBUS-REPLACER review pass):**
+`LinuxAppEnvironment.init` shares ONE `KeyValueStore` instance between
+`SettingsStore` (`@MainActor`) and `IBusCrashSafetyStateMachine`'s
+persisted-marker seam (reachable from `IBusCommitClient`'s nonisolated
+background work — real blocking `NSCondition.wait()` calls happen there,
+which must never block the GTK main thread). `JSONFileKeyValueStore`'s own
+thread safety otherwise rests entirely on "every caller is
+`@MainActor`-isolated" — sharing it as-is would have reintroduced a real,
+unsynchronized data race the moment both callers were live simultaneously.
+`SynchronizedKeyValueStore` (`LinuxAppEnvironment.swift`; `internal`, not
+`private` — widened so `SynchronizedKeyValueStoreTests.swift` can construct
+it directly, since `LinuxAppEnvironment.init` itself cannot be built in a
+unit test) wraps it in a `Mutex` so every access from either caller
+serializes, closing the race without touching `IBusCrashSafetyStateMachine`'s
+own pure/synchronous contract or `SettingsStore`'s. `LinuxAppEnvironment`
+also holds this instance as `self.keyValueStore` (not just an `init` local)
+so `restoreIBusEngineIfNeeded()` — see "Wiring D-IBUS-3 to the process
+lifecycle" above — can route the quit-time IBus crash-safety restore through
+the exact same instance too, closing the quit-time data-loss bug documented
+there.
+
+**Why the wrapper alone isn't the whole fix:** `Mutex` only protects
+concurrent access to ONE instance's own in-memory `storage` — two SEPARATE
+`SynchronizedKeyValueStore`s (or two raw `JSONFileKeyValueStore`s) each
+wrapping a fresh load of the same on-disk file are still unsafe together,
+since each holds its own snapshot and whichever persists last silently
+wins. The actual fix is sharing ONE instance across every writer in the
+process, the wrapper only makes that one shared instance safe to hit from
+multiple threads at once.
 
 ## Working example
 

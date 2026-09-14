@@ -65,3 +65,12 @@ this project's source repository.
    ```
    Pick `esm` for GNOME 45+, `legacy` for GNOME 42-44. Then log out and
    back in.
+3. **Snippet expansion (select text, press the expand-snippet shortcut) has
+   its own Wayland delivery path, separate from picker auto-paste above.**
+   Where possible it inserts the replacement through your input method
+   (IBus) directly, rather than a synthesized keystroke — this reaches
+   apps, including terminals, that a synthesized-keystroke paste cannot
+   reliably reach on Wayland. If no receptive target is found that way, it
+   falls back to copy/paste like the picker does. This is snippet
+   expansion ONLY — general auto-paste from the picker still uses item 1's
+   permission/extension setup.

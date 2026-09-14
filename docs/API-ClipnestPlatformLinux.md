@@ -5,8 +5,11 @@ Linux-only (`#if os(Linux)`, see `Package.swift`). This page documents the
 D-Bus client behind `SnippetExpander`'s Accessibility-first tier — which is
 genuinely, verifiably functional as of this writing (see
 [Verified behavior](#verified-behavior-not-assumed) below). It does not
-document `ClipnestPlatformLinux`'s other subsystems (`Clipboard/`, `Input/`)
-— see [`docs/API-ClipnestLinuxAppKit.md`](API-ClipnestLinuxAppKit.md) for the
+document `ClipnestPlatformLinux`'s other subsystems (`Clipboard/`, `Input/`,
+`InputMethod/`) — see
+[`docs/API-ClipnestPlatformLinux-IBus.md`](API-ClipnestPlatformLinux-IBus.md)
+for `InputMethod/`'s IBus D-Bus protocol layer (tier 2),
+[`docs/API-ClipnestLinuxAppKit.md`](API-ClipnestLinuxAppKit.md) for the
 composition root that wires this subsystem in, and
 [`docs/API.md`](API.md) for the shared `ClipnestCore` contract
 (`SelectedTextAccessing`, `SnippetExpander`) this subsystem implements one
