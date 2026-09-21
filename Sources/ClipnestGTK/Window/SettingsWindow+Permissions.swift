@@ -127,6 +127,30 @@ public enum PermissionsTabPresentation {
     "In the clipnest-input group: \(status.isInClipnestInputGroup ? "Yes" : "No")"
   }
 
+  /// The tab's single top-of-tab summary line, shown for every
+  /// `GrantAvailability` state — extracted as its own pure "one function,
+  /// one line of text" lookup (same shape as `uinputAccessibleLine(for:)`/
+  /// `groupMembershipLine(for:)` above) so the mapping is unit-testable.
+  ///
+  /// T-PERMDUP1: before this task, `.pendingRelogin` rendered
+  /// `reloginNoteText` here AND via a second, dedicated `dim-label` widget
+  /// built lower in the tab — the identical sentence appeared twice on
+  /// screen, once in normal text and once greyed out. This banner already
+  /// covers all three states, so it's the one kept; the second widget was
+  /// removed rather than hidden (see `buildPermissionsTab()`'s doc comment
+  /// at that former call site) so the duplicate is structurally impossible,
+  /// not just currently avoided.
+  public static func bannerText(for status: UInputPermissionStatus) -> String {
+    switch availability(for: status) {
+    case .available: return notYetSetUpBannerText
+    case .pendingRelogin: return reloginNoteText
+    case .granted: return grantedConfirmationText
+    }
+  }
+
+  public static let notYetSetUpBannerText =
+    "Auto-paste is not yet set up — grant access below to let Clipnest type directly into apps."
+
   public static let reloginNoteText =
     "You're already in the clipnest-input group, but Linux only applies new group "
     + "membership at login — log out and back in for auto-paste to start working."
@@ -186,10 +210,17 @@ extension SettingsWindow {
     gtk_box_append(box, groupStatusLabel)
     permissionsGroupStatusLabel = groupStatusLabel
 
-    let reloginNoteLabel = addWrappedLabel(
-      to: box, text: PermissionsTabPresentation.reloginNoteText)
-    gtk_widget_add_css_class(reloginNoteLabel, "dim-label")
-    permissionsReloginNoteLabel = reloginNoteLabel
+    // T-PERMDUP1: `reloginNoteText` is rendered ONLY by
+    // `permissionsSetupBannerLabel` above (see its `.pendingRelogin` case in
+    // `refreshPermissionsStatus()`) — this tab previously also built a
+    // second, `dim-label`-styled copy of the same paragraph here, so
+    // `.pendingRelogin` showed the identical sentence twice (once in normal
+    // text, once greyed out). The banner is the one summary line already
+    // shown for all three `GrantAvailability` states, so it's the one kept;
+    // there is no longer a second widget for `showsReloginNote(for:)` to
+    // gate — that pure predicate remains as the tested, documented
+    // definition of the `.pendingRelogin` gap (see `UInputPermissionStatus`'s
+    // doc comment), it's just no longer wired to a widget of its own.
 
     let resultLabel = addStatusLabel(to: box)
     permissionsResultLabel = resultLabel
@@ -243,11 +274,12 @@ extension SettingsWindow {
     gtk_box_append(box, titleLabel)
     gtkClipboardCrashNoticeTitleLabel = titleLabel
 
-    // No `dim-label` here (unlike `reloginNoteLabel` above): that class is
-    // for a de-emphasized aside once a task is already mostly done; this
-    // notice is safety-relevant information that should read with the same
-    // full-contrast weight as `explanationText`/`securityExplanationText`
-    // above, not look like a disabled/secondary hint.
+    // No `dim-label` here (unlike `resultLabel`'s `addStatusLabel` styling
+    // above): that class is for a de-emphasized aside once a task is
+    // already mostly done; this notice is safety-relevant information that
+    // should read with the same full-contrast weight as `explanationText`/
+    // `securityExplanationText` above, not look like a disabled/secondary
+    // hint.
     let bodyLabel = addWrappedLabel(
       to: box,
       text: GTKClipboardCrashNoticePresentation.bodyText(for: gtkClipboardCrashNoticeInfo))
@@ -279,7 +311,7 @@ extension SettingsWindow {
   @MainActor
   func refreshPermissionsStatus() {
     guard let permissionsUInputStatusLabel, let permissionsGroupStatusLabel,
-      let permissionsReloginNoteLabel, let permissionsGrantButton
+      let permissionsGrantButton
     else { return }
 
     let status = uinputPermissionStatusProvider()
@@ -288,46 +320,34 @@ extension SettingsWindow {
     gtk_label_set_text(
       permissionsGroupStatusLabel, PermissionsTabPresentation.groupMembershipLine(for: status))
     gtk_widget_set_visible(
-      permissionsReloginNoteLabel, PermissionsTabPresentation.showsReloginNote(for: status) ? 1 : 0)
-    gtk_widget_set_visible(
       permissionsGrantButton, PermissionsTabPresentation.grantButtonVisible(for: status) ? 1 : 0)
     gtk_widget_set_sensitive(permissionsGrantButton, 1)
 
-    // Banner — setup guidance when missing, or confirmation when granted.
+    // Banner — the tab's one summary line, shown for every state (setup
+    // guidance, the re-login note, or the granted confirmation) via
+    // `PermissionsTabPresentation.bannerText(for:)` — see that function's
+    // doc comment (T-PERMDUP1) for why this is the ONLY place any of those
+    // three sentences is rendered.
     if let permissionsSetupBannerLabel {
-      switch PermissionsTabPresentation.availability(for: status) {
-      case .available:
-        gtk_label_set_text(
-          permissionsSetupBannerLabel,
-          "Auto-paste is not yet set up — grant access below to let Clipnest type directly into apps."
-        )
-        gtk_widget_set_visible(permissionsSetupBannerLabel, 1)
-      case .pendingRelogin:
-        gtk_label_set_text(
-          permissionsSetupBannerLabel,
-          PermissionsTabPresentation.reloginNoteText
-        )
-        gtk_widget_set_visible(permissionsSetupBannerLabel, 1)
-      case .granted:
-        gtk_label_set_text(
-          permissionsSetupBannerLabel,
-          PermissionsTabPresentation.grantedConfirmationText
-        )
-        gtk_widget_set_visible(permissionsSetupBannerLabel, 1)
-      }
+      gtk_label_set_text(
+        permissionsSetupBannerLabel, PermissionsTabPresentation.bannerText(for: status))
+      gtk_widget_set_visible(permissionsSetupBannerLabel, 1)
     }
 
     if let permissionsResultLabel {
       switch PermissionsTabPresentation.availability(for: status) {
-      case .granted:
-        setStatusLabel(
-          permissionsResultLabel, text: PermissionsTabPresentation.grantedConfirmationText)
-      case .pendingRelogin:
-        // Clears any earlier failure/cancellation message from a prior
-        // `.available`-state attempt — once the group database itself says
-        // "already a member," a stale "couldn't grant access" from before
-        // that would be actively misleading next to the dedicated re-login
-        // note this state already shows.
+      case .granted, .pendingRelogin:
+        // T-PERMDUP1: `.granted` used to restate `grantedConfirmationText`
+        // here — the exact same sentence `permissionsSetupBannerLabel`
+        // above already shows for this state, the same duplicate-paragraph
+        // shape as the `.pendingRelogin`/`reloginNoteText` bug this task
+        // fixed. Both states' outcomes are already summarised by the
+        // banner, so this line only ever needs to clear any earlier
+        // failure/cancellation message from a prior `.available`-state
+        // attempt — once the group database itself says "already a member"
+        // (`.pendingRelogin`) or /dev/uinput is live (`.granted`), a stale
+        // "couldn't grant access" from before would be actively misleading
+        // next to a banner that now says the grant worked.
         setStatusLabel(permissionsResultLabel, text: nil)
       case .available:
         // Leave whatever the last Grant attempt's own outcome message said

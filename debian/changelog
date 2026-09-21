@@ -1,3 +1,32 @@
+clipnest (0.9.4) jammy; urgency=medium
+
+  * fix(linux): startup no longer blocks the GTK main thread. Connecting to
+    IBus and reconciling a stale crash-safety marker from a previous
+    force-quit both used to run inline on the main thread before the app
+    window could appear; both now run in the background, so the app should
+    no longer stall at launch — this was most noticeable right after a
+    force-quit, since that is exactly when a crash-safety marker is left
+    behind for the next launch to clean up. A small internal lock was added
+    so the two reconciliation paths (normal startup and quit-time cleanup)
+    can never run at the same time and step on each other's state.
+  * fix(linux): Settings -> Permissions no longer shows the same status
+    message twice (once in normal text, once again greyed out below it).
+    The duplicate made a correctly-granted permission read as if something
+    had gone wrong; the message is now shown once.
+  * fix(linux): internal — per-call D-Bus timeouts are now actually
+    enforced. The socket-level receive timeout was previously set once when
+    a connection was opened and never updated for later calls, so a call
+    asking for a short timeout could still block for as long as the
+    connection's original, larger one. Measured: a call requesting a 100 ms
+    timeout previously took up to 3017 ms; it now completes in 108 ms. This
+    has no visible effect on its own.
+  * Note: this release does not fix the reported freeze when picking an
+    item from the picker. That issue remains unreproduced and under
+    investigation; none of the fixes above touch the code path item
+    selection uses.
+
+ -- Aayush Gour <ag14906@gmail.com>  Mon, 21 Sep 2026 00:00:00 +0000
+
 clipnest (0.9.3) jammy; urgency=medium
 
   * fix(linux): snippet expansion (select text, press the expand-snippet

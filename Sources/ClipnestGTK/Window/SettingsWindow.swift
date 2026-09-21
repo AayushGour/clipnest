@@ -214,7 +214,6 @@ public final class SettingsWindow: @unchecked Sendable {
   /// `init`), same contract as every other tab's widget refs above.
   var permissionsUInputStatusLabel: OpaquePointer?
   var permissionsGroupStatusLabel: OpaquePointer?
-  var permissionsReloginNoteLabel: OpaquePointer?
   var permissionsResultLabel: OpaquePointer?
   var permissionsGrantButton: OpaquePointer?
   var permissionsSetupBannerLabel: OpaquePointer?

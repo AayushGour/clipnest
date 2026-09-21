@@ -152,7 +152,7 @@ public final class DBusConnection: @unchecked Sendable {
     private static func openUnixSocket(target: DBusSocketTarget, timeout: Duration) -> Int32? {
       let fd = Glibc.socket(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0)
       guard fd >= 0 else { return nil }
-      applyTimeout(timeout, toFileDescriptor: fd)
+      DBusSocketReceiveTimeout.apply(timeout, toFileDescriptor: fd)
 
       let connected = withSockaddrUn(target: target) { sockaddrPointer, length in
         Glibc.connect(fd, sockaddrPointer, length) == 0
@@ -162,22 +162,6 @@ public final class DBusConnection: @unchecked Sendable {
         return nil
       }
       return fd
-    }
-
-    private static func applyTimeout(_ duration: Duration, toFileDescriptor fd: Int32) {
-      var tv = timeval()
-      // `.init(...)` rather than a direct assignment: `timeval.tv_sec`/
-      // `.tv_usec`'s exact imported integer type (`Int` vs `Int32`, per the
-      // platform's `time_t`/`suseconds_t` width) isn't something this file
-      // hardcodes an assumption about — `BinaryInteger.init(_:)` converts
-      // from `Duration.components`' `Int64` fields to whatever that type
-      // actually is.
-      tv.tv_sec = .init(duration.components.seconds)
-      tv.tv_usec = .init(duration.components.attoseconds / 1_000_000_000_000)
-      withUnsafeBytes(of: &tv) { rawBuffer in
-        _ = Glibc.setsockopt(
-          fd, SOL_SOCKET, SO_RCVTIMEO, rawBuffer.baseAddress, socklen_t(rawBuffer.count))
-      }
     }
 
     /// Builds a `sockaddr_un` for `target` and hands a `sockaddr*` view of
@@ -348,13 +332,40 @@ public final class DBusConnection: @unchecked Sendable {
   /// CALLER owns it and must close it exactly once (reading it, e.g. via
   /// `ReadClipboard`'s payload, then closing; or closing outright if it
   /// turns out not to be needed).
+  ///
+  /// **`THIS` call's `timeout` is re-applied as `SO_RCVTIMEO` before EVERY
+  /// underlying `recvmsg` round, not just once.** Without this, the socket
+  /// keeps whatever timeout the connection happened to carry from a PRIOR
+  /// operation — historically the one-time CONNECT timeout from
+  /// `connect(address:timeout:)`, applied once and never touched again —
+  /// so a short-lived call like `receiveOneMessage(timeout: .seconds(1))`
+  /// could block inside a single blocking `recvmsg` for as long as that
+  /// stale, unrelated, possibly much larger value, regardless of what this
+  /// call actually asked for. Every per-call `timeout:` in this module was
+  /// advisory rather than enforced until this fix.
+  ///
+  /// **The deadline is fixed once, up front, and each round applies only
+  /// what REMAINS of it — never the full `timeout` again.** Recomputing
+  /// from a running `deadline` (rather than resetting `SO_RCVTIMEO` to the
+  /// full `timeout` on every round) is what stops a slow-but-progressing
+  /// peer — one that trickles in a few bytes just before each round's
+  /// socket timeout would otherwise fire — from extending this call's
+  /// total budget indefinitely, one small delivery at a time. See
+  /// `DBusSocketReceiveTimeout.timeval(for:)`'s doc comment for the other
+  /// half of the same correctness property: as `remaining` shrinks toward
+  /// zero across rounds, it must never round down to a literal zero
+  /// `timeval`, which `SO_RCVTIMEO` reads as "block forever" — the exact
+  /// opposite of an expiring deadline.
   public func receiveOneMessageWithFileDescriptors(
     timeout: Duration
   ) -> (message: DBusMessage, fileDescriptors: [Int32])? {
     #if canImport(Glibc)
       let deadline = ContinuousClock.now + timeout
-      while ContinuousClock.now < deadline {
+      while true {
         if let decoded = tryDecodeBufferedMessage() { return decoded }
+        let remaining = deadline - ContinuousClock.now
+        guard remaining > .zero else { return nil }
+        DBusSocketReceiveTimeout.apply(remaining, toFileDescriptor: fileDescriptor)
         guard
           let (bytes, fileDescriptors) = DBusFileDescriptorPassing.receive(
             socket: fileDescriptor, maxBytes: DBusConnectionDefaults.readChunkByteCount)
@@ -364,7 +375,6 @@ public final class DBusConnection: @unchecked Sendable {
           $0.pendingFileDescriptors.append(contentsOf: fileDescriptors)
         }
       }
-      return tryDecodeBufferedMessage()
     #else
       return nil
     #endif

@@ -827,12 +827,97 @@ enum ProcessSignalShutdown {
   shared `restoreIBusEngineBeforeQuit()` helper then
   `ClipnestGTKApplication.quitMainLoop()`.
 - `launch(...)`, as the literal FIRST statement — before `LinuxAppEnvironment`
-  or any other subsystem is constructed:
-  `IBusCrashSafetyReconciler.restoreIfMarkerPresent(store:
-  PlatformDefaults.keyValueStore)`.
+  or any other subsystem is constructed: `await Task.detached(priority:
+  .userInitiated) { IBusCrashSafetyReconciliationGate.runBlocking {
+  IBusCrashSafetyReconciler.restoreIfMarkerPresent(store:
+  PlatformDefaults.keyValueStore) } }.value` — see "Startup no longer blocks
+  the GTK main thread (T-HANG-SELECT1 hygiene fix)" below for why this is no
+  longer a bare, inline call.
 - `startTray(...)`: `tray.onQuit` now calls the SAME
   `restoreIBusEngineBeforeQuit()` helper before `quitMainLoop()`, so graceful
   quit and signal-triggered quit share one path.
+
+### Startup no longer blocks the GTK main thread (T-HANG-SELECT1 hygiene fix)
+
+**The bug:** `launch()`'s startup reconciliation call and
+`LinuxAppEnvironment.init`'s `IBusCommitClient.resolveAndConnect(store:)`
+call both used to run synchronously, INLINE, on the `@MainActor`/GTK thread.
+`resolveAndConnect` alone can take up to ~4.5s worst case (two `DBusConnection
+.connect` calls plus two blocking `.call`s, each at its own — now actually
+enforced, see `DBusConnection.swift`'s `receiveOneMessageWithFileDescriptors`
+timeout note — timeout); the reconciler's own connect+call adds up to
+~2.25s more when a crash marker is genuinely present. Either one blocking
+the thread the GTK main loop pumps on freezes the whole compositor-visible
+window and can raise its force-quit dialog. Concretely dangerous because a
+force-quit leaves the crash marker behind: force-quit -> stale marker ->
+slow next launch -> force-quit again is a real, compounding loop, not a
+one-off.
+
+**The fix, and its ordering guarantee:** both blocking steps now run inside
+their own `Task.detached(priority: .userInitiated)`, matching
+`LinuxAppEnvironment.init`'s existing pattern for its other blocking startup
+work (SQLite open, uinput/X11 probe). `IBusCommitClient.resolveAndConnect`
+is raced as a FOURTH concurrent `async let` alongside the existing three
+(`clipStoreSetup`/`snippetStoreSetup`/`synthesizerSetup`) — it only depends
+on `keyValueStore`, already constructed earlier in `init`, so nothing else
+needs to complete first. `launch()`'s own top-level reconciliation call is
+still `await`ed to completion BEFORE `LinuxAppEnvironment()` is even
+constructed — the ordering invariant that must hold ("must run before any
+other subsystem," so the real, long-lived `IBusCommitClient` never races a
+still-in-flight marker restore) is unchanged; only WHICH THREAD runs the
+blocking syscalls changed, from the GTK thread to a background one. Nothing
+here "runs eventually, maybe" — every `await` is a real completion gate,
+not a fire-and-forget detach.
+
+**The concurrency hazard this reopens, and how it's closed
+(`IBusCrashSafetyReconciliationGate`):** the previous inline blocking had a
+side effect nobody designed for: while `launch()`'s startup call (or
+`LinuxAppEnvironment.init`'s `resolveAndConnect`) occupied the GTK thread,
+a shutdown signal's self-pipe GLib callback — dispatched on that SAME
+thread — could never fire concurrently with it. Freeing the GTK thread
+during these calls reopens that window: a SIGTERM/SIGINT or tray "Quit"
+arriving before `environment` exists now CAN be dispatched while a startup
+reconciliation is still in flight, reaching `restoreIBusEngineBeforeQuit()`
+'s pre-`environment` fallback branch, which constructs its OWN, independent
+`PlatformDefaults.keyValueStore()` (a computed property — every access
+reads `settings.json` fresh) — a genuine race against the in-flight
+startup call's marker read/write, not a theoretical one, since
+`JSONFileKeyValueStore.persist()` rewrites the whole file per write and can
+resurrect an already-cleared marker.
+
+```swift
+// IBusCrashSafetyReconciliationGate — a Mutex<Void>-backed serialization
+// point every "before LinuxAppEnvironment exists" caller of the shared
+// crash-safety marker funnels through: launch()'s startup reconciliation,
+// LinuxAppEnvironment.init's IBusCommitClient.resolveAndConnect (which
+// runs its OWN internal reconcile pass via IBusCommitClient.start() ->
+// reconcileAtStartup()), and restoreIBusEngineBeforeQuit()'s
+// pre-environment fallback.
+enum IBusCrashSafetyReconciliationGate {
+  // Blocks the CALLING thread until any other in-flight call made through
+  // this gate finishes, then runs `body` under the same exclusion.
+  // Background callers (startup) wrap this in their own
+  // Task.detached(priority: .userInitiated); restoreIBusEngineBeforeQuit()'s
+  // pre-environment branch calls it directly, deliberately still blocking
+  // — see that method's own doc comment for why blocking there, unlike at
+  // startup, is the correct trade-off (the caller is already committed to
+  // quitting, not serving a live user interaction).
+  static func runBlocking<T>(_ body: () -> T) -> T
+}
+```
+
+Every operation this gate protects is bounded by its own D-Bus connect/call
+timeout, and those timeouts are now actually enforced at the socket level
+(`DBusConnection.swift`'s `receiveOneMessageWithFileDescriptors`), so a caller
+blocked waiting on this gate is itself bounded by that same worst case,
+never stuck indefinitely behind a wedged peer.
+
+Once `LinuxAppEnvironment` exists, `restoreIBusEngineIfNeeded()` deliberately
+does NOT route through this gate — every caller that could reach the marker
+by then is `@MainActor`-isolated through `LinuxAppEnvironment` itself
+(already serialized for free), and both calls this gate exists to protect
+(`launch()`'s own and `LinuxAppEnvironment.init`'s) have already run to
+completion strictly before `environment` is ever assigned.
 
 **What this covers, stated plainly, not implied:** SIGTERM and SIGINT — the
 signals a process supervisor/systemd stop or Ctrl-C actually send. **SIGKILL
@@ -897,22 +982,36 @@ private static func restoreIBusEngineBeforeQuit() {
   } else {
     // No LinuxAppEnvironment yet (a shutdown signal arriving in the narrow
     // startup window before launch() finishes constructing it) -- no
-    // shared synchronized instance exists either, and nothing else in the
-    // process could be writing settings concurrently at that point, so a
-    // fresh PlatformDefaults.keyValueStore() here is still safe.
-    IBusCrashSafetyReconciler.restoreIfMarkerPresent(store: PlatformDefaults.keyValueStore)
+    // shared synchronized instance exists either, so a fresh
+    // PlatformDefaults.keyValueStore() here is still the right instance to
+    // use. Still deliberately BLOCKING (unlike launch()'s own startup
+    // call): this only ever runs mid-shutdown, so there is no "user is
+    // trying to use the app right now" cost, only "how long until this
+    // process exits" -- and blocking is what lets this wait on the SAME
+    // mutex launch()'s now-backgrounded startup reconciliation holds, via
+    // IBusCrashSafetyReconciliationGate.runBlocking, so the two can never
+    // interleave against the marker (see "Startup no longer blocks the GTK
+    // main thread" above for the race this closes).
+    IBusCrashSafetyReconciliationGate.runBlocking {
+      IBusCrashSafetyReconciler.restoreIfMarkerPresent(store: PlatformDefaults.keyValueStore)
+    }
   }
 }
 ```
 
-`launch()`'s own STARTUP reconciliation call is deliberately left as-is,
-keeping its own fresh `PlatformDefaults.keyValueStore()` instance — it runs
-before `LinuxAppEnvironment` (and therefore `keyValueStore`) exists at all,
-so the hazard above genuinely does not exist yet at that point (provably
-sequential: this environment's `init` — the only other writer — hasn't
-started). The two call sites are deliberately asymmetric; both source files'
-own doc comments say so explicitly, so a future reader doesn't "fix" one to
-match the other and reintroduce the bug.
+`launch()`'s own STARTUP reconciliation call still keeps its own fresh
+`PlatformDefaults.keyValueStore()` instance — it runs before
+`LinuxAppEnvironment` (and therefore `keyValueStore`) exists at all, so the
+LOST-WRITE hazard this section opened with genuinely does not exist yet at
+that point (provably sequential: this environment's `init` — the only
+other writer — hasn't started). The two call sites are still deliberately
+asymmetric on WHICH `KeyValueStore` instance they use, for that reason.
+What changed (T-HANG-SELECT1) is that `launch()`'s call is no longer a bare
+inline call — it now runs off the GTK thread and through
+`IBusCrashSafetyReconciliationGate`, because unblocking that thread reopened
+a DIFFERENT hazard (two callers of the marker actually overlapping in time,
+not the on-disk lost-write shape this paragraph is about) — see "Startup no
+longer blocks the GTK main thread" above for that fix in full.
 
 ### Confirmability (D-IBUS-6) and the corrected gate (D-IBUS-5)
 

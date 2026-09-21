@@ -21,11 +21,13 @@ import Synchronization
 /// — this `init` uses the exact same fix `AppEnvironment.init` already
 /// adopted: every blocking/expensive step (opening the two SQLite stores,
 /// probing/opening the uinput device or an X11 `Display` for the paste
-/// backend) runs inside its own `Task.detached(priority: .userInitiated)`,
-/// all three racing concurrently via `async let`, so launch is bounded by
-/// the SLOWEST of the three, never their sum — and this initializer itself
-/// returns to its caller (`LinuxAppLifecycle`) without blocking the
-/// thread the GTK main loop will run on.
+/// backend, and — T-HANG-SELECT1 hygiene fix — resolving/registering the
+/// IBus commit-tier client) runs inside its own
+/// `Task.detached(priority: .userInitiated)`, all four racing concurrently
+/// via `async let`, so launch is bounded by the SLOWEST of the four, never
+/// their sum — and this initializer itself returns to its caller
+/// (`LinuxAppLifecycle`) without blocking the thread the GTK main loop
+/// will run on.
 ///
 /// **One shared `BlobStore` instance** for `clipStore` and
 /// `clipboardMonitor` — same rule `AppEnvironment.swift`'s own doc comment
@@ -123,7 +125,7 @@ final class LinuxAppEnvironment {
   /// second reader, in `ClipnestLinuxAppKit` alongside this file — the
   /// existing source of truth, so `--version` never grows a second
   /// hardcoded copy of the version string.
-  nonisolated static let installedVersion = "0.9.3"
+  nonisolated static let installedVersion = "0.9.4"
 
   /// Resolves this process's own absolute executable path for
   /// `AutostartDesktopFile.setEnabled(_:executablePath:)`'s `.desktop`
@@ -238,9 +240,32 @@ final class LinuxAppEnvironment {
         // run exactly once, off the main thread.
         LinuxEventSynthesizerFactory.makeDefault()
       }.value
+    // T-HANG-SELECT1 hygiene fix: `IBusCommitClient.resolveAndConnect` used
+    // to run synchronously, INLINE, further down this initializer (a real
+    // D-Bus connect + `RegisterComponent` + `CreateEngine` round trip,
+    // bounded but up to ~4.5s worst case with two connects and two calls at
+    // their now-actually-enforced timeouts — T-DBUSTIMEO1) — blocking the
+    // `@MainActor`/GTK thread for that whole span. Racing it here, as a
+    // fourth concurrent `Task.detached`, needs only `keyValueStore`
+    // (already constructed above, before this block) — nothing else built
+    // later in this initializer feeds INTO `resolveAndConnect` itself (only
+    // the RESULT is consumed later, alongside `frontmostAppProvider`).
+    // Wrapped in `IBusCrashSafetyReconciliationGate.runBlocking`:
+    // `resolveAndConnect` runs its OWN internal crash-safety reconcile pass
+    // (`IBusCommitClient.start()` -> `reconcileAtStartup()`) against the
+    // SAME marker `launch()`'s own top-level startup reconciliation just
+    // resolved (strictly before this initializer was even called) — see
+    // that gate's own doc comment for why serializing the two, even though
+    // both are now backgrounded, is load-bearing rather than defensive
+    // decoration.
+    async let ibusClientSetup: IBusCommitClient? = Task.detached(priority: .userInitiated) {
+      IBusCrashSafetyReconciliationGate.runBlocking {
+        IBusCommitClient.resolveAndConnect(store: keyValueStore)
+      }
+    }.value
 
-    let (rawClipStore, snippetStore, synthesizerResult) = try await (
-      clipStoreSetup, snippetStoreSetup, synthesizerSetup
+    let (rawClipStore, snippetStore, synthesizerResult, ibusClient) = try await (
+      clipStoreSetup, snippetStoreSetup, synthesizerSetup, ibusClientSetup
     )
 
     // T-RT2: wraps the real store — see `NotifyingClipStore`'s doc comment,
@@ -345,8 +370,13 @@ final class LinuxAppEnvironment {
     // `makeSelectedTextAccessing()` already uses for AT-SPI, so a missing
     // IBus daemon never blocks snippet expansion, it just skips straight
     // to the clipboard tier every time.
+    //
+    // `ibusClient` itself was already resolved above, concurrently with
+    // `clipStoreSetup`/`snippetStoreSetup`/`synthesizerSetup` (T-HANG-SELECT1
+    // hygiene fix) — this is consuming that already-awaited result, not a
+    // second `resolveAndConnect` call.
     let ibusReplacer: any SelectionReplacing
-    if let ibusClient = IBusCommitClient.resolveAndConnect(store: keyValueStore) {
+    if let ibusClient {
       ibusReplacer = LinuxIBusSelectionReplacer(
         client: ibusClient, frontmostAppProvider: frontmostAppProvider)
       Self.logger.info("IBus commit tier available for snippet expansion")

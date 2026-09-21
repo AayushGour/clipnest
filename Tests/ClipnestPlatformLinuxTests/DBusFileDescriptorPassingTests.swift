@@ -26,17 +26,6 @@ import Testing
   /// in a container as this task's own acceptance criterion requires.
   @Suite("DBusFileDescriptorPassing — real socketpair, real SCM_RIGHTS")
   struct DBusFileDescriptorPassingTests {
-    /// Creates a connected `AF_UNIX` `SOCK_STREAM` pair, matching exactly
-    /// the socket type `DBusConnection` itself uses.
-    private func makeSocketPair() -> (Int32, Int32) {
-      var fds: [Int32] = [0, 0]
-      let result = fds.withUnsafeMutableBufferPointer { buffer in
-        socketpair(AF_UNIX, Int32(SOCK_STREAM.rawValue), 0, buffer.baseAddress)
-      }
-      #expect(result == 0, "socketpair(2) must succeed in any unprivileged Linux container")
-      return (fds[0], fds[1])
-    }
-
     /// A temp file (unlinked immediately — its fd alone keeps the backing
     /// storage alive, exactly like a memfd would) holding `contents`.
     private func makeFileDescriptor(contents: String) -> Int32 {
@@ -62,7 +51,7 @@ import Testing
 
     @Test("a real fd for a file with known contents survives send→receive with matching bytes")
     func fileDescriptorSurvivesRoundTripWithMatchingBytes() {
-      let (sender, receiver) = makeSocketPair()
+      let (sender, receiver) = makeUnixSocketPair()
       defer {
         close(sender)
         close(receiver)
@@ -98,7 +87,7 @@ import Testing
 
     @Test("sending with zero file descriptors falls back to a plain write — no ancillary data")
     func zeroFileDescriptorsIsPlainWrite() {
-      let (sender, receiver) = makeSocketPair()
+      let (sender, receiver) = makeUnixSocketPair()
       defer {
         close(sender)
         close(receiver)
@@ -119,7 +108,7 @@ import Testing
 
     @Test("multiple fds attached to one message all survive, in order, with distinct contents")
     func multipleFileDescriptorsSurviveInOrder() {
-      let (sender, receiver) = makeSocketPair()
+      let (sender, receiver) = makeUnixSocketPair()
       defer {
         close(sender)
         close(receiver)
@@ -149,7 +138,7 @@ import Testing
 
     @Test("a message with fds mixed with a longer body still delivers correct bytes and fds")
     func fdsSurviveAlongsideALongerBody() {
-      let (sender, receiver) = makeSocketPair()
+      let (sender, receiver) = makeUnixSocketPair()
       defer {
         close(sender)
         close(receiver)

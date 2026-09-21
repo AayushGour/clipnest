@@ -236,7 +236,28 @@ public enum LinuxAppLifecycle {
     // Cheap in the overwhelmingly common case: `IBusCrashSafetyReconciler
     // .restoreIfMarkerPresent` reads the marker FIRST and never touches
     // the network at all when nothing is pending.
-    IBusCrashSafetyReconciler.restoreIfMarkerPresent(store: PlatformDefaults.keyValueStore)
+    //
+    // T-HANG-SELECT1 hygiene fix: the marker-check itself is cheap and
+    // stays inline, but when a marker IS genuinely present, resolving it
+    // means a real D-Bus connect + call (up to ~2.25s worst case) — this
+    // MUST be `await`ed to completion here (nothing after this line, in
+    // particular `LinuxAppEnvironment()` below, may start until it's done —
+    // see this function's own ordering contract above), but the actual
+    // blocking syscalls run on a background thread via
+    // `Task.detached(priority: .userInitiated)`, matching
+    // `LinuxAppEnvironment.init`'s own existing pattern for its
+    // blocking/expensive startup steps, so the GTK main thread keeps
+    // pumping (redrawing, answering `clipnest-ctl ping`) instead of
+    // freezing and triggering the compositor's force-quit dialog.
+    // `IBusCrashSafetyReconciliationGate.runBlocking` (not a bare call)
+    // guards against a shutdown signal's self-pipe callback reaching the
+    // SAME marker concurrently during this now-unblocked window — see that
+    // type's own doc comment for the exact race this closes.
+    await Task.detached(priority: .userInitiated) {
+      IBusCrashSafetyReconciliationGate.runBlocking {
+        IBusCrashSafetyReconciler.restoreIfMarkerPresent(store: PlatformDefaults.keyValueStore)
+      }
+    }.value
 
     let environment: LinuxAppEnvironment
     do {
@@ -789,11 +810,27 @@ public enum LinuxAppLifecycle {
   /// with no in-flight IBus commit transaction finds an empty marker and
   /// this call does nothing beyond one `KeyValueStore` read — see
   /// `IBusCrashSafetyReconciler.restoreIfMarkerPresent`'s own doc comment.
+  ///
+  /// **T-HANG-SELECT1 hygiene fix:** the pre-`environment` branch now
+  /// routes through `IBusCrashSafetyReconciliationGate.runBlocking` rather
+  /// than calling `restoreIfMarkerPresent` bare. Deliberately still
+  /// BLOCKING here, unlike `launch()`'s own startup call — this function
+  /// only ever runs as part of an already-in-progress shutdown (a caught
+  /// SIGTERM/SIGINT, or the tray's "Quit"), so there is no "user is trying
+  /// to use the app right now" cost to protect against, only "how long
+  /// until this process actually exits" — and blocking here is what lets
+  /// this call wait for the mutex `runBlocking` shares with `launch()`'s
+  /// own (now backgrounded) startup reconciliation, so the two can never
+  /// interleave against the same on-disk marker if a shutdown signal
+  /// happens to land during that narrow startup window. Bounded by the
+  /// same NOW-ACTUALLY-ENFORCED D-Bus timeouts (T-DBUSTIMEO1) either way.
   private static func restoreIBusEngineBeforeQuit() {
     if let environment {
       environment.restoreIBusEngineIfNeeded()
     } else {
-      IBusCrashSafetyReconciler.restoreIfMarkerPresent(store: PlatformDefaults.keyValueStore)
+      IBusCrashSafetyReconciliationGate.runBlocking {
+        IBusCrashSafetyReconciler.restoreIfMarkerPresent(store: PlatformDefaults.keyValueStore)
+      }
     }
   }
 }

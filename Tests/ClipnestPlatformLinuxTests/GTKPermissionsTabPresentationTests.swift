@@ -82,4 +82,48 @@ struct GTKPermissionsTabPresentationTests {
     #expect(text.contains("not an error"))
     #expect(!text.lowercased().contains("broken"))
   }
+
+  // T-PERMDUP1: the tab used to render `reloginNoteText` twice in
+  // `.pendingRelogin` — once via the banner, once via a second, dedicated
+  // `dim-label` widget lower in the tab — because both widgets independently
+  // decided to show it. `bannerText(for:)` is now the single pure lookup
+  // `refreshPermissionsStatus()` calls for the tab's one summary line
+  // (mirrors `uinputAccessibleLine(for:)`/`groupMembershipLine(for:)`'s
+  // existing "one function, one line of text" shape), so these tests pin
+  // down the exact sentence for each `GrantAvailability` state and,
+  // together with `showsReloginNote(for:)` above, confirm there is no
+  // second call site left to reintroduce the duplicate.
+  @Test("Banner text: not yet set up when available to request")
+  func bannerTextForAvailableIsTheSetupPrompt() {
+    let status = UInputPermissionStatus(isUInputAccessible: false, isInClipnestInputGroup: false)
+    #expect(
+      PermissionsTabPresentation.bannerText(for: status)
+        == PermissionsTabPresentation.notYetSetUpBannerText)
+  }
+
+  @Test("Banner text: the re-login note, in the exact gap this feature exists to explain")
+  func bannerTextForPendingReloginIsTheReloginNote() {
+    let status = UInputPermissionStatus(isUInputAccessible: false, isInClipnestInputGroup: true)
+    #expect(
+      PermissionsTabPresentation.bannerText(for: status)
+        == PermissionsTabPresentation.reloginNoteText)
+  }
+
+  @Test("Banner text: the granted confirmation once /dev/uinput is live")
+  func bannerTextForGrantedIsTheConfirmation() {
+    let status = UInputPermissionStatus(isUInputAccessible: true, isInClipnestInputGroup: true)
+    #expect(
+      PermissionsTabPresentation.bannerText(for: status)
+        == PermissionsTabPresentation.grantedConfirmationText)
+  }
+
+  @Test("The three per-state summary sentences are textually distinct")
+  func perStateSummarySentencesDoNotCollide() {
+    let texts = [
+      PermissionsTabPresentation.notYetSetUpBannerText,
+      PermissionsTabPresentation.reloginNoteText,
+      PermissionsTabPresentation.grantedConfirmationText,
+    ]
+    #expect(Set(texts).count == texts.count)
+  }
 }
