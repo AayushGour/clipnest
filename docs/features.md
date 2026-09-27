@@ -971,42 +971,86 @@ the screen.
 **How it works — keyword expansion (⌥⌘E), the two-strategy design.**
 `SnippetExpander.expand()` (`SnippetExpander.swift:62-88`) is
 `@MainActor` (it drives Accessibility, the pasteboard, key synthesis, and
-`NSSound.beep()`):
+`NSSound.beep()`). The AX-backed strategy below is gated by a general trust
+contract (D97 in `project-context.md`): `AXError.success` only certifies the
+target app *accepted* the call, never that it took *effect* or was *scoped*
+to the control the user is actually looking at, so both the read and the
+write are independently verified rather than trusted on a bare `AXError`.
 1. **Accessibility first**: `selectedText.readSelectedText()`
    (`SelectedTextAccessing.swift:7-10`, AX-backed via `AXSelectedTextAccessor`
-   in the app target, `ClipnestApp/Sources/System/SelectedTextAccessing.swift:20-52`,
-   using `kAXSelectedTextAttribute`). If there's a non-blank selection,
-   look it up via `snippetStore.findByKeyword`. A read-but-no-match beeps
-   and **stops** — it does not fall back to the clipboard, since a
-   successful AX read means the keyword is real and a clipboard re-read
-   would yield the same non-match. If it matches, `selectedText
-   .replaceSelectedText(with:)` writes the body directly via AX, with
-   **no pasteboard involvement at all** — this is the fast, non-disruptive
-   path, and works for native/most Cocoa text (TextEdit, Notes, Safari
-   fields).
-2. **Clipboard fallback** (only reached when AX can't read the selection at
-   all — Electron/Chrome/Java apps don't expose it to AX — or read it but
-   the AX *write* was refused): `ClipboardSelectionReplacer
+   in the app target, `ClipnestApp/Sources/System/SelectedTextAccessing.swift`,
+   using `kAXSelectedTextAttribute`). A `.success` read is only trusted if
+   the focused element's role (`kAXRoleAttribute`) is on a positive
+   **allowlist** of known editable-text roles — `AXTextField`, `AXTextArea`,
+   `AXComboBox`, `AXStaticText`, `AXSecureTextField`
+   (`AXSelectedTextAccessor.isTrustworthy(role:)`); an unrecognized role
+   (including an unreadable/`nil` role) is untrusted simply by not
+   appearing on the list, no per-app/per-framework denylist required
+   (**T-AXTRUST1**). **T-ELEC1** found the original evidence for this: at
+   least one real Electron app (Antigravity IDE, whose Monaco-style editor
+   never moves real AX focus onto an editable control unless accessibility
+   support is on) answers `kAXSelectedTextAttribute` with `.success` and a
+   STALE/unrelated string from the top-level web area (`AXWebArea`) instead
+   of failing outright — trusting that unconditionally used to beep before
+   ever trying the clipboard fallback, since a non-blank AX read normally
+   means the keyword lookup itself failed (see below). An untrusted-role
+   read is treated exactly like a failed read (`nil`), routing correctly to
+   strategy 2. If there's a genuinely non-blank, trusted selection, look it
+   up via `snippetStore.findByKeyword`. A read-but-no-match beeps and
+   **stops** — it does not fall back to the clipboard, since a successful,
+   trusted AX read means the keyword is real and a clipboard re-read would
+   yield the same non-match. If it matches,
+   `selectedText.replaceSelectedText(with:)` attempts to write the body
+   directly via AX, with **no pasteboard involvement at all** when it
+   succeeds — the fast, non-disruptive path for native/most Cocoa text
+   (TextEdit, Notes). The write is **not** trusted on `AXError` alone
+   either, for ANY role — unlike the read side, this check is not gated by
+   the allowlist at all: it captures the required
+   `kAXSelectedTextRangeAttribute` before the write and re-reads it once
+   after a `.success` result, only reporting success if the range
+   demonstrably changed (`AXSelectedTextAccessor.rangeChanged(before:after:)`)
+   — **T-SAFARI1** found that Safari/WebKit's
+   `AXUIElementSetAttributeValue(kAXSelectedTextAttribute)` returns
+   `.success` while the on-page field (`<input>`, `<textarea>`, and
+   `contenteditable` alike — all report `AXTextField`/`AXTextArea`, so the
+   role allowlist alone can't catch this) is provably unchanged, and a wider
+   cross-app survey afterward found the same phantom-`.success` write in
+   Brave, VS Code/Antigravity, and even Apple's own Terminal.app (native
+   AppKit) — phantom writes track no single role or toolkit, which is why
+   this check is unconditional rather than scoped to WebKit. An
+   unverified write (unchanged or unreadable range on either side) falls
+   through to strategy 2 exactly like a refused write always did.
+2. **Clipboard fallback** (reached when AX can't read the selection at all,
+   reads an untrusted-role selection, or read it but the AX *write* was
+   refused or unverifiable): `ClipboardSelectionReplacer
    .replaceSelection(bodyForSelection:)`
-   (`ClipboardSelectionReplacer.swift:50-84`) is the universal, works-in-any-
+   (`ClipboardSelectionReplacer.swift`) is the universal, works-in-any-
    app path. It runs the entire transaction atomically from the clipboard's
    point of view: `beginSuppression()` (→ `ClipboardMonitor.pause()`),
-   snapshot every pasteboard item/type verbatim (`snapshotClipboard()`,
-   `:116-126`), wait `modifierClearDelay` (60ms, so the user's still-held
+   snapshot every pasteboard item/type verbatim (`snapshotClipboard()`),
+   wait `modifierClearDelay` (60ms, so the user's still-held
    ⌥⌘ doesn't merge with the synthetic keystroke), post a synthetic ⌘C and
-   poll (`waitForChange`, `:88-96`, up to `copyMaxWait = 500ms`) for the
+   poll (`waitForChange`, up to `copyMaxWait = 500ms`) for the
    pasteboard to actually change, read the resulting selection, look it up,
    write the matched body and post a synthetic ⌘V, wait `pasteSettle`
    (120ms) for it to land, then — via `defer` — restore the original
    clipboard snapshot and `endSuppression()` (→ `ignore(changeCount:)` +
    `resume()`). The clipboard ends up byte-for-byte as it started; capture
    suppression means the transient copy/paste never lands in history.
+   **T-ELEC1** verified this whole transaction end-to-end against a real
+   Electron app (VS Code) — 11 trials across varied modifier-hold timing,
+   selection sizes, and workspace load, all landing at a consistent ~80ms
+   copy phase and restoring the clipboard correctly every time; the fixed
+   delays above were measured, not guessed, to be adequate.
 3. If neither strategy replaces anything, `expand()` calls `beep()`
    (default `NSSound.beep()`).
 
 **Edge cases handled**
-- AX read succeeds, no keyword match → beep, no clipboard fallback attempted.
-- AX read succeeds and matches, but the AX *write* is refused → falls through to the clipboard path instead of silently failing.
+- AX read succeeds with a trusted-role selection, no keyword match → beep, no clipboard fallback attempted.
+- AX read succeeds and matches, but the AX *write* is refused (non-`.success` `AXError`) → falls through to the clipboard path instead of silently failing.
+- AX read succeeds and matches, the write returns `.success`, but the re-read selection range is unchanged or unreadable (Safari/WebKit's phantom-success write, **T-SAFARI1**) → treated as an unverified write, falls through to the clipboard path exactly like a refused write.
+- AX read succeeds but from a role outside the allowlist (e.g. `AXWebArea` from a Monaco-style editor without accessibility support enabled, or any other unrecognized/unreadable role — **T-ELEC1**/**T-AXTRUST1**) → treated as unreadable, falls through to the clipboard path instead of trusting stale or out-of-scope data.
+- AX read succeeds with a trusted role but an EMPTY string (seen in some VS Code/Antigravity plain-text buffers, distinct from the `AXWebArea` case above) → `SnippetExpander.expand()`'s own blank-check treats it exactly like a `nil` read, falling through to the clipboard path without beeping or attempting an empty-keyword lookup.
 - AX can't read at all (Electron/etc.) → clipboard fallback runs; if that also finds nothing selected → beep.
 - Multiple snippets share the same keyword → the newest (`createdAt`) wins.
 - Keyword lookup is trimmed + case-folded on both sides (stored keyword and typed selection).
@@ -1021,9 +1065,25 @@ beeps, does NOT fall back to the clipboard` (`:74`), `AX can't read
 matches but the AX WRITE is refused: falls back to the clipboard` (`:126`).
 `Tests/ClipnestCoreTests/SnippetStoreTests.swift`/
 `SwiftDataSnippetStoreTests.swift` — `findByKeyword` matching/trimming/
-newest-wins (`:211`/`swiftDataFindByKeyword`). `ClipboardSelectionReplacer`
-(the real AppKit implementation) has no automated test — see
-[Testing strategy](#testing-strategy).
+newest-wins (`:211`/`swiftDataFindByKeyword`).
+`ClipnestApp/Tests/ClipnestAppTests/AXSelectedTextAccessorTests.swift` —
+covers the two pure decisions behind the D97 trust contract:
+`isTrustworthy(role:)` (allowlisted text-control roles are trusted;
+`AXWebArea`, other unrecognized/synthetic roles like `AXGroup`/`AXUnknown`,
+and an unreadable/`nil` role are all rejected — **T-AXTRUST1** flipped `nil`
+from trusted to rejected, closing the one gap T-ELEC1 deliberately left
+open) and `rangeChanged(before:after:)` (a before/after selection-range pair
+that's readable both times and actually different is the only case that
+counts as a verified write — **T-SAFARI1**).
+`ClipboardSelectionReplacer`/`AXSelectedTextAccessor` (the real AppKit
+implementations that drive actual AX/CGEvent calls) otherwise have no
+automated test — see [Testing strategy](#testing-strategy) — verified
+manually instead: T-ELEC1's 11 clipboard-fallback trials against VS Code and
+the `AXWebArea` guard confirmed live against Antigravity IDE; T-SAFARI1's
+write-verification fix confirmed live against Safari `<input>`, `<textarea>`,
+and `contenteditable` (the exact three surfaces the phantom-write bug was
+found on) plus a TextEdit regression check confirming the native AX fast
+path is unaffected.
 
 **Gotchas / constraints**
 - `Snippet.keyword` is set to the same value as `title` by the current UI —

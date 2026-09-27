@@ -1,0 +1,15 @@
+---
+layout: default
+---
+{%- comment -%}
+  T91: used by pages whose markdown body already opens with its own H1
+  (features.md, download.md, privacy.md, usage.md). These previously used
+  `layout: default` directly; front matter's `layout` key is the one
+  exception this task's brief allows changing, so they now point here
+  instead — same .content-page prose column and breadcrumb as page.html,
+  just without re-rendering a second H1 above the page's own.
+{%- endcomment -%}
+<article class="content-page">
+  <a class="breadcrumb" href="{{ "/" | relative_url }}">&larr; Clipnest</a>
+  {{ content }}
+</article>

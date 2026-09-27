@@ -1,0 +1,101 @@
+{%- comment -%}
+  Structured data (T76, updated T88). See .claude/seo-aeo-plan.md §5 for the
+  settled design and .claude/logs/senior-dev.md for the fact-check sources.
+
+  Ships one block:
+    - SoftwareApplication — HOME PAGE ONLY, gated on `page.url == "/"`
+                  (docs/pages/index.md's front matter sets
+                  `permalink: /`, so page.url is exactly "/" there and
+                  nowhere else). This is deliberate: the app entity must
+                  not be claimed on every URL of the site.
+
+  Hard rules followed (do not undo without re-reading the plan):
+    - No `aggregateRating` / `review` — Google's own structured-data
+      policy states a self-reviewed entity is ineligible for the rich
+      result and risks a manual action. No genuine third-party review
+      corpus exists for Clipnest yet.
+    - `sameAs` (not `codeRepository`) for the GitHub URL —
+      `codeRepository` is schema.org-valid only on `SoftwareSourceCode`,
+      not `SoftwareApplication`. Verified directly against schema.org.
+    - No `WebSite.SearchAction` — Google removed the sitelinks
+      searchbox feature site-wide, November 2024.
+    - `Person` (Aayush Gour), never a fabricated `Organization` — this is
+      a solo-dev project with no legal entity.
+    - Every internal site URL goes through Jekyll's `absolute_url`
+      filter (screenshot, softwareHelp). External URLs (github.com,
+      opensource.org) are literal strings on purpose — `absolute_url`
+      only makes sense for paths on *this* site; applying it to an
+      off-site URL would be wrong, not safer.
+    - `operatingSystem` is macOS-only ("macOS 14+") — zero Linux/GTK/
+      Wayland strings anywhere in this file.
+
+  T88 (review follow-up) — REMOVED the WebSite block this include used to
+  ship here. jekyll-seo-tag (called via `{%- seo -%}` earlier in this
+  layout's <head>) auto-emits its OWN JSON-LD block on every page via
+  Jekyll::SeoTag::Drop#type: "WebSite" specifically on the homepage
+  (`homepage_or_about?`), "WebPage" everywhere else (verified directly
+  against the installed jekyll-seo-tag 2.8.0 gem's drop.rb) — so the home
+  page used to carry two independent `@type: WebSite` JSON-LD nodes: the
+  plugin's thin auto one, and this include's richer one. Chose to
+  configure the plugin rather than keep a competing node: `_config.yml`
+  now sets a site-wide `author:` (name + url), which
+  `Jekyll::SeoTag::JSONLDDrop#author` reads and folds into the plugin's own
+  auto JSON-LD as an `author` entity on every page — so the homepage's one
+  remaining `WebSite` node is no longer bare. This doesn't reproduce our
+  old node's `publisher` key 1:1 (the plugin only exposes `author`, and its
+  `publisher` additionally requires a `site.logo` we deliberately did not
+  add — see `_config.yml`'s T88 comment for why), but it does attach the
+  same named `Person` (name + url) to the entity, which was the only real
+  information our old block added beyond what the plugin already emits
+  (name/description/url). Nothing is lost that the plugin can't express
+  for a solo-dev, no-logo site.
+  `SoftwareApplication` below is unchanged — jekyll-seo-tag has no concept
+  of it (its `VALID_ENTITY_TYPES` is BlogPosting/CreativeWork only) and it
+  remains the highest-value, home-page-gated artifact on the site.
+{%- endcomment -%}
+{%- if page.url == "/" -%}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Clipnest",
+  "alternateName": "Clipnest Clipboard Manager for Mac",
+  "description": "Clipnest is a free, open-source, native macOS clipboard manager. It remembers everything you copy — text, links, images, and files — with instant search, pinning, and reusable snippets that expand by keyword in any app. Optional on-device OCR; 100% local, no account, no cloud, no telemetry.",
+  "applicationCategory": "UtilitiesApplication",
+  "applicationSubCategory": "Clipboard Manager",
+  "operatingSystem": "macOS 14+",
+  "softwareVersion": "0.9.0",
+  "softwareRequirements": "macOS 14 Sonoma or later",
+  "downloadUrl": "https://github.com/AayushGour/clipnest/releases/latest",
+  "installUrl": "https://github.com/AayushGour/clipnest/releases/latest",
+  "fileSize": "1.7MB",
+  "datePublished": "2026-09-04",
+  "releaseNotes": "https://github.com/AayushGour/clipnest/releases",
+  "featureList": "Full clipboard history (text, rich text, images, files, links); instant search; type filters; pinning; reusable snippets with keyword expansion in any app; global hotkey; optional on-device OCR (off by default); 100% local storage",
+  "screenshot": {
+    "@type": "ImageObject",
+    "url": "{{ '/assets/screenshot-picker.png' | absolute_url }}",
+    "caption": "Clipnest's clipboard history picker"
+  },
+  "softwareHelp": {
+    "@type": "CreativeWork",
+    "url": "{{ '/usage/' | absolute_url }}"
+  },
+  "license": "https://opensource.org/licenses/MIT",
+  "isAccessibleForFree": true,
+  "offers": {
+    "@type": "Offer",
+    "price": "0",
+    "priceCurrency": "USD"
+  },
+  "author": {
+    "@type": "Person",
+    "name": "Aayush Gour",
+    "url": "https://github.com/AayushGour"
+  },
+  "sameAs": [
+    "https://github.com/AayushGour/clipnest"
+  ]
+}
+</script>
+{%- endif -%}

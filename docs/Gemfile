@@ -1,0 +1,37 @@
+source "https://rubygems.org"
+
+# Matches GitHub Pages' own documented local-preview setup so `bundle exec
+# jekyll build` here reproduces the real Pages build environment (theme +
+# plugin allowlist all come from this gem, not a manually assembled list).
+# See .claude/seo-aeo-plan.md §3.
+gem "github-pages", group: :jekyll_plugins
+
+# Required on Ruby >= 3.4 stdlib extraction, and harmless/pinned-safe on
+# earlier Rubies too — github-pages' own dependency chain (jekyll-sass-converter
+# etc.) needs it and it is no longer bundled with Ruby by default.
+gem "webrick", "~> 1.9"
+
+# T88 (review follow-up): investigated suppressing the unwanted jekyll-feed
+# output (_site/feed.xml, orphaned — nothing links to it, `_config.yml`'s
+# `plugins:` list never asked for it). No Gemfile-level fix exists; verified
+# empirically, not assumed:
+#   - `gem "jekyll-feed", require: false` has NO effect here. jekyll-feed
+#     isn't reaching the build via `Bundler.require(:jekyll_plugins)` at all
+#     (that call only auto-requires TOP-LEVEL Gemfile deps tagged with that
+#     group — confirmed via `Bundler.definition.dependencies`, which lists
+#     only `github-pages` and `webrick`). The real activation path is
+#     `Jekyll::PluginManager#require_theme_deps`: the `minima` theme's own
+#     gemspec declares `jekyll-feed` (~> 0.9) and `jekyll-seo-tag` (~> 2.1)
+#     as runtime dependencies, and Jekyll auto-requires every one of a
+#     theme's runtime deps, gated only by the safe-mode plugin whitelist —
+#     which `github-pages` forcibly sets to its own `PLUGIN_WHITELIST`
+#     (includes jekyll-feed) via config overrides applied *after* user
+#     config, so neither `_config.yml`'s `plugins:`/`whitelist:` nor
+#     `Bundler`'s `require:` flag can veto it. Adding the line and rebuilding
+#     confirmed `_site/feed.xml` is still produced unchanged.
+#   - Actually stopping it would mean dropping/forking the `minima` theme,
+#     or shipping a literal `docs/feed.xml` stub (jekyll-feed's generator
+#     skips any path that already exists in source) — both bigger than this
+#     task's scope and outside its allowed files. Flagged to architect as a
+#     possible follow-up, not blocking; this is hygiene (orphaned file), not
+#     a live SEO bug — see .claude/logs/senior-dev.md T88.

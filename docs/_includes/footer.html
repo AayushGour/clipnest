@@ -1,0 +1,52 @@
+<!--
+  Purpose-built footer (T91, ux-designer) — replaces minima's footer.html
+  (h-card contact list meant for a personal blog). Sitemap column reuses the
+  same short nav labels as the header (see header.html for why those labels
+  are safe reuse, not new copy). site.description here is the exact string
+  already configured in _config.yml (used verbatim site-wide for the meta
+  description) — not new copy, just rendered again in the footer, standard
+  practice.
+-->
+<footer class="site-footer" role="contentinfo">
+  <div class="shell footer-grid">
+    <div class="footer-brand">
+      <a class="wordmark" href="{{ "/" | relative_url }}">
+        {%- include favicon-mark.html -%}
+        <span>Clipnest</span>
+      </a>
+      <p>{{ site.description | strip_newlines }}</p>
+    </div>
+
+    <div class="footer-col">
+      <h2>Product</h2>
+      <ul>
+        <li><a href="{{ "/features/" | relative_url }}">Features</a></li>
+        <li><a href="{{ "/download/" | relative_url }}">Download</a></li>
+        <li><a href="{{ "/usage/" | relative_url }}">Usage</a></li>
+      </ul>
+    </div>
+
+    <div class="footer-col">
+      <h2>Project</h2>
+      <ul>
+        <li><a href="{{ "/privacy/" | relative_url }}">Privacy</a></li>
+        <li><a href="{{ "/faq/" | relative_url }}">FAQ</a></li>
+        <li><a href="https://github.com/AayushGour/clipnest">GitHub</a></li>
+        <li><a href="https://github.com/AayushGour/clipnest/blob/main/LICENSE">MIT License</a></li>
+      </ul>
+    </div>
+
+    <div class="footer-col">
+      <h2>Author</h2>
+      <ul>
+        {%- if site.author -%}
+        <li><a href="{{ site.author.url }}">{{ site.author.name }}</a></li>
+        {%- endif -%}
+      </ul>
+    </div>
+  </div>
+
+  <div class="shell footer-bottom">
+    <p>Free, open source, no account, no cloud, no telemetry.</p>
+  </div>
+</footer>

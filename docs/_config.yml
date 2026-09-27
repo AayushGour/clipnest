@@ -1,0 +1,111 @@
+# Clipnest site — GitHub Pages (classic "Deploy from a branch": main / /docs)
+# See .claude/seo-aeo-plan.md §3 for the full architecture rationale.
+
+title: Clipnest
+description: >-
+  Free, open-source clipboard manager for macOS (SwiftUI). History, search,
+  pins, and snippets with keyword expansion in any app — plus optional
+  on-device OCR.
+
+url: "https://aayushgour.github.io"
+baseurl: "/clipnest"
+
+# T91 (ux-designer): theme: minima dropped. minima is a *blog* theme
+# (post/page/home layouts, "posts" nav, an h-card footer) — its chrome
+# is why the site structurally read as a blog no matter what CSS was
+# layered on top (see T72's style.scss, which never even shipped: it
+# compiled correctly to /assets/css/style.css but no layout linked to
+# it, since minima's own default.html only links its own /assets/main.css
+# — the site's "horrible" look on production was that bug, not a
+# design failure). This site now ships its own _layouts/ (default,
+# home, page, article) and _includes/ (header, footer, favicon-mark),
+# with docs/assets/css/style.scss as the only stylesheet.
+#
+# Side effect, verified: dropping the theme also resolves the orphaned
+# _site/feed.xml devops flagged in T88 (.claude/logs/devops.md) — that
+# jekyll-feed output was being forced in by minima's own gemspec runtime
+# deps via Jekyll::PluginManager#require_theme_deps, a path that only
+# exists when `theme:` is set; jekyll-feed was never in this file's own
+# `plugins:` list below and github-pages' plugin whitelist governs
+# availability, not auto-require. jekyll-seo-tag and jekyll-sitemap keep
+# loading exactly as before: both ship inside the `github-pages` gem
+# (Gemfile) independent of any theme, and both stay explicitly listed
+# below.
+
+plugins:
+  - jekyll-sitemap
+  - jekyll-seo-tag
+# Deliberately no jekyll-feed: no blog / _posts collection exists (see plan
+# §3) — an empty Atom feed is worse for SEO than none.
+
+# GitHub Pages' bundled jekyll-optional-front-matter plugin is always on and
+# cannot be disabled, so every .md file under docs/ is rendered as a themed
+# page by default unless explicitly excluded here. These are existing
+# developer-only docs that must stay plain repo markdown (browsable on
+# GitHub) and never be built into the public site. Do not remove any entry
+# from this list — see .claude/seo-aeo-plan.md §3 for why each one is here,
+# in particular competitive-analysis.md (internal strategy memo, must never
+# be published).
+exclude:
+  - API.md
+  - architecture.md
+  - features.md
+  - competitive-analysis.md
+  - review/
+  # --- devops addition, found during T71 build verification, not in the
+  # original plan's list (flagged to architect for confirmation — see
+  # .claude/logs/devops.md) — same dev-only-doc problem as the 5 above:
+  # docs/superpowers/ (tracked, existing) holds raw internal SDD
+  # plans/specs (task-board.md's own "Full task detail" pointer target).
+  # Without this, `bundle exec jekyll build` renders every file in it to a
+  # public HTML page and lists it in sitemap.xml — confirmed by an actual
+  # local build before this line was added.
+  - superpowers/
+  # --- devops addition: standard Jekyll/Bundler build-tooling hygiene,
+  # unrelated to the dev-docs list above. Keeps Ruby toolchain files and
+  # local bundler artifacts out of the published site output; harmless if
+  # committed, just noise otherwise. Gemfile.lock/vendor/.bundle are also
+  # gitignored (docs/.gitignore) so this is defense-in-depth, not the only
+  # protection.
+  - Gemfile
+  - Gemfile.lock
+  - vendor/
+  - .bundle/
+
+# Site-wide default social image (T85/T77 fix, main-thread).
+# jekyll-seo-tag renders `twitter:card` unconditionally: `summary_large_image`
+# when an image is set (template.html:60), plain `summary` otherwise (:63).
+# With no image configured it took the `summary` branch, while _includes/og-tags.html
+# supplied `summary_large_image` — so two conflicting twitter:card tags shipped on
+# every page. Setting the image here makes jekyll-seo-tag emit the correct card,
+# og:image, og:image:width/height/alt and twitter:image:alt itself (template.html:33-41,66),
+# and og-tags.html's `unless page.image` guard then stops firing, so the duplicate
+# resolves without touching that include. Hash form (not a bare string) is required
+# for the width/height/alt keys to render.
+defaults:
+  - scope:
+      path: ""
+    values:
+      image:
+        path: /assets/og-image.png
+        width: 1200
+        height: 630
+        alt: "Clipnest — free, open-source clipboard manager for macOS"
+
+# T88 (review follow-up): jekyll-seo-tag's own auto-emitted JSON-LD
+# (Jekyll::SeoTag::JSONLDDrop#author, template.html's `{{ seo_tag.json_ld |
+# jsonify }}`) reads `site.author` when present and folds it into every
+# page's auto JSON-LD node ("WebSite" on the homepage, "WebPage" elsewhere)
+# as an `author` entity. Configuring it here — rather than shipping a
+# second, competing `WebSite` node from our own _includes/seo-jsonld.html —
+# removes the duplicate `@type: WebSite` node the homepage used to carry
+# (was: the plugin's thin auto one + ours) while still attributing the
+# entity to a named `Person`, matching this site's existing pattern (a
+# solo-dev project, no fabricated `Organization` — see seo-jsonld.html).
+# Deliberately no `logo:` here: setting one would additionally populate the
+# plugin's `publisher` key (JSONLDDrop#publisher requires `logo`), which
+# isn't asked for by this task and isn't needed — `author` alone resolves
+# the duplication.
+author:
+  name: Aayush Gour
+  url: https://github.com/AayushGour

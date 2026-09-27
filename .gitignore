@@ -34,3 +34,7 @@ tools/glyph-classifier/real_eval_crops/
 # tools/stress-harness; the findings that matter live in .claude/logs/tester.md
 # and the task board, not in 15k lines of raw stack traces.
 .claude/logs/stress-artifacts/
+
+# Python bytecode from local skill scripts
+__pycache__/
+*.pyc

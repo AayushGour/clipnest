@@ -1,0 +1,58 @@
+---
+---
+# Clipnest — robots.txt
+#
+# Policy: allow every crawler, including AI training/answer-engine crawlers.
+# This is a settled project decision (MIT-licensed, goal is maximum
+# discoverability/inclusion, not restriction) — see .claude/seo-aeo-plan.md §6.
+#
+# NOTE on where this file actually lives: this repo is served as a GitHub
+# Pages *project* page (https://aayushgour.github.io/clipnest/), so this
+# file builds to https://aayushgour.github.io/clipnest/robots.txt — NOT the
+# origin root (https://aayushgour.github.io/robots.txt), which is the only
+# location RFC 9309 says crawlers actually check. This repo does not control
+# that origin root (a separate aayushgour.github.io user-site repo would).
+# In practice this is a non-issue today: the absence of any robots.txt at
+# the origin root is already equivalent to "allow everything." This file
+# becomes fully authoritative the moment a custom domain is attached (its
+# root and the Pages publish root become the same thing). Shipping it now
+# documents intent and costs nothing. See plan §0 for the full explanation.
+
+# Explicitly welcomed crawlers (redundant with the wildcard rule below by
+# design — named here so the intent to include AI/answer-engine crawlers is
+# stated plainly, not left to an implicit blanket rule alone).
+User-agent: GPTBot
+Allow: /
+
+User-agent: OAI-SearchBot
+Allow: /
+
+User-agent: ChatGPT-User
+Allow: /
+
+User-agent: ClaudeBot
+Allow: /
+
+User-agent: Claude-SearchBot
+Allow: /
+
+User-agent: PerplexityBot
+Allow: /
+
+User-agent: CCBot
+Allow: /
+
+User-agent: Google-Extended
+Allow: /
+
+User-agent: Bingbot
+Allow: /
+
+User-agent: Googlebot
+Allow: /
+
+# Catch-all — every other crawler, named or not, present or future.
+User-agent: *
+Disallow:
+
+Sitemap: {{ '/sitemap.xml' | absolute_url }}
