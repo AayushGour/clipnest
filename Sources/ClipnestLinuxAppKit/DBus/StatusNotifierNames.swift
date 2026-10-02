@@ -76,10 +76,14 @@ enum DBusMenuMember {
   /// unimplemented logs `LIBDBUSMENU-GLIB-WARNING: ... GetGroupProperties
   /// is not a valid method` on a real host and the menu renders empty.
   static let getGroupProperties = "GetGroupProperties"
+  static let layoutUpdated = "LayoutUpdated"
 }
 
 enum DBusMenuProperty {
   static let label = "label"
+  static let toggleType = "toggle-type"
+  static let toggleTypeCheckmark = "checkmark"
+  static let toggleState = "toggle-state"
 }
 
 enum DBusMenuEventID {
@@ -94,6 +98,7 @@ enum DBusMenuItemID {
   static let openClipnest: Int32 = 1
   static let openSettings: Int32 = 2
   static let quit: Int32 = 3
+  static let pauseCapture: Int32 = 4
 }
 
 /// `org.freedesktop.DBus.Introspectable` — every D-Bus object should answer

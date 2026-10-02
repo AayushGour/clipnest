@@ -1,4 +1,14 @@
-# Testing Clipnest 0.9.4 on Linux
+# Testing Clipnest 1.0.0 on Linux
+
+> **Status (1.0.0): the freeze this plan was written to chase is root-caused
+> and fixed.** It reproduced on the reporter's own Ubuntu 24.04 machine
+> whenever auto-paste wasn't set up. A gdb backtrace showed the GTK thread
+> waiting on a clipboard read that only that same thread could answer:
+> Clipnest's own write had not been recognised as its own, so it asked
+> itself for the bytes. 1.0.0 marks its writes (`application/x-clipnest-owned`)
+> and never reads them back. See `TESTING-LINUX.md` §3 for everything
+> verified on that hardware. The diagnostics below are kept for any
+> *different* hang.
 
 This build exists to answer **one open question** — a freeze on picking an item,
 reported on real hardware and never reproduced in the VM — and to carry three
@@ -13,8 +23,8 @@ which is which before you spend time on it.
 ## Install
 
 ```bash
-tar xzf clipnest-0.9.4-linux-<arch>.tar.gz
-cd clipnest-0.9.4-linux-<arch>
+tar xzf clipnest-1.0.0-linux-<arch>.tar.gz
+cd clipnest-1.0.0-linux-<arch>
 sha256sum -c SHA256SUMS      # every line should say OK
 ./install.sh                 # as your normal user, NOT with sudo
 ```
@@ -23,7 +33,7 @@ The installer refuses to run as root and refuses on an architecture mismatch.
 Both are intentional.
 
 ```bash
-clipnest --version           # should print 0.9.4
+clipnest --version           # should print 1.0.0
 ```
 
 If you are testing on a machine that already had 0.9.2 or 0.9.3, say so when you
@@ -148,7 +158,7 @@ This is what 0.9.3 added and what most of the work went into.
 keyword is replaced in place by the snippet text.
 
 **Why it was rebuilt:** on GNOME Wayland the old approach synthesised Ctrl+C.
-The hotkey fires while you are still holding Super+Shift, and the compositor
+The hotkey fires while you are still holding its modifiers, and the compositor
 merged those held keys into the synthesised chord, so it silently did nothing —
 it failed roughly 8 times out of 8 at a realistic key-hold. The new path sends
 the text over D-Bus through the input-method system, so there is no keystroke to
@@ -172,7 +182,7 @@ Expect exactly: `before Best regards, Clipnest after`
 
 ### 3b. The actual bug — hold the modifiers
 
-Same thing, but **keep Super+Shift held down** while the hotkey fires, the way
+Same thing, but **keep the hotkey's modifiers held down** while it fires, the way
 you naturally would.
 
 This is the case that was broken. It should now work identically to 3a. Try it
@@ -218,7 +228,7 @@ Quick pass over existing behaviour:
 
 - Copy text and images → they appear in History
 - Search; pin something (tab 2)
-- `Super+Shift+V` opens the picker
+- `Alt+Super+V` opens the picker
 - Picker Enter still copies (or pastes, if auto-paste is granted)
 - Tray icon and menu work
 - Quit and relaunch — settings survive
@@ -263,7 +273,7 @@ confidently than the evidence supported.
 | D-Bus timeouts are honoured | **Measured** — 3017 ms → 108 ms |
 | **Works in terminals** | **Unproven.** Answers correctly; a commit was never confirmed |
 | **Works in Firefox** | **Unproven** — same reason |
-| **The item-select freeze** | **Undiagnosed.** Not addressed by this build |
+| **The item-select freeze** | **Fixed in 1.0.0.** Root-caused under gdb on real hardware (self-deadlock on Clipnest's own clipboard write) and verified fixed there |
 | X11 unaffected | **Inferred** from the code, never run |
 
 All of the above was measured on **one** machine — arm64 Ubuntu 24.04, GNOME 46,

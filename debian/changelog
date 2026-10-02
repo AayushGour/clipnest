@@ -1,3 +1,33 @@
+clipnest (1.0.0) jammy; urgency=medium
+
+  * fix(linux): password-manager copies are no longer saved to history.
+    The marked copy itself was always refused, but GNOME re-publishes
+    clipboard text without the marker once the source app lets go of the
+    clipboard (KeePassXC's "clear after N seconds" does exactly that), and
+    that re-published copy was being captured. Found on real hardware.
+  * fix(linux): picking an item no longer freezes Clipnest ("not
+    responding") when auto-paste isn't set up. Clipnest failed to recognise
+    its own clipboard write, then asked itself for the clipboard contents
+    from the very thread that has to answer, and waited 30 seconds. Its
+    writes are now recognised exactly, with no timing involved.
+  * fix(linux): the picker now closes when another window takes focus.
+    It used to stay open behind that window, and the next hotkey press
+    closed it instead of opening it.
+  * fix(linux): choosing an item while a terminal is focused now pastes.
+    Terminals are recognised through the accessibility bus and sent
+    Ctrl+Shift+V. Before, they received Ctrl+V and printed "^V".
+  * fix: the update check no longer offers to "update" to an older
+    release when the installed build is newer than the latest release.
+  * feat(linux): the tray menu gains "Pause Capture", matching the macOS
+    menu bar. It shares one setting with Settings -> General -> "Enable
+    clipboard capture".
+  * fix: scripts/update.sh (macOS) applies the same newer-only rule, so it
+    can no longer replace a newer build with an older release either.
+  * Version 1.0.0: first release that ships the Linux port, verified on
+    physical Ubuntu 24.04 hardware (GNOME 46, Wayland).
+
+ -- Aayush Gour <ag14906@gmail.com>  Fri, 02 Oct 2026 00:00:00 +0000
+
 clipnest (0.9.4) jammy; urgency=medium
 
   * fix(linux): startup no longer blocks the GTK main thread. Connecting to

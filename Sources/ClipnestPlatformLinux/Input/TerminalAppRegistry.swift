@@ -13,6 +13,7 @@ public enum TerminalAppRegistry {
   /// place per coding-standards.md's "no magic strings" rule — nothing
   /// else in this module hardcodes a terminal's name.
   public static let terminalIdentifiers: Set<String> = [
+    accessibleTerminalIdentifier,
     "org.gnome.Terminal",
     "org.gnome.Ptyxis",
     "org.gnome.Console",
@@ -24,6 +25,12 @@ public enum TerminalAppRegistry {
     "Tilix",
     "konsole",
   ]
+
+  /// Not an app id: stands for "the focused widget reports the AT-SPI
+  /// terminal role" (`ATSPIFocusedRoleReader`). That is the only way to
+  /// recognise a native-Wayland terminal, which the X11-based target lookup
+  /// cannot see at all.
+  public static let accessibleTerminalIdentifier = "atspi-role:terminal"
 
   /// The modifiers to hold for `V`, given the target app's identifier.
   /// Defaults to plain Ctrl+V (`.control`) whenever `identifier` is `nil`

@@ -122,9 +122,12 @@ public enum LinuxClipboardConstants {
   public static let textMimePriority = [
     "text/plain;charset=utf-8",
     utf8StringAtomName,
-    "text/plain",
+    plainTextMimeType,
     legacyStringAtomName,
   ]
+
+  /// Bare `text/plain`, encoding unspecified.
+  public static let plainTextMimeType = "text/plain"
 
   /// Returns the priority list for `category`, in the exact preference
   /// order `MimeRepresentationSelector` must try.
@@ -163,6 +166,24 @@ public enum LinuxClipboardConstants {
     kdePasswordManagerHintMimeType,
     nspasteboardConcealedMimeType,
     nspasteboardConcealedUTIMimeType,
+  ]
+
+  /// Published by every Clipnest clipboard write (`GTKClipboardWriting`),
+  /// so the capture path can recognise its own write from TARGETS alone and
+  /// never request the bytes — on Wayland those would be served by the very
+  /// GTK thread asking, a deadlock. Not a privacy marker: presence means
+  /// "this is Clipnest's own write, skip it", nothing more.
+  public static let clipnestOwnedMarkerMimeType = "application/x-clipnest-owned"
+
+  /// X11's legacy text-target atoms — aliases an owner (or the XWayland
+  /// bridge, on an owner's behalf) adds next to a real text MIME type. Used
+  /// by `ClipboardManagerRestoreGuard` to see past them to the MIME types
+  /// an owner really offers.
+  public static let x11TextAliasTargetNames: Set<String> = [
+    utf8StringAtomName,
+    legacyStringAtomName,
+    "TEXT",
+    "COMPOUND_TEXT",
   ]
 
   // MARK: - EWMH / ICCCM window-identity property names

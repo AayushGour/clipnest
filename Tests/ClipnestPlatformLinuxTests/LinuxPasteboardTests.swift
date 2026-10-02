@@ -22,7 +22,21 @@ private final class FakeX11SelectionConnecting: X11SelectionConnecting, @uncheck
 
   func selectionOwnerWindowID() -> UInt64? { ownerWindowID }
 
-  func currentTargets() -> [String] { targets }
+  /// Models an owner change landing DURING a TARGETS round trip: the
+  /// fetch returns the old owner's targets, then the serial moves on.
+  var serialAfterNextTargetsFetch: Int?
+  var targetsFetchCount = 0
+
+  func currentTargets() -> [String] {
+    targetsFetchCount += 1
+    defer {
+      if let next = serialAfterNextTargetsFetch {
+        changeSerial = next
+        serialAfterNextTargetsFetch = nil
+      }
+    }
+    return targets
+  }
   func payload(forMimeType mimeType: String) -> Data? { payloads[mimeType] }
 }
 
@@ -78,6 +92,80 @@ struct LinuxPasteboardTests {
     let pasteboard = LinuxPasteboard(connection: connection)
 
     #expect(pasteboard.string(forType: .string) == nil)
+  }
+
+  /// The real leak, end to end through the pasteboard: GNOME re-publishes
+  /// a hinted copy's text without the hint once its owner lets go.
+  @Test("GNOME's clipboard-manager restore of a concealed copy stays concealed")
+  func clipboardManagerRestoreOfConcealedCopyStaysConcealed() {
+    let connection = FakeX11SelectionConnecting()
+    let pasteboard = LinuxPasteboard(connection: connection)
+    connection.changeSerial = 1
+    connection.targets = ["x-kde-passwordManagerHint", "text/plain;charset=utf-8", "UTF8_STRING"]
+    #expect(pasteboard.availableTypes == [.concealed])
+
+    connection.changeSerial = 2
+    connection.targets = ["text/plain;charset=utf-8", "UTF8_STRING"]
+    connection.payloads["text/plain;charset=utf-8"] = Data("secret".utf8)
+    #expect(pasteboard.availableTypes == [.concealed])
+    #expect(pasteboard.string(forType: .string) == nil)
+  }
+
+  @Test("An owner change during the TARGETS fetch can't cache 'safe' for a password owner")
+  func ownerChangeDuringTargetsFetchFailsClosed() {
+    let connection = FakeX11SelectionConnecting()
+    let pasteboard = LinuxPasteboard(connection: connection)
+    connection.changeSerial = 1
+    connection.targets = ["text/plain;charset=utf-8", "text/plain", "UTF8_STRING"]
+    connection.serialAfterNextTargetsFetch = 2
+    _ = pasteboard.availableTypes
+
+    connection.targets = ["x-kde-passwordManagerHint", "text/plain;charset=utf-8"]
+    connection.payloads["text/plain;charset=utf-8"] = Data("secret".utf8)
+    #expect(pasteboard.string(forType: .string) == nil)
+  }
+
+  @Test("Clipnest's own clipboard write is skipped without asking the owner for anything")
+  func ownWriteIsNeverRead() {
+    let connection = FakeX11SelectionConnecting()
+    connection.targets = ["text/plain;charset=utf-8"]
+    connection.payloads["text/plain;charset=utf-8"] = Data("own".utf8)
+    let pasteboard = LinuxPasteboard(connection: connection, isOwnedByThisProcess: { true })
+
+    #expect(pasteboard.availableTypes.isEmpty)
+    #expect(pasteboard.string(forType: .string) == nil)
+    #expect(pasteboard.data(forType: .png) == nil)
+    #expect(connection.targetsFetchCount == 0)
+  }
+
+  /// The Wayland half of the self-write rule: the marker every Clipnest
+  /// write publishes is visible in TARGETS (answered by mutter), and seeing
+  /// it must stop any byte request — the bytes would come from Clipnest's
+  /// own GTK thread, the one asking.
+  @Test("A write carrying Clipnest's ownership marker reports nothing and fetches no bytes")
+  func ownershipMarkerSkipsWithoutFetchingBytes() {
+    let connection = FakeX11SelectionConnecting()
+    connection.targets = [
+      LinuxClipboardConstants.clipnestOwnedMarkerMimeType, "text/plain;charset=utf-8",
+      "image/png",
+    ]
+    connection.payloads["text/plain;charset=utf-8"] = Data("own".utf8)
+    connection.payloads["image/png"] = Data([0x89])
+    let pasteboard = LinuxPasteboard(connection: connection)
+
+    #expect(pasteboard.availableTypes.isEmpty)
+    #expect(pasteboard.string(forType: .string) == nil)
+    #expect(pasteboard.data(forType: .png) == nil)
+  }
+
+  @Test("holdsOwnWrite answers from the marker or ownership, never from bytes")
+  func holdsOwnWriteUsesMarkerOrOwnership() {
+    let connection = FakeX11SelectionConnecting()
+    connection.targets = ["text/plain;charset=utf-8"]
+    #expect(!LinuxPasteboard(connection: connection).holdsOwnWrite)
+    #expect(LinuxPasteboard(connection: connection, isOwnedByThisProcess: { true }).holdsOwnWrite)
+    connection.targets.append(LinuxClipboardConstants.clipnestOwnedMarkerMimeType)
+    #expect(LinuxPasteboard(connection: connection).holdsOwnWrite)
   }
 
   @Test("Reports .fileURL when a file MIME type is offered")

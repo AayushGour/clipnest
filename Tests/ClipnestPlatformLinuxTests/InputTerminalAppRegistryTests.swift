@@ -28,6 +28,7 @@ struct TerminalAppRegistryTests {
     let expected: Set<String> = [
       "org.gnome.Terminal", "org.gnome.Ptyxis", "org.gnome.Console", "Alacritty", "kitty",
       "xterm", "wezterm", "foot", "Tilix", "konsole",
+      TerminalAppRegistry.accessibleTerminalIdentifier,
     ]
     #expect(TerminalAppRegistry.terminalIdentifiers == expected)
   }

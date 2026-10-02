@@ -256,6 +256,13 @@ ID` (`:82`), `Rejects a caller-supplied custom excluded bundle ID` (`:95`).
   privacy-filtered app is ever even briefly held in memory as a `ClipItem`.
 - Bundle-ID list is verified/hardcoded, not user-visible/editable yet beyond
   the `customExcludedBundleIDs` injection point.
+- **Linux (1.0.0): GNOME re-publishes a released copy without its privacy
+  marker.** mutter saves clipboard text and, when the owner lets go (KeePassXC's
+  clear-after-N-seconds included), re-publishes it as a single-MIME owner
+  without `x-kde-passwordManagerHint`. `ClipboardManagerRestoreGuard`
+  (`ClipnestPlatformLinux`) treats that restore as the concealed copy it
+  came from, and fails closed. Measured on Ubuntu 24.04 before the fix: the
+  password was captured.
 
 ---
 
@@ -807,6 +814,11 @@ ClipnestAppTests/PickerViewModelTests.swift` — see
   `ItemPreviewController`) must follow the same never-`makeKey()` /
   `orderFrontRegardless()` pattern, or it will steal focus from the search
   field.
+- **Linux (1.0.0): never trust `notify::is-active` to fire on re-show.** GTK4
+  on Wayland keeps `is-active` TRUE across a hide. `PickerWindow.show(at:)`
+  waits for an activation only when the window isn't already reporting
+  active. Otherwise the picker never dismissed on focus loss, and the next
+  hotkey press closed it.
 
 ---
 
@@ -919,6 +931,14 @@ including the missing/legacy-blob fallback cases) — see
 - The 40ms `synthesisDelay` exists specifically because the event tap is
   global, not pid-targeted — don't remove it without re-verifying paste
   reliability against a real frontmost-app handoff.
+- **Linux (1.0.0): Clipnest must never read its own clipboard write.** On
+  GNOME the owner serving those bytes is Clipnest's own GTK thread, so the
+  read deadlocks (the item-select freeze, T-HANG-SELECT1). Every write
+  carries `application/x-clipnest-owned`; see `docs/architecture.md`.
+- **Linux (1.0.0): terminals paste with Ctrl+Shift+V.** The target app is
+  invisible to the X11 lookup on Wayland, so `showPicker` latches the AT-SPI
+  role of the focused widget (`ATSPIFocusedRoleReader`, role 60 = terminal)
+  before the picker takes focus.
 
 ---
 

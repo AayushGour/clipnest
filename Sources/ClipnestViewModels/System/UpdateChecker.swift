@@ -254,13 +254,36 @@ public final class UpdateChecker {
 
   // MARK: - Pure logic (unit-tested directly — no `Process` spawn involved)
 
-  /// Not-equal-means-update-available — a literal port of
-  /// `scripts/update.sh`'s own `if [ "${INSTALLED}" = "${LATEST}" ]` check.
-  /// Deliberately no semver comparison/library: that script is the single
-  /// source of truth for "what counts as up to date," and string equality
-  /// after stripping a leading `v` is exactly what it already does.
+  /// `true` only when the latest release is strictly NEWER than what's
+  /// installed, compared numerically per dot-separated component
+  /// (`"0.9.10"` > `"0.9.9"`; a missing trailing component counts as 0).
+  ///
+  /// This used to be plain inequality, ported from `scripts/update.sh`
+  /// (which now applies this same strictly-newer rule).
+  /// That offered a DOWNGRADE whenever the installed build was ahead of the
+  /// latest GitHub release — measured on Ubuntu 24.04 (2026-10-02): v0.9.4
+  /// from the linux-migration branch showed "Update to v0.9.2 available"
+  /// with a working "Install Update…" button. If either version isn't
+  /// purely numeric (`0.9.2-rc1`), answers `false`: this gates a `pkexec`
+  /// package install, so an unparseable version must never be offered.
   public nonisolated static func isUpdateAvailable(installed: String, latestTag: String) -> Bool {
-    installed != normalizedVersion(fromTag: latestTag)
+    let latest = normalizedVersion(fromTag: latestTag)
+    guard let installedParts = numericComponents(of: installed),
+      let latestParts = numericComponents(of: latest)
+    else { return false }
+    for index in 0..<max(installedParts.count, latestParts.count) {
+      let installedPart = index < installedParts.count ? installedParts[index] : 0
+      let latestPart = index < latestParts.count ? latestParts[index] : 0
+      if latestPart != installedPart { return latestPart > installedPart }
+    }
+    return false
+  }
+
+  /// `"1.2.3"` -> `[1, 2, 3]`; `nil` if any component isn't a plain integer.
+  private nonisolated static func numericComponents(of version: String) -> [Int]? {
+    let parts = version.split(separator: ".", omittingEmptySubsequences: false).map { Int($0) }
+    guard !parts.isEmpty, !parts.contains(nil) else { return nil }
+    return parts.compactMap { $0 }
   }
 
   /// Strips a leading `v` from a GitHub tag (`"v1.2.3"` -> `"1.2.3"`),

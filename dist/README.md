@@ -1,5 +1,11 @@
 # Prebuilt Clipnest 0.9.4 for Ubuntu
 
+> **1.0.0 is not in this directory, deliberately.** Its tarballs and `.deb`s
+> come from the [GitHub Release](https://github.com/AayushGour/clipnest/releases/latest),
+> built by CI, following the rule below. The 0.9.4 pair here is the last
+> hand-built one. It predates the 1.0.0 fixes, including the item-select
+> freeze and the password-manager leak, so prefer the release.
+
 **Temporary, and now superseded.** These binaries were hand-built and
 checked into git only so they were easy to grab for testing before
 `.github/workflows/release-linux.yml` could produce them itself. That gap is

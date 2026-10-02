@@ -8,6 +8,9 @@ import Foundation
 struct DBusMenuItem: Equatable {
   let id: Int32
   let label: String
+  /// Non-`nil` makes this a checkmark item (dbusmenu `toggle-type`
+  /// "checkmark"), showing checked for `true`.
+  var toggleState: Bool? = nil
 }
 
 /// Pure builder for `GetLayout`'s reply shape (`com.canonical.dbusmenu`
@@ -51,7 +54,7 @@ enum DBusMenuLayoutBuilder {
   }
 
   /// `GetLayout`'s full two-value reply body: `(revision, root)`.
-  static func getLayoutReply(items: [DBusMenuItem]) -> [DBusValue] {
+  static func getLayoutReply(items: [DBusMenuItem], revision: UInt32 = revision) -> [DBusValue] {
     [.uint32(revision), layout(items: items)]
   }
 
@@ -114,7 +117,23 @@ enum DBusMenuLayoutBuilder {
   private static func propertyEntries(
     for item: DBusMenuItem, matching propertyNames: [String]
   ) -> [DBusValue] {
-    guard propertyNames.isEmpty || propertyNames.contains(DBusMenuProperty.label) else { return [] }
-    return [.dictEntry(.string(DBusMenuProperty.label), .variant(.string(item.label)))]
+    func wanted(_ name: String) -> Bool { propertyNames.isEmpty || propertyNames.contains(name) }
+    var entries: [DBusValue] = []
+    if wanted(DBusMenuProperty.label) {
+      entries.append(.dictEntry(.string(DBusMenuProperty.label), .variant(.string(item.label))))
+    }
+    if let toggleState = item.toggleState {
+      if wanted(DBusMenuProperty.toggleType) {
+        entries.append(
+          .dictEntry(
+            .string(DBusMenuProperty.toggleType),
+            .variant(.string(DBusMenuProperty.toggleTypeCheckmark))))
+      }
+      if wanted(DBusMenuProperty.toggleState) {
+        entries.append(
+          .dictEntry(.string(DBusMenuProperty.toggleState), .variant(.int32(toggleState ? 1 : 0))))
+      }
+    }
+    return entries
   }
 }

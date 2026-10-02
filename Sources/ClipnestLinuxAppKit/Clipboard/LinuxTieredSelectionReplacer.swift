@@ -27,7 +27,7 @@ import Foundation
 /// `LinuxIBusSelectionReplacer` in that case — it passes a null
 /// object that always returns `.noSelection` with zero I/O, the same
 /// graceful-nil convention `LinuxAppEnvironment
-/// .makeSelectedTextAccessing()` already uses for AT-SPI. This composer
+/// .makeAccessibilityServices()` already uses for AT-SPI. This composer
 /// has no knowledge of that distinction; it always tries `ibusReplacer`
 /// first and falls through on a non-terminal result, whether that tier is
 /// real or a permanent no-op.

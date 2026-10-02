@@ -288,6 +288,33 @@ struct AppDBusMenuLayoutBuilderTests {
     #expect(root[2].signatureCode == "av")
   }
 
+  @Test("A toggle item carries checkmark toggle-type and its toggle-state; others don't")
+  func toggleItemCarriesCheckmarkProperties() {
+    let items = [
+      DBusMenuItem(id: 1, label: "Open Clipnest"),
+      DBusMenuItem(id: 4, label: "Pause Capture", toggleState: true),
+    ]
+    let reply = DBusMenuLayoutBuilder.getGroupPropertiesReply(
+      items: items, ids: [], propertyNames: [])
+    guard case .array(let entries)? = reply.first, entries.count == 2,
+      case .structure(let plain) = entries[0], case .array(let plainProperties) = plain[1],
+      case .structure(let toggle) = entries[1], case .array(let toggleProperties) = toggle[1]
+    else {
+      Issue.record("expected two (id, properties) entries")
+      return
+    }
+    #expect(plainProperties.count == 1)
+    #expect(
+      toggleProperties.contains(.dictEntry(.string("toggle-type"), .variant(.string("checkmark")))))
+    #expect(toggleProperties.contains(.dictEntry(.string("toggle-state"), .variant(.int32(1)))))
+  }
+
+  @Test("getLayoutReply reports the revision it is given")
+  func layoutReplyCarriesGivenRevision() {
+    let reply = DBusMenuLayoutBuilder.getLayoutReply(items: [], revision: 7)
+    #expect(reply.first == .uint32(7))
+  }
+
   private static let threeItems = [
     DBusMenuItem(id: 1, label: "Open Clipnest"), DBusMenuItem(id: 2, label: "Settings…"),
     DBusMenuItem(id: 3, label: "Quit Clipnest"),

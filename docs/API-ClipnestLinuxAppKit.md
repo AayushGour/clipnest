@@ -100,8 +100,10 @@ confirmation — never automatically. Steps, reported via `onStep` (may run
 on any thread — hop to your own actor/thread before touching UI):
 
 1. `.checkingLatestRelease` — queries the same public GitHub Releases API
-   `UpdateChecker` already polls; short-circuits to `.upToDate` if the
-   latest tag equals `installedVersion`.
+   `UpdateChecker` already polls; short-circuits to `.upToDate` unless the
+   latest tag is strictly NEWER than `installedVersion`
+   (`UpdateChecker.isUpdateAvailable` — numeric per component, so a build
+   ahead of the latest release is never offered a downgrade).
 2. `.downloadingUpdate` — selects the `.deb` asset matching this machine's
    real architecture (`dpkg --print-architecture`) and series
    (`/etc/os-release`'s `VERSION_CODENAME`), fetches its published
@@ -308,6 +310,17 @@ because it changes what the class's `.notice` log lines mean (relevant to
 anyone reading them) and is exactly the kind of "why, not just what" decision
 this doc's sibling section above already covers for the same class's write
 path.
+
+**Update (1.0.0):** a sentinel written through GDK carries Clipnest's
+ownership marker (`application/x-clipnest-owned`), and `LinuxPasteboard`
+never reads Clipnest's own writes back (that read is served by Clipnest's
+own GTK thread — the T-HANG-SELECT1 deadlock). So "the sentinel is still
+there" is now `isSentinelOnClipboard`: Clipnest's own write is present
+(`LinuxPasteboard.holdsOwnWrite`), or the text equals the sentinel (a Shell
+helper write, which has no marker). Both the read-back and
+`waitForSentinelToClear` use that one test. A bare `string != sentinel`
+would see `nil` for a marked sentinel and report the copy as finished before
+the target app copied anything.
 
 **Why:** `changeSerial` only advances on an observed `XFixesSelectionNotify`
 event, and confirmed against mutter's own source

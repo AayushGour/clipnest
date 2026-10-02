@@ -49,9 +49,25 @@ import Foundation
 /// a paste target can pick whichever it supports.
 public final class LinuxPasteboard: MonitoredPasteboard, @unchecked Sendable {
   private let connection: any X11SelectionConnecting
+  private let restoreGuardLock = NSLock()
+  private var restoreGuard = ClipboardManagerRestoreGuard()
+  private let isOwnedByThisProcess: () -> Bool
 
-  public init(connection: any X11SelectionConnecting = X11ClipboardConnection.shared) {
+  /// Clipnest's own clipboard writes are skipped and their bytes never
+  /// requested — on GNOME the owner answering a byte request is this
+  /// process's GTK thread, which is usually the thread asking (see
+  /// `GTKClipboardWriting.isOwnedByThisProcess`). Two signals, because one
+  /// doesn't work on each backend:
+  ///
+  /// - Parameter isOwnedByThisProcess: exact ownership where GDK knows it
+  ///   (X11), checked before even TARGETS is requested.
+  /// - The ownership marker in TARGETS (`isOwnWrite`), for Wayland.
+  public init(
+    connection: any X11SelectionConnecting = X11ClipboardConnection.shared,
+    isOwnedByThisProcess: @escaping () -> Bool = { false }
+  ) {
     self.connection = connection
+    self.isOwnedByThisProcess = isOwnedByThisProcess
   }
 
   public var changeCount: Int { connection.changeSerial }
@@ -73,8 +89,11 @@ public final class LinuxPasteboard: MonitoredPasteboard, @unchecked Sendable {
   /// cross-category priority (file → image → rich text → text) from this
   /// union, exactly as it already does on macOS.
   public var availableTypes: [ClipMediaType] {
+    guard !isOwnedByThisProcess() else { return [] }
+    let serial = connection.changeSerial
     let mimeTypes = connection.currentTargets()
-    guard !PrivacyMarkerDetector.isConcealed(mimeTypes: mimeTypes) else { return [.concealed] }
+    guard !Self.isOwnWrite(mimeTypes) else { return [] }
+    guard !isConcealed(mimeTypes, serial: serial) else { return [.concealed] }
 
     var types: [ClipMediaType] = []
     if MimeRepresentationSelector.isAvailable(.file, in: mimeTypes) { types.append(.fileURL) }
@@ -85,8 +104,11 @@ public final class LinuxPasteboard: MonitoredPasteboard, @unchecked Sendable {
   }
 
   public func string(forType type: ClipMediaType) -> String? {
+    guard !isOwnedByThisProcess() else { return nil }
+    let serial = connection.changeSerial
     let mimeTypes = connection.currentTargets()
-    guard !PrivacyMarkerDetector.isConcealed(mimeTypes: mimeTypes) else { return nil }
+    guard !Self.isOwnWrite(mimeTypes) else { return nil }
+    guard !isConcealed(mimeTypes, serial: serial) else { return nil }
 
     switch type {
     case .fileURL:
@@ -102,8 +124,11 @@ public final class LinuxPasteboard: MonitoredPasteboard, @unchecked Sendable {
   }
 
   public func data(forType type: ClipMediaType) -> Data? {
+    guard !isOwnedByThisProcess() else { return nil }
+    let serial = connection.changeSerial
     let mimeTypes = connection.currentTargets()
-    guard !PrivacyMarkerDetector.isConcealed(mimeTypes: mimeTypes) else { return nil }
+    guard !Self.isOwnWrite(mimeTypes) else { return nil }
+    guard !isConcealed(mimeTypes, serial: serial) else { return nil }
 
     switch type {
     case .png:
@@ -115,6 +140,33 @@ public final class LinuxPasteboard: MonitoredPasteboard, @unchecked Sendable {
     default:
       return nil
     }
+  }
+
+  /// `true` while the clipboard holds a write of Clipnest's own — by exact
+  /// ownership or by the marker — without ever requesting its bytes.
+  public var holdsOwnWrite: Bool {
+    isOwnedByThisProcess() || Self.isOwnWrite(connection.currentTargets())
+  }
+
+  /// `true` when `mimeTypes` carry the marker every Clipnest write
+  /// publishes — see `LinuxClipboardConstants.clipnestOwnedMarkerMimeType`.
+  static func isOwnWrite(_ mimeTypes: [String]) -> Bool {
+    mimeTypes.contains(LinuxClipboardConstants.clipnestOwnedMarkerMimeType)
+  }
+
+  /// The single privacy gate every accessor above shares: the marker check
+  /// plus `ClipboardManagerRestoreGuard`'s restore rule — see that type for
+  /// the GNOME clipboard-manager leak it closes.
+  ///
+  /// `serial` must be read BEFORE `mimeTypes` are fetched. If the owner
+  /// changes during the fetch, the older serial then gets a verdict from
+  /// the newer targets, which fails closed. Read after, a password owner's
+  /// serial could be cached as "not concealed" from the previous owner's
+  /// targets, and the next accessor would read the password.
+  private func isConcealed(_ mimeTypes: [String], serial: Int) -> Bool {
+    restoreGuardLock.lock()
+    defer { restoreGuardLock.unlock() }
+    return restoreGuard.isConcealed(mimeTypes: mimeTypes, serial: serial)
   }
 
   /// Fetches EVERY rich-text representation the owner actually offers

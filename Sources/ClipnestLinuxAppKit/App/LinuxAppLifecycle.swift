@@ -461,6 +461,18 @@ public enum LinuxAppLifecycle {
     let tray = StatusNotifierTray(ownConnection: ownConnection, watchConnection: watchConnection)
     tray.onOpenClipnest = { Task { @MainActor in environment.togglePicker() } }
     tray.onOpenSettings = { Task { @MainActor in environment.openSettings() } }
+    // Synchronous hops (the tray's receive thread blocks until the GTK
+    // thread's main-queue pump runs them) so the menu reads back the state
+    // the user just set — an async `Task` would let the next `GetLayout`
+    // race ahead of it and show the old checkmark.
+    tray.isCapturePaused = {
+      DispatchQueue.main.sync { MainActor.assumeIsolated { environment.isCapturePaused } }
+    }
+    tray.setCapturePaused = { isPaused in
+      DispatchQueue.main.sync {
+        MainActor.assumeIsolated { environment.isCapturePaused = isPaused }
+      }
+    }
     // T-IBUS-CRASHWIRE: routes through the SAME shared restore
     // (`restoreIBusEngineBeforeQuit()`) the SIGTERM/SIGINT path uses
     // (`run(arguments:)`'s `ProcessSignalShutdown.install` call above), so

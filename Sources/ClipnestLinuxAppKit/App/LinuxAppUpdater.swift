@@ -43,6 +43,7 @@
 // (`ClipnestGTK`) — the tab that needs to switch on them — not here.
 import ClipnestCore
 import ClipnestGTK
+import ClipnestViewModels
 import Foundation
 
 public enum LinuxAppUpdater {
@@ -307,8 +308,8 @@ public enum LinuxAppUpdater {
     guard let tag = ReleaseAssetParsing.tagName(fromReleaseJSON: releaseData) else {
       return .failed(.noReleaseFound)
     }
-    let latestVersion = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
-    guard latestVersion != installedVersion else {
+    let latestVersion = UpdateChecker.normalizedVersion(fromTag: tag)
+    guard UpdateChecker.isUpdateAvailable(installed: installedVersion, latestTag: tag) else {
       return .upToDate
     }
 

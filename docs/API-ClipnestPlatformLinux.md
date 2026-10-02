@@ -20,6 +20,7 @@ side of.
 - [`AccessibilityBusResolver`](#accessibilitybusresolver)
 - [`ATSPIFocusTracker`](#atspifocustracker)
 - [`ATSPITextAccessor`](#atspitextaccessor)
+- [`ATSPIFocusedRoleReader`](#atspifocusedrolereader)
 - [Verified behavior (not assumed)](#verified-behavior-not-assumed)
 - [Coverage](#coverage)
 - [Working example](#working-example)
@@ -31,7 +32,7 @@ module's `ATSPITextAccessor` is the real, on-bus implementation; a fresh
 `NullSelectedTextAccessing` (private to `LinuxAppEnvironment`, always
 returns `nil`/`false`) is the deliberate degrade-to-clipboard-only stand-in
 when no accessibility bus is reachable. `LinuxAppEnvironment
-.makeSelectedTextAccessing()` picks between them ONCE, at Clipnest's own
+.makeAccessibilityServices()` picks between them ONCE, at Clipnest's own
 launch, entirely by whether the real bus resolves and connects — never a
 silently-defaulted seam (see coding-standards.md's cross-platform-seam
 non-negotiable). `SnippetExpander` itself then falls through to its
@@ -159,6 +160,30 @@ this; `ATSPIRequests.insertText` always passes it, never `text.count`.
 call captured off the live a11y bus carries `length: 13`, and the text
 lands correctly in the target widget.
 
+## `ATSPIFocusedRoleReader`
+
+```swift
+public struct ATSPIFocusedRoleReader: Sendable {
+  public init(
+    caller: any ATSPIObjectCalling,
+    focusedObject: @escaping @Sendable () -> (busName: String, objectPath: String)?,
+    timeout: Duration = ATSPIConstants.callTimeout,
+    nextSerial: @escaping @Sendable () -> UInt32)
+  public func isFocusedObjectTerminal() -> Bool
+}
+```
+
+One `org.a11y.atspi.Accessible.GetRole` call on the focused object; `true`
+only for `ATSPI_ROLE_TERMINAL` (60). Used to choose the paste chord:
+terminals ignore Ctrl+V and paste on Ctrl+Shift+V. `LinuxAppEnvironment
+.showPicker` reads it BEFORE the picker takes focus and latches the answer;
+the paste synthesizer consults the latch only when the target has no X11
+identity (every native-Wayland window), via
+`TerminalAppRegistry.accessibleTerminalIdentifier`. No focused object, no
+reply, or any other role all answer `false`, which keeps plain Ctrl+V.
+Measured on GNOME 46 (2026-10-02): GNOME Terminal's focused VTE widget
+reports role 60; a picker paste into it delivered the text instead of `^V`.
+
 ## Verified behavior (not assumed)
 
 Everything above was previously "manual-verify only" — every file in this
@@ -223,19 +248,24 @@ FIRE when it can, it doesn't change how often it CAN.
 ## Working example
 
 ```swift
-// Composition root (LinuxAppEnvironment.makeSelectedTextAccessing()):
+// Composition root (LinuxAppEnvironment.makeAccessibilityServices()):
 guard
   let sessionBusAddress = ProcessInfo.processInfo.environment["DBUS_SESSION_BUS_ADDRESS"],
   let a11yAddress = AccessibilityBusResolver.resolveAddress(sessionBusAddress: sessionBusAddress),
   let callConnection = DBusConnection.connect(address: a11yAddress, timeout: .seconds(1)),
   let signalConnection = DBusConnection.connect(address: a11yAddress, timeout: .seconds(1))
 else {
-  return NullSelectedTextAccessing()  // SnippetExpander falls straight to clipboard.
+  // SnippetExpander falls straight to clipboard; paste never assumes a terminal.
+  return (NullSelectedTextAccessing(), { false })
 }
 
 let focusTracker = ATSPIFocusTracker(connection: signalConnection)
 focusTracker.start()
-return ATSPITextAccessor(
+let selectedText = ATSPITextAccessor(
   caller: callConnection, focusedObject: { focusTracker.currentFocusedObject() },
   nextSerial: { callConnection.allocateSerial() })
+let roleReader = ATSPIFocusedRoleReader(
+  caller: callConnection, focusedObject: { focusTracker.currentFocusedObject() },
+  nextSerial: { callConnection.allocateSerial() })
+return (selectedText, { roleReader.isFocusedObjectTerminal() })
 ```

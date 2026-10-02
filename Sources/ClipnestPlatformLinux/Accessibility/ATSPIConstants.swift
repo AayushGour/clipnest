@@ -26,6 +26,7 @@ enum ATSPIInterface {
   static let status = "org.a11y.Status"
   static let text = "org.a11y.atspi.Text"
   static let editableText = "org.a11y.atspi.EditableText"
+  static let accessible = "org.a11y.atspi.Accessible"
   static let registry = "org.a11y.atspi.Registry"
   static let event = "org.a11y.atspi.Event.Object"
   static let dbus = "org.freedesktop.DBus"
@@ -39,6 +40,7 @@ enum ATSPIMember {
   static let getText = "GetText"
   static let deleteText = "DeleteText"
   static let insertText = "InsertText"
+  static let getRole = "GetRole"
   static let registerEvent = "RegisterEvent"
   static let addMatch = "AddMatch"
   static let stateChanged = "StateChanged"
@@ -56,6 +58,13 @@ enum ATSPIMember {
   /// specific, despite the `ATSPI*` prefix (this module's established home
   /// for it — see that enum's own doc comment).
   static let hello = "Hello"
+}
+
+/// `AtspiRole` values (`atspi-constants.h`) this module checks for.
+enum ATSPIRole {
+  /// `ATSPI_ROLE_TERMINAL` — what every VTE terminal (GNOME Terminal,
+  /// Ptyxis, Console, Tilix) reports for its focused text area.
+  static let terminal: UInt32 = 60
 }
 
 /// The legacy AT-SPI `interface:signal:detail` event-name string this
