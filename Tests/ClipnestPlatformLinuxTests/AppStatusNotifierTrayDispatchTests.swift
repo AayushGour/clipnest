@@ -257,6 +257,53 @@ import Testing
       #expect(reply.errorName == StatusNotifierErrorName.unknownMethod)
       #expect(reply.replySerial == 9)
     }
+
+    private func menuCall(_ member: String, serial: UInt32) -> DBusMessage {
+      DBusMessage(
+        type: .methodCall, serial: serial, path: DBusMenuName.objectPath,
+        interface: DBusMenuName.interface, member: member, sender: ":1.50")
+    }
+
+    private func revision(of reply: DBusMessage) -> UInt32? {
+      guard case .uint32(let revision)? = reply.body.first else { return nil }
+      return revision
+    }
+
+    @Test("Clicking Pause Capture flips the paused state and bumps the layout revision")
+    func pauseCaptureClickTogglesAndBumpsRevision() throws {
+      let (tray, _) = try connectedTray()
+      var isPaused = false
+      tray.isCapturePaused = { isPaused }
+      tray.setCapturePaused = { isPaused = $0 }
+
+      let before = tray.handle(.menuGetLayout, message: menuCall("GetLayout", serial: 10))
+      _ = tray.handle(
+        .menuEvent(itemID: DBusMenuItemID.pauseCapture, eventID: DBusMenuEventID.clicked),
+        message: menuCall("Event", serial: 11))
+      #expect(isPaused)
+      let after = tray.handle(.menuGetLayout, message: menuCall("GetLayout", serial: 12))
+      #expect(revision(of: after)! > revision(of: before)!)
+
+      _ = tray.handle(
+        .menuEvent(itemID: DBusMenuItemID.pauseCapture, eventID: DBusMenuEventID.clicked),
+        message: menuCall("Event", serial: 13))
+      #expect(!isPaused)
+    }
+
+    @Test("AboutToShow asks the panel to re-fetch only when the paused state changed elsewhere")
+    func aboutToShowReportsExternalChange() throws {
+      let (tray, _) = try connectedTray()
+      var isPaused = false
+      tray.isCapturePaused = { isPaused }
+      _ = tray.handle(.menuGetLayout, message: menuCall("GetLayout", serial: 20))
+
+      let unchanged = tray.handle(.menuAboutToShow, message: menuCall("AboutToShow", serial: 21))
+      #expect(unchanged.body.first == .boolean(false))
+
+      isPaused = true  // e.g. unticked "Enable clipboard capture" in Settings
+      let changed = tray.handle(.menuAboutToShow, message: menuCall("AboutToShow", serial: 22))
+      #expect(changed.body.first == .boolean(true))
+    }
   }
 
   private enum TestSetupFailure: Error {

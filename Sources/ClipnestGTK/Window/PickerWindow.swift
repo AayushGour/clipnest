@@ -267,8 +267,9 @@ public final class PickerWindow: @unchecked Sendable {
   /// activation transition `show(at:)` itself causes (a freshly-presented
   /// window becomes active asynchronously; without this guard that
   /// transition could otherwise be misread as a focus change to dismiss
-  /// on, on some window managers' timing). Set `true` at the start of
-  /// `show(at:)`, cleared the first time the window is OBSERVED active.
+  /// on, on some window managers' timing). Set at the start of `show(at:)`
+  /// (only when the window isn't already reporting active — see the
+  /// comment there), cleared the first time the window is OBSERVED active.
   var isAwaitingInitialActivation = false
 
   /// Linux parity pass (routed follow-up, 2026-09-06), REAL BUG found by
@@ -401,7 +402,14 @@ public final class PickerWindow: @unchecked Sendable {
   /// shortly after; it harmlessly finds nothing left to change).
   public func show(at point: (x: Int, y: Int)?) {
     _ = point
-    isAwaitingInitialActivation = true
+    // Only wait for an activation transition that can actually arrive: GTK4
+    // on Wayland leaves `is-active` TRUE across `hide()` (measured on GNOME
+    // 46 — no `notify::is-active` on hide, none on the re-present), so on
+    // every re-show after a hide-while-focused (Enter, Esc, the hotkey) the
+    // flag used to stay latched and swallow the real focus loss: the picker
+    // lingered behind whatever took focus, and the next hotkey press
+    // toggled it closed instead of opening it.
+    isAwaitingInitialActivation = gtk_window_is_active(window) == 0
     lastSnapshot = .initial
     startObservingChanges()
     MainActor.assumeIsolated {

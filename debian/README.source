@@ -259,6 +259,16 @@ end-to-end: a real `dbus-send` call against the real, now-`Hello`-fixed
 `ownConnection` returns the correct 3-item menu (`Open Clipnest`/
 `Settings…`/`Quit Clipnest`) with correct labels.
 
+**UPDATE (2026-10-02): the menu now has 4 items** — "Pause Capture" (a
+dbusmenu checkmark item, `DBusMenuItemID.pauseCapture`, macOS parity with
+the menu-bar toggle) sits between "Open Clipnest" and "Settings…". Its state
+is read live on every `GetLayout`/`AboutToShow` (so a change from Settings →
+General shows up too), the layout revision bumps when it changes, and a
+click emits `LayoutUpdated`. Verified in the real GNOME 46 panel (Ubuntu
+24.04, ubuntu-appindicators): the checkmark appears after clicking it, and
+copies are not captured while it is ticked. The 3-item descriptions below
+are the historical record of that earlier pass.
+
 **UPDATE (2026-09-07, senior-dev): `GetLayout`'s connection-fatal disconnect
 is FIXED, re-verified against a real bus, and the tray icon now genuinely
 renders — this is the P0 that closes out this gap.** The prior write-up

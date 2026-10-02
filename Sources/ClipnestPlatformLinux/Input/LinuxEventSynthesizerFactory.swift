@@ -15,10 +15,18 @@ import Foundation
 /// container this ships to. `LinuxEventSynthesizerSelection.choose` (the
 /// decision this wraps) is unit-tested directly instead.
 public enum LinuxEventSynthesizerFactory {
+  /// - Parameter fallbackTerminalIdentifier: consulted only when the paste
+  ///   target has no X11 identity (every native-Wayland window), so a
+  ///   terminal there still gets Ctrl+Shift+V — see
+  ///   `TerminalAppRegistry.accessibleTerminalIdentifier`.
   public static func makeDefault(
-    environment: [String: String] = ProcessInfo.processInfo.environment
+    environment: [String: String] = ProcessInfo.processInfo.environment,
+    fallbackTerminalIdentifier: @escaping @Sendable () -> String? = { nil }
   ) -> (synthesizer: any EventSynthesizing, kind: SelectedEventSynthesizerKind) {
     let sessionType = SessionType.detect(environment: environment)
+    let terminalIdentifier: @Sendable (FrontmostAppRef?) -> String? = {
+      $0?.bundleID ?? fallbackTerminalIdentifier()
+    }
 
     if let device = UInputDevice.open() {
       let display = XOpenDisplay(nil)
@@ -40,7 +48,8 @@ public enum LinuxEventSynthesizerFactory {
       }
       return (
         UInputEventSynthesizer(
-          device: device, layoutResolver: layoutResolver, modifierGuard: modifierGuard),
+          device: device, layoutResolver: layoutResolver, modifierGuard: modifierGuard,
+          terminalIdentifier: terminalIdentifier),
         .uinput
       )
     }
@@ -50,7 +59,7 @@ public enum LinuxEventSynthesizerFactory {
       let modifierWaiter = ModifierReleaseWaiter(reader: X11ModifierMaskReader(display: display))
       if let xtest = XTestEventSynthesizer(
         display: display, sessionType: sessionType, layoutResolver: layoutResolver,
-        modifierWaiter: modifierWaiter)
+        modifierWaiter: modifierWaiter, terminalIdentifier: terminalIdentifier)
       {
         return (xtest, .xtest)
       }

@@ -31,6 +31,15 @@ enum StatusNotifierRequests {
       destination: StatusNotifierWatcherName.busName, body: [.string(itemBusName)]
     )
   }
+
+  /// dbusmenu's `LayoutUpdated(u revision, i parent)` — tells the panel to
+  /// re-fetch the menu (parent 0 = the whole menu).
+  static func menuLayoutUpdated(revision: UInt32, serial: UInt32) -> DBusMessage {
+    DBusMessage(
+      type: .signal, serial: serial, path: DBusMenuName.objectPath,
+      interface: DBusMenuName.interface, member: DBusMenuMember.layoutUpdated,
+      body: [.uint32(revision), .int32(DBusMenuItemID.root)])
+  }
 }
 
 /// What incoming request `StatusNotifierTray` received, decoded from the
@@ -158,10 +167,13 @@ enum StatusNotifierReplies {
       body: [.array(entries)])
   }
 
-  static func menuLayout(items: [DBusMenuItem], replyingTo message: DBusMessage) -> DBusMessage {
+  static func menuLayout(
+    items: [DBusMenuItem], revision: UInt32 = DBusMenuLayoutBuilder.revision,
+    replyingTo message: DBusMessage
+  ) -> DBusMessage {
     DBusMessage(
       type: .methodReturn, serial: 0, replySerial: message.serial, destination: message.sender,
-      body: DBusMenuLayoutBuilder.getLayoutReply(items: items))
+      body: DBusMenuLayoutBuilder.getLayoutReply(items: items, revision: revision))
   }
 
   static func menuAboutToShowResult(needsUpdate: Bool, replyingTo message: DBusMessage)

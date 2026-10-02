@@ -400,7 +400,7 @@ public final class LinuxClipboardSelectionReplacer: SelectionReplacing {
     // fact worth being able to see, not something to silently paper over.
     let wait =
       sentinelReadBack
-      ? await waitForSentinelToClear(Self.copySentinelValue)
+      ? await waitForSentinelToClear()
       : await waitForChange(after: beforeCopy)
     let observedChange = wait.satisfied
     Self.logger.notice(
@@ -487,7 +487,7 @@ public final class LinuxClipboardSelectionReplacer: SelectionReplacing {
     // T-SNIPPET-FF1 ROOT CAUSE (confirmed live on the VM, 2026-09-13 — an
     // earlier "race with the paste" hypothesis, timed via this same
     // instrumentation, turned out to be WRONG and is corrected here):
-    // `writer.writeString` (`gdk_clipboard_set_text`) never took effect at
+    // `writer.writeString` (a plain GDK clipboard write) never took effect at
     // ALL for this call site — not late, not racy, NEVER — confirmed three
     // independent ways: `waitForChange` below timed out on every single
     // run with no exception; a raw `XConvertSelection` probe run mid-
@@ -617,10 +617,19 @@ public final class LinuxClipboardSelectionReplacer: SelectionReplacing {
     return "waylandFocus=known \(focused.logDescription)"
   }
 
-  /// Whether the clipboard's text slot still holds this class's own copy
-  /// sentinel. Returns a `Bool`, never the string it compared.
+  /// Whether the clipboard still holds this class's own copy sentinel.
+  /// Returns a `Bool`, never the string it compared.
+  ///
+  /// A sentinel written through GDK carries Clipnest's ownership marker,
+  /// and `LinuxPasteboard` deliberately never reads Clipnest's own writes
+  /// back (on GNOME the owner serving them is this thread — see
+  /// `GTKClipboardWriting.isOwnedByThisProcess`). So "Clipnest's own write
+  /// is still there" counts as the sentinel: within this method the
+  /// sentinel is always Clipnest's most recent write. A sentinel written by
+  /// the Shell helper has no marker (gnome-shell owns it) and is matched by
+  /// its text as before.
   private static func isSentinelOnClipboard(_ pasteboard: LinuxPasteboard) -> Bool {
-    pasteboard.string(forType: .string) == copySentinelValue
+    pasteboard.holdsOwnWrite || pasteboard.string(forType: .string) == copySentinelValue
   }
 
   /// Metadata-only elapsed-time helper — never touches clipboard content.
@@ -751,15 +760,19 @@ public final class LinuxClipboardSelectionReplacer: SelectionReplacing {
     await pollUntilCeiling { pasteboard.changeCount != before }
   }
 
-  /// Content-comparison wait (T-COPYFLAKE1 fix): polls
-  /// `pasteboard.string(forType: .string)` for "no longer equals
-  /// `sentinel`" — see this class's main call site for the full root-cause
-  /// writeup. Strictly a superset of what the event-count wait can detect:
-  /// any real content change trips it, independent of whether mutter's X11
-  /// bridge happened to fire a fresh `XFixesSelectionNotify` for that
-  /// specific change.
-  private func waitForSentinelToClear(_ sentinel: String) async -> PollOutcome {
-    await pollUntilCeiling { pasteboard.string(forType: .string) != sentinel }
+  /// Content-comparison wait (T-COPYFLAKE1 fix): polls until
+  /// `isSentinelOnClipboard` turns false — see this class's main call site
+  /// for the full root-cause writeup. Strictly a superset of what the
+  /// event-count wait can detect: any real content change trips it,
+  /// independent of whether mutter's X11 bridge happened to fire a fresh
+  /// `XFixesSelectionNotify` for that specific change.
+  ///
+  /// Must use the same test as the read-back, not a bare string compare: a
+  /// sentinel written through GDK reads back as `nil` (Clipnest never reads
+  /// its own writes — see `isSentinelOnClipboard`), and `nil != sentinel`
+  /// would report the copy as done before the target app copied anything.
+  private func waitForSentinelToClear() async -> PollOutcome {
+    await pollUntilCeiling { !Self.isSentinelOnClipboard(pasteboard) }
   }
 
   /// Shared poll loop for both wait strategies above — same step/ceiling

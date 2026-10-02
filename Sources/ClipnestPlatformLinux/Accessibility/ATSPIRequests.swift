@@ -33,6 +33,12 @@ enum ATSPIRequests {
       body: [.string(ATSPIMatchRule.stateChanged)])
   }
 
+  static func getRole(busName: String, objectPath: String, serial: UInt32) -> DBusMessage {
+    DBusMessage(
+      type: .methodCall, serial: serial, path: objectPath, interface: ATSPIInterface.accessible,
+      member: ATSPIMember.getRole, destination: busName)
+  }
+
   static func getNSelections(busName: String, objectPath: String, serial: UInt32) -> DBusMessage {
     DBusMessage(
       type: .methodCall, serial: serial, path: objectPath, interface: ATSPIInterface.text,
@@ -111,6 +117,13 @@ enum ATSPIResponses {
       case .int32(let start) = message.body[0], case .int32(let end) = message.body[1]
     else { return nil }
     return (start, end)
+  }
+
+  static func parseUInt32Reply(_ message: DBusMessage) -> UInt32? {
+    guard message.type == .methodReturn, case .uint32(let value)? = message.body.first else {
+      return nil
+    }
+    return value
   }
 
   static func parseStringReply(_ message: DBusMessage) -> String? {

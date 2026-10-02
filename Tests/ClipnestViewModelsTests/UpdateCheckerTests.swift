@@ -30,9 +30,32 @@ struct UpdateCheckerTests {
     #expect(!UpdateChecker.isUpdateAvailable(installed: "1.2.3", latestTag: "1.2.3"))
   }
 
-  @Test("different versions: update available")
-  func differentVersionsMeansUpdateAvailable() {
+  @Test("newer latest version: update available")
+  func newerVersionMeansUpdateAvailable() {
     #expect(UpdateChecker.isUpdateAvailable(installed: "1.2.3", latestTag: "1.2.4"))
+  }
+
+  @Test("installed build ahead of the latest release: no downgrade offered")
+  func olderLatestVersionIsNotAnUpdate() {
+    #expect(!UpdateChecker.isUpdateAvailable(installed: "0.9.4", latestTag: "v0.9.2"))
+  }
+
+  @Test("components compare numerically, not as strings")
+  func componentsCompareNumerically() {
+    #expect(UpdateChecker.isUpdateAvailable(installed: "0.9.9", latestTag: "v0.9.10"))
+    #expect(!UpdateChecker.isUpdateAvailable(installed: "0.9.10", latestTag: "v0.9.9"))
+  }
+
+  @Test("a missing trailing component counts as zero")
+  func missingComponentIsZero() {
+    #expect(!UpdateChecker.isUpdateAvailable(installed: "1.2.0", latestTag: "v1.2"))
+    #expect(UpdateChecker.isUpdateAvailable(installed: "1.2", latestTag: "v1.2.1"))
+  }
+
+  @Test("a non-numeric version is never offered, so it can't trigger a downgrade")
+  func nonNumericIsNeverAnUpdate() {
+    #expect(!UpdateChecker.isUpdateAvailable(installed: "0.9.4", latestTag: "v0.9.2-linux"))
+    #expect(!UpdateChecker.isUpdateAvailable(installed: "1.2.3-beta", latestTag: "v1.2.3"))
   }
 
   @Test("v-prefixed tag compares equal to the same bare installed version")

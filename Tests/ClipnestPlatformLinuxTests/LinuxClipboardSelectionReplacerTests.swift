@@ -143,7 +143,8 @@ struct LinuxClipboardSelectionReplacerTests {
     connection: FakeX11Connection,
     poster: FakeSyntheticKeystrokePosting,
     writer: FakePasteboardWriting,
-    simulateWritePropagation: Bool = true
+    simulateWritePropagation: Bool = true,
+    writesCarryOwnershipMarker: Bool = false
   ) -> LinuxClipboardSelectionReplacer {
     // Realistic default: a real write eventually bumps the connection's
     // serial via mutter's re-owning of the CLIPBOARD selection (see
@@ -158,7 +159,12 @@ struct LinuxClipboardSelectionReplacerTests {
     if simulateWritePropagation {
       writer.onWrite = { connection.changeSerial += 1 }
       writer.onWriteString = { text in
-        connection.targets = ["UTF8_STRING"]
+        // A real GDK write also carries Clipnest's ownership marker, which
+        // makes `LinuxPasteboard` refuse to read it back.
+        connection.targets =
+          writesCarryOwnershipMarker
+          ? [LinuxClipboardConstants.clipnestOwnedMarkerMimeType, "UTF8_STRING"]
+          : ["UTF8_STRING"]
         connection.payloads["UTF8_STRING"] = Data(text.utf8)
       }
     }
@@ -199,6 +205,55 @@ struct LinuxClipboardSelectionReplacerTests {
         .string("EXPANDED", .string),
         .string("original clip", .string),
       ])
+  }
+
+  /// Real GDK writes carry the ownership marker, so the sentinel reads
+  /// back as `nil`. A real app copies a moment AFTER the keystroke; the
+  /// copy wait must keep waiting for it instead of treating
+  /// `nil != sentinel` as "already copied" and giving up.
+  @Test("With marked writes, expansion waits for an app that copies a moment later")
+  func markedSentinelWaitsForDelayedCopy() async {
+    let connection = FakeX11Connection()
+    connection.targets = ["UTF8_STRING"]
+    connection.payloads["UTF8_STRING"] = Data("original clip".utf8)
+    let poster = FakeSyntheticKeystrokePosting()
+    poster.onCopy = {
+      Task { @MainActor in
+        try? await Task.sleep(for: .milliseconds(100))
+        connection.targets = ["UTF8_STRING"]
+        connection.payloads["UTF8_STRING"] = Data("selected text".utf8)
+        connection.changeSerial += 1
+      }
+    }
+    let writer = FakePasteboardWriting()
+    let replacer = makeReplacer(
+      connection: connection, poster: poster, writer: writer, writesCarryOwnershipMarker: true)
+
+    let result = await replacer.replaceSelection { selection in
+      selection == "selected text" ? "EXPANDED" : nil
+    }
+
+    #expect(result == .replaced)
+  }
+
+  @Test("With marked writes and nothing copied, expansion reports no selection")
+  func markedSentinelWithNoCopyIsNoSelection() async {
+    let connection = FakeX11Connection()
+    connection.targets = ["UTF8_STRING"]
+    connection.payloads["UTF8_STRING"] = Data("original clip".utf8)
+    let poster = FakeSyntheticKeystrokePosting()
+    let writer = FakePasteboardWriting()
+    let replacer = makeReplacer(
+      connection: connection, poster: poster, writer: writer, writesCarryOwnershipMarker: true)
+
+    var askedWith: String?
+    let result = await replacer.replaceSelection { selection in
+      askedWith = selection
+      return "EXPANDED"
+    }
+
+    #expect(result == .noSelection)
+    #expect(askedWith == nil)
   }
 
   @Test("An originally-empty clipboard is restored to empty, not left holding the expansion body")

@@ -125,7 +125,7 @@ final class LinuxAppEnvironment {
   /// second reader, in `ClipnestLinuxAppKit` alongside this file — the
   /// existing source of truth, so `--version` never grows a second
   /// hardcoded copy of the version string.
-  nonisolated static let installedVersion = "0.9.4"
+  nonisolated static let installedVersion = "1.0.0"
 
   /// Resolves this process's own absolute executable path for
   /// `AutostartDesktopFile.setEnabled(_:executablePath:)`'s `.desktop`
@@ -162,11 +162,20 @@ final class LinuxAppEnvironment {
   /// `onDismiss` closure below. `onDismiss`'s calling thread isn't
   /// specified by the minimal `PickerWindow` contract, so the box is
   /// thread-safe rather than assumed main-thread-only.
-  private let isPickerVisibleBox: PickerVisibilityBox
+  private let isPickerVisibleBox: LockedBoolBox
   private var isPickerVisible: Bool {
     get { isPickerVisibleBox.value }
     set { isPickerVisibleBox.value = newValue }
   }
+
+  /// Whether the widget focused when the picker opened was a terminal,
+  /// latched in `showPicker` BEFORE the picker takes focus, and read by the
+  /// paste synthesizer to choose Ctrl+Shift+V over Ctrl+V — see
+  /// `ATSPIFocusedRoleReader`. Boxed for the same reason as
+  /// `isPickerVisibleBox`: the synthesizer is built (off-main) before
+  /// `self` exists.
+  private let pasteTargetIsTerminalBox: LockedBoolBox
+  private let isFocusedObjectTerminal: @Sendable () -> Bool
 
   /// - Throws: whatever `SQLiteClipStore`/`SQLiteSnippetStore`'s
   ///   production initializers throw (typed `ClipStoreError`/
@@ -174,8 +183,10 @@ final class LinuxAppEnvironment {
   ///   own "no safe in-app fallback if persistence can't come up" contract
   ///   exactly; surfaced to `LinuxAppLifecycle` rather than degraded.
   init() async throws {
-    let visibilityBox = PickerVisibilityBox()
+    let visibilityBox = LockedBoolBox()
     self.isPickerVisibleBox = visibilityBox
+    let terminalBox = LockedBoolBox()
+    self.pasteTargetIsTerminalBox = terminalBox
 
     let blobStore = BlobStore(baseDirectory: BlobStore.defaultBaseDirectory())
     let privacyFilter = PrivacyFilter()
@@ -238,7 +249,9 @@ final class LinuxAppEnvironment {
         // Manual-verify only (needs real `/dev/uinput`/`X11`) — see
         // `LinuxEventSynthesizerFactory`'s own doc comment for why this must
         // run exactly once, off the main thread.
-        LinuxEventSynthesizerFactory.makeDefault()
+        LinuxEventSynthesizerFactory.makeDefault(fallbackTerminalIdentifier: {
+          terminalBox.value ? TerminalAppRegistry.accessibleTerminalIdentifier : nil
+        })
       }.value
     // T-HANG-SELECT1 hygiene fix: `IBusCommitClient.resolveAndConnect` used
     // to run synchronously, INLINE, further down this initializer (a real
@@ -327,7 +340,9 @@ final class LinuxAppEnvironment {
       privacyFilter: privacyFilter,
       reader: pasteboardReader,
       blobStore: blobStore,
-      pasteboard: LinuxPasteboard(),
+      pasteboard: LinuxPasteboard(isOwnedByThisProcess: {
+        sharedWriter.isOwnedByThisProcess
+      }),
       frontmostApplicationProvider: LinuxFrontmostApplicationProvider(
         ownProgramName: ClipnestControlName.programName),
       excludedBundleIDsProvider: {
@@ -352,11 +367,15 @@ final class LinuxAppEnvironment {
     // through to its universal clipboard-replace tier instead of crashing
     // or throwing — matches this task's "treat OCR/AX as optional, degrade
     // cleanly" directive for every optional subsystem, not just OCR.
-    let selectedTextAccessing = Self.makeSelectedTextAccessing()
+    let accessibility = Self.makeAccessibilityServices()
+    let selectedTextAccessing = accessibility.selectedText
+    self.isFocusedObjectTerminal = accessibility.isFocusedObjectTerminal
     let clipboardReplacer = LinuxClipboardSelectionReplacer(
       poster: synthesizerResult.synthesizer as? any SyntheticKeystrokePosting
         ?? NullSyntheticKeystrokePosting(),
-      pasteboard: LinuxPasteboard(), writer: sharedWriter,
+      pasteboard: LinuxPasteboard(isOwnedByThisProcess: {
+        sharedWriter.isOwnedByThisProcess
+      }), writer: sharedWriter,
       frontmostAppProvider: frontmostAppProvider
     )
     self.clipboardReplacer = clipboardReplacer
@@ -367,7 +386,7 @@ final class LinuxAppEnvironment {
     // `clipboardReplacer` above. Degrades to a permanent no-op tier on any
     // failure (no `ibus-daemon`, unresolvable address, failed connect,
     // failed registration) — the same graceful-nil convention
-    // `makeSelectedTextAccessing()` already uses for AT-SPI, so a missing
+    // `makeAccessibilityServices()` already uses for AT-SPI, so a missing
     // IBus daemon never blocks snippet expansion, it just skips straight
     // to the clipboard tier every time.
     //
@@ -674,7 +693,9 @@ final class LinuxAppEnvironment {
   /// D-Bus I/O — see `ATSPITextAccessor`/`ATSPIFocusTracker`'s own doc
   /// comments; degrades to `NullSelectedTextAccessing` on any failure
   /// (missing `DBUS_SESSION_BUS_ADDRESS`, unreachable a11y bus, ...).
-  private static func makeSelectedTextAccessing() -> any SelectedTextAccessing {
+  private static func makeAccessibilityServices() -> (
+    selectedText: any SelectedTextAccessing, isFocusedObjectTerminal: @Sendable () -> Bool
+  ) {
     guard
       let sessionBusAddress = ProcessInfo.processInfo.environment["DBUS_SESSION_BUS_ADDRESS"],
       let a11yAddress = AccessibilityBusResolver.resolveAddress(
@@ -683,14 +704,18 @@ final class LinuxAppEnvironment {
       let signalConnection = DBusConnection.connect(address: a11yAddress, timeout: .seconds(1))
     else {
       logger.info("AT-SPI accessibility bus unavailable — snippet expansion is clipboard-only")
-      return NullSelectedTextAccessing()
+      return (NullSelectedTextAccessing(), { false })
     }
 
     let focusTracker = ATSPIFocusTracker(connection: signalConnection)
     focusTracker.start()
-    return ATSPITextAccessor(
+    let selectedText = ATSPITextAccessor(
       caller: callConnection, focusedObject: { focusTracker.currentFocusedObject() },
       nextSerial: { callConnection.allocateSerial() })
+    let roleReader = ATSPIFocusedRoleReader(
+      caller: callConnection, focusedObject: { focusTracker.currentFocusedObject() },
+      nextSerial: { callConnection.allocateSerial() })
+    return (selectedText, { roleReader.isFocusedObjectTerminal() })
   }
 
   /// Starts real clipboard capture. Call exactly once, from
@@ -760,6 +785,7 @@ final class LinuxAppEnvironment {
     // run. Metadata only (one boolean).
     Self.logger.info("showPicker: hasPoint=\(point != nil)")
     frontmostAppTracker.record()
+    pasteTargetIsTerminalBox.value = isFocusedObjectTerminal()
     pickerViewModel.willShow()
     pickerWindow.show(at: point)
     if let point {
@@ -790,6 +816,13 @@ final class LinuxAppEnvironment {
 
   func openSettings() {
     settingsWindow.show()
+  }
+
+  /// The tray's "Pause Capture" toggle — the inverse of Settings → General
+  /// → "Enable clipboard capture", one setting behind both, as on macOS.
+  var isCapturePaused: Bool {
+    get { !settingsStore.isCaptureEnabled }
+    set { settingsStore.isCaptureEnabled = !newValue }
   }
 
   func expandSnippet() {
@@ -836,7 +869,7 @@ final class LinuxAppEnvironment {
 
 /// Degrades `SnippetExpander`'s Accessibility-first tier to "never
 /// readable" when no a11y bus connection could be established — see
-/// `LinuxAppEnvironment.makeSelectedTextAccessing()`. `ClipnestCore` has no
+/// `LinuxAppEnvironment.makeAccessibilityServices()`. `ClipnestCore` has no
 /// portable default for this protocol the way it does for
 /// `EventSynthesizing`'s `NoOpEventSynthesizing` (`SelectedTextAccessing`'s
 /// concrete implementations are always app-layer, per that protocol's own
@@ -926,12 +959,13 @@ final class SynchronizedKeyValueStore: KeyValueStore, @unchecked Sendable {
   func set(_ value: Any?, forKey key: String) { mutex.withLock { $0.set(value, forKey: key) } }
 }
 
-/// A thread-safe `Bool` box — see `LinuxAppEnvironment.isPickerVisibleBox`'s
+/// A thread-safe `Bool` box (`isPickerVisibleBox`, `pasteTargetIsTerminalBox`)
+/// — see `LinuxAppEnvironment.isPickerVisibleBox`'s
 /// doc comment for why this wraps `Mutex<Bool>` in a reference type rather
 /// than storing the (`~Copyable`) `Mutex` directly: a class reference can
 /// be captured by more than one closure/property, a noncopyable value
 /// cannot.
-private final class PickerVisibilityBox: @unchecked Sendable {
+private final class LockedBoolBox: @unchecked Sendable {
   private let mutex = Mutex<Bool>(false)
   var value: Bool {
     get { mutex.withLock { $0 } }

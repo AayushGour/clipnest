@@ -1,4 +1,4 @@
-# Testing Clipnest 0.9.4 on Linux
+# Testing Clipnest 1.0.0 on Linux
 
 **Temporary file** — delete this and `dist/` once testing is done.
 
@@ -16,8 +16,8 @@ git clone -b linux-migration https://github.com/AayushGour/clipnest.git
 cd clipnest/dist
 
 uname -m                       # x86_64 -> amd64,  aarch64 -> arm64
-tar xzf clipnest-0.9.4-linux-amd64.tar.gz
-cd clipnest-0.9.4-linux-amd64
+tar xzf clipnest-1.0.0-linux-amd64.tar.gz
+cd clipnest-1.0.0-linux-amd64
 ./install.sh
 ```
 
@@ -82,15 +82,47 @@ version deleted the item unconditionally, which destroyed clips while typing.
 
 ---
 
-## 3. Worth testing first — NEVER TESTED ON REAL HARDWARE
+## 3. Real-hardware results (Ubuntu 24.04.5, GNOME 46, Wayland — 2026-10-02)
 
-These were proven only in a synthetic GNOME Shell. Real hardware is the real test.
+First run on physical hardware (ThinkPad, single 1920×1200 display), driven
+with synthetic uinput keyboard/pointer input plus portal screenshots.
 
-1. **Global hotkey.** Press `Alt+Super+V`. Does the picker open at your cursor?
-   Check which backend it chose: `grep "hotkey backend resolved" <(clipnest 2>&1)`
-   or look at stderr. `shellExtensionKeybinding` means the extension path is
-   live; `gsettingsFloor` is the fallback.
-2. **GNOME Shell extension** (optional, unlocks cursor placement and
+**Works:** the `Alt+Super+V` hotkey (`gsettingsFloor` backend) opens the
+picker focused and searchable; tray → Open Clipnest; capture of
+Wayland-native and XWayland copies (text, rich text, images, files);
+auto-paste via uinput into GTK apps and Chrome; snippet expansion in GTK
+apps (AT-SPI tier) and Chrome (IBus tier); Settings; tray menu; OCR (once
+enabled in Settings → History — it is off by default).
+
+**Found broken and fixed in this pass:**
+- **Picking an item froze Clipnest** ("not responding") whenever auto-paste
+  wasn't set up — the board's open P0 (T-HANG-SELECT1). Reproduced under
+  gdb: the GTK thread was waiting on a clipboard read served by that same
+  thread. Clipnest's writes now carry a private marker type
+  (`application/x-clipnest-owned`) and are never read back.
+- The picker never dismissed when another window took focus. It stayed
+  open behind that window, and the next hotkey press closed it instead of
+  opening it. (GTK4 keeps `is-active` TRUE across a hide on Wayland.)
+- **Password-manager copies were saved to history.** The hinted copy itself
+  was refused, but GNOME re-publishes clipboard text without the hint once
+  the source app lets go (KeePassXC's clear-after-N-seconds does exactly
+  that), and Clipnest captured that copy.
+- Settings offered "Update to v0.9.2" to a v0.9.4 install, i.e. a downgrade
+  with a working Install button. `scripts/update.sh` (macOS) had the same
+  rule; both now update only to a strictly newer version.
+- Picking an item into a terminal typed `^V` instead of pasting. Terminals
+  are now detected through AT-SPI and get Ctrl+Shift+V.
+- The tray menu had no "Pause Capture" toggle (macOS has one). Added.
+
+**Expected, not bugs:** without the Shell extension the picker opens at the
+top-left, not at the cursor, and Wayland-native copies have no source app
+(so Settings → Apps exclusions only match XWayland apps). "Launch Clipnest
+at login" is off by default, as on macOS, so nothing is captured after a
+login until you open the picker once. Turn it on in Settings → General.
+
+### Still untested on real hardware
+
+1. **GNOME Shell extension** (optional, unlocks cursor placement and
    above-fullscreen):
    ```bash
    gnome-extensions install --force /usr/share/clipnest/gnome-shell-extension/esm      # GNOME 45+
@@ -98,14 +130,12 @@ These were proven only in a synthetic GNOME Shell. Real hardware is the real tes
    ```
    Then **log out and back in** — GNOME only discovers a brand-new extension on
    Shell startup — and enable it in the Extensions app.
-3. **Wayland.** Log into a Wayland session and check capture still works
-   (copy in any app, confirm it appears). Capture goes through Mutter's XWayland
-   clipboard bridge; this is the least-tested path in the whole port.
-4. **Auto-paste.** On first launch without it, the "Set Up Auto-Paste?"
-   prompt should appear on its own — grant it there, or from Settings →
-   Permissions → grant, then **log out and back in**. Without it Clipnest
-   copies and you paste manually.
-5. **Multi-monitor and fractional scaling.** Never tested at all.
+   With it, the hotkey should report `shellExtensionKeybinding`
+   (`journalctl --user -t clipnest | grep "hotkey backend resolved"`) and the
+   picker should open at the cursor.
+2. **The first-run "Set Up Auto-Paste?" prompt.** This machine already had
+   the `clipnest-input` grant, so the prompt never showed.
+3. **X11 sessions, multi-monitor, fractional scaling.**
 
 ---
 

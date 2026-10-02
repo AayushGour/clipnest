@@ -103,17 +103,39 @@ public final class StatusNotifierTray: @unchecked Sendable {
   private let ownConnection: DBusConnection
   private let watchConnection: DBusConnection?
   private var receiveThread: Thread?
-  private let menuItems: [DBusMenuItem]
 
   public var onOpenClipnest: () -> Void = {}
   public var onOpenSettings: () -> Void = {}
   public var onQuit: () -> Void = {}
+  /// Mirrors macOS's "Pause Capture" menu toggle. Both are called on this
+  /// tray's receive thread and must answer synchronously, so the menu
+  /// shows the state the user just chose — not the one before it.
+  public var isCapturePaused: () -> Bool = { false }
+  public var setCapturePaused: (Bool) -> Void = { _ in }
+
+  /// Bumped whenever the menu's content changes (today: the Pause Capture
+  /// checkmark), so panels that cache the layout by revision re-fetch it.
+  /// Touched only on the receive thread (and by tests calling `handle`
+  /// directly), so it needs no lock.
+  private var layoutRevision = DBusMenuLayoutBuilder.revision
+  private var lastReportedPaused: Bool?
+  private var isLayoutUpdatedSignalPending = false
 
   public init(ownConnection: DBusConnection, watchConnection: DBusConnection?) {
     self.ownConnection = ownConnection
     self.watchConnection = watchConnection
-    self.menuItems = [
+  }
+
+  /// The menu as of right now. Reading the paused state here, rather than
+  /// once at init, is what keeps the checkmark in sync with a change made
+  /// from the Settings window.
+  private func currentMenuItems() -> [DBusMenuItem] {
+    let isPaused = isCapturePaused()
+    if let lastReportedPaused, lastReportedPaused != isPaused { layoutRevision += 1 }
+    lastReportedPaused = isPaused
+    return [
       DBusMenuItem(id: DBusMenuItemID.openClipnest, label: "Open Clipnest"),
+      DBusMenuItem(id: DBusMenuItemID.pauseCapture, label: "Pause Capture", toggleState: isPaused),
       DBusMenuItem(id: DBusMenuItemID.openSettings, label: "Settings…"),
       DBusMenuItem(id: DBusMenuItemID.quit, label: "Quit Clipnest"),
     ]
@@ -179,6 +201,12 @@ public final class StatusNotifierTray: @unchecked Sendable {
       var outgoing = handle(request, message: message)
       outgoing.serial = ownConnection.allocateSerial()
       ownConnection.send(outgoing)
+      if isLayoutUpdatedSignalPending {
+        isLayoutUpdatedSignalPending = false
+        ownConnection.send(
+          StatusNotifierRequests.menuLayoutUpdated(
+            revision: layoutRevision, serial: ownConnection.allocateSerial()))
+      }
     }
   }
 
@@ -203,12 +231,17 @@ public final class StatusNotifierTray: @unchecked Sendable {
     case .getAllProperties:
       return StatusNotifierReplies.allProperties(replyingTo: message)
     case .menuGetLayout:
-      return StatusNotifierReplies.menuLayout(items: menuItems, replyingTo: message)
+      let items = currentMenuItems()
+      return StatusNotifierReplies.menuLayout(
+        items: items, revision: layoutRevision, replyingTo: message)
     case .menuGetGroupProperties(let ids, let propertyNames):
       return StatusNotifierReplies.menuGroupProperties(
-        items: menuItems, ids: ids, propertyNames: propertyNames, replyingTo: message)
+        items: currentMenuItems(), ids: ids, propertyNames: propertyNames, replyingTo: message)
     case .menuAboutToShow:
-      return StatusNotifierReplies.menuAboutToShowResult(needsUpdate: false, replyingTo: message)
+      let revisionBefore = layoutRevision
+      _ = currentMenuItems()
+      return StatusNotifierReplies.menuAboutToShowResult(
+        needsUpdate: layoutRevision != revisionBefore, replyingTo: message)
     case .menuEvent(let itemID, let eventID):
       guard eventID == DBusMenuEventID.clicked else {
         return StatusNotifierReplies.empty(replyingTo: message)
@@ -217,6 +250,10 @@ public final class StatusNotifierTray: @unchecked Sendable {
       case DBusMenuItemID.openClipnest: onOpenClipnest()
       case DBusMenuItemID.openSettings: onOpenSettings()
       case DBusMenuItemID.quit: onQuit()
+      case DBusMenuItemID.pauseCapture:
+        setCapturePaused(!isCapturePaused())
+        _ = currentMenuItems()
+        isLayoutUpdatedSignalPending = true
       default: break
       }
       return StatusNotifierReplies.empty(replyingTo: message)

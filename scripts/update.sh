@@ -125,7 +125,26 @@ if [ -z "${LATEST}" ]; then
 fi
 
 echo "    installed: ${INSTALLED}    latest: ${LATEST}"
-if [ "${INSTALLED}" = "${LATEST}" ]; then
+
+# Mirrors UpdateChecker.isUpdateAvailable (the in-app check): update only
+# when LATEST is strictly NEWER, compared numerically per dot-separated
+# component. Plain inequality used to "update" a build that was ahead of
+# the latest release DOWN to it. A non-numeric version on either side is
+# never treated as an update; "unknown" (nothing installed yet) still
+# installs.
+is_newer() {
+  local installed="$1" latest="$2" i a b
+  case "${installed}.${latest}" in *[!0-9.]*) return 1 ;; esac
+  IFS=. read -r -a a <<<"${installed}"
+  IFS=. read -r -a b <<<"${latest}"
+  for ((i = 0; i < ${#a[@]} || i < ${#b[@]}; i++)); do
+    if ((10#${b[i]:-0} > 10#${a[i]:-0})); then return 0; fi
+    if ((10#${b[i]:-0} < 10#${a[i]:-0})); then return 1; fi
+  done
+  return 1
+}
+
+if [ "${INSTALLED}" != "unknown" ] && ! is_newer "${INSTALLED}" "${LATEST}"; then
   echo "Already up to date."
   exit 0
 fi

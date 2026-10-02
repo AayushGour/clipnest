@@ -21,9 +21,9 @@ import Foundation
 /// not duplicate.
 ///
 /// **P8-A: every kind is now real.** `writeString`/`writeRichText`/
-/// `writeData`/`writeFileURL` all publish through `gdk_clipboard_set_content`
-/// (`writeString` alone still goes through the simpler `gdk_clipboard_set_text`
-/// convenience call, unchanged). `writeData`/`writeFileURL` were previously
+/// `writeData`/`writeFileURL` all publish through `gdk_clipboard_set_content`,
+/// via one `publish` helper that also attaches the ownership marker (see
+/// `isOwnedByThisProcess`). `writeData`/`writeFileURL` were previously
 /// deliberately NOT wired to a real GTK call — seeing them through
 /// correctly needed `GdkContentProvider`/`GBytes` plumbing a prior task's
 /// time budget didn't allow verifying against a live clipboard (no display
@@ -79,11 +79,10 @@ import Foundation
 /// asynchronously reacting to the ownership change this type's write just
 /// caused — there is no synchronous guarantee it has already incremented
 /// by the time this method returns, unlike `NSPasteboard.changeCount` on
-/// macOS. Worst case if a caller's `ClipboardMonitor.ignore(changeCount:)`
-/// races this: the next capture poll recaptures Clipnest's own write, and
-/// `SQLiteClipStore.insertOrBumpDuplicate` collapses it into a bump of the
-/// same existing row rather than a real duplicate — not data loss, not a
-/// crash. See this task's decision log.
+/// macOS. So `ClipboardMonitor.ignore(changeCount:)` alone cannot be
+/// trusted to recognise Clipnest's own write. `isOwnedByThisProcess` is
+/// the exact check the capture path relies on instead — see it for the
+/// freeze that losing this race used to cause.
 public struct GTKClipboardWriting: PasteboardWriting {
   private let pasteboardChangeCount: @Sendable () -> Int
   private static let logger = ClipnestLogger(
@@ -95,9 +94,60 @@ public struct GTKClipboardWriting: PasteboardWriting {
 
   public var changeCount: Int { pasteboardChangeCount() }
 
+  /// `true` while the clipboard holds content this process published —
+  /// answered only on GDK's X11 backend, where `gdk_clipboard_is_local` is
+  /// exact (X11 always tells the old owner it lost the selection). The
+  /// capture path must check this BEFORE asking for anything: on X11 even
+  /// the TARGETS list of our own write is served by this process's GTK
+  /// thread, which is the thread asking.
+  ///
+  /// On Wayland this answers `false`, because there the flag is wrong:
+  /// measured on GNOME 46 (2026-10-02), it reads `true` from launch and
+  /// stays `true` after another app copies while Clipnest is unfocused (an
+  /// unfocused Wayland client gets no clipboard events). Wayland uses
+  /// `LinuxClipboardConstants.clipnestOwnedMarkerMimeType` instead, which
+  /// every write here publishes and mutter reports in TARGETS without
+  /// involving this process.
+  ///
+  /// Why this matters, measured on Ubuntu 24.04: in clipboard-only mode,
+  /// picking an item recorded a stale `changeCount`, so the monitor did not
+  /// recognise the write as its own and requested its bytes from the GTK
+  /// thread — the owner — freezing the picker for the 30 s conversion
+  /// timeout ("not responding").
+  ///
+  /// GTK-thread only; answers `false` anywhere else (GDK isn't
+  /// thread-safe, and another thread's read can't self-deadlock).
+  ///
+  /// Known limit (X11 sessions only, fails closed): GDK clears the flag
+  /// when it processes SelectionClear on this same loop. If a capture check
+  /// runs after another app's copy bumped the serial but before GDK handled
+  /// that event, the copy is taken for Clipnest's own and missed — a
+  /// window of milliseconds. Never a privacy leak.
+  public var isOwnedByThisProcess: Bool {
+    guard Thread.isMainThread, let display = gdk_display_get_default(),
+      Self.isX11Display(display)
+    else { return false }
+    return gdk_clipboard_is_local(gdk_display_get_clipboard(display)) != 0
+  }
+
+  private static func isX11Display(_ display: OpaquePointer) -> Bool {
+    let instance = UnsafeMutableRawPointer(display).assumingMemoryBound(to: GTypeInstance.self)
+    guard let typeName = g_type_name(instance.pointee.g_class.pointee.g_type) else { return false }
+    return String(cString: typeName) == x11DisplayTypeName
+  }
+
+  /// `GdkX11Display`'s GType name (GDK's own `GDK_IS_X11_DISPLAY` checks it).
+  private static let x11DisplayTypeName = "GdkX11Display"
+
   public func writeString(_ string: String, forType type: ClipMediaType) {
-    guard let clipboard = defaultClipboard() else { return }
-    string.withCString { gdk_clipboard_set_text(clipboard, $0) }
+    // The two MIME types `gdk_clipboard_set_text` itself offers, published
+    // as bytes so the ownership marker can ride along (see `publish`).
+    let text = Data(string.utf8)
+    publish(
+      [
+        bytesProvider(mimeType: Self.plainTextMimeType, data: text),
+        bytesProvider(mimeType: Self.legacyPlainTextMimeType, data: text),
+      ], describing: "text")
   }
 
   /// Publishes every real rich-text representation `rtf` bundles (see
@@ -106,29 +156,11 @@ public struct GTKClipboardWriting: PasteboardWriting {
   /// representation it actually supports. See this type's top doc comment
   /// for why `rtf`'s bytes are no longer assumed to be flat HTML.
   public func writeRichText(rtf: Data, plain: String) {
-    guard let clipboard = defaultClipboard() else { return }
-
-    var providers: [OpaquePointer] = []
-    for representation in Self.representationsToPublish(for: rtf) {
-      let bytes = gBytesNew(representation.data)
-      providers.append(
-        gdkContentProviderNewForBytes(mimeType: representation.mimeType, bytes: bytes))
-      gBytesUnref(bytes)
+    var providers = Self.representationsToPublish(for: rtf).map {
+      bytesProvider(mimeType: $0.mimeType, data: $0.data)
     }
-
-    let plainBytes = gBytesNew(Data(plain.utf8))
-    providers.append(
-      gdkContentProviderNewForBytes(mimeType: Self.plainTextMimeType, bytes: plainBytes))
-    gBytesUnref(plainBytes)
-
-    // `gdkContentProviderNewUnion` CONSUMES every reference in `providers`
-    // — see `GdkContentProviderInterop.swift`'s top doc comment; none of
-    // them is unref'd individually.
-    let union = gdkContentProviderNewUnion(providers)
-    if !gdkClipboardSetContent(clipboard, union) {
-      Self.logger.error("gdk_clipboard_set_content failed for rich text")
-    }
-    gObjectUnref(union)
+    providers.append(bytesProvider(mimeType: Self.plainTextMimeType, data: Data(plain.utf8)))
+    publish(providers, describing: "rich text")
   }
 
   /// Every (mimeType, data) representation `writeRichText` should publish
@@ -157,17 +189,9 @@ public struct GTKClipboardWriting: PasteboardWriting {
   /// reaching this method in production for `.image` content; this method
   /// itself is real and independently verified against a live clipboard.
   public func writeData(_ data: Data, forType type: ClipMediaType) {
-    guard let clipboard = defaultClipboard() else { return }
-
-    let mimeType = Self.imageMimeType(for: type)
-    let bytes = gBytesNew(data)
-    let provider = gdkContentProviderNewForBytes(mimeType: mimeType, bytes: bytes)
-    gBytesUnref(bytes)
-
-    if !gdkClipboardSetContent(clipboard, provider) {
-      Self.logger.error("gdk_clipboard_set_content failed for image data")
-    }
-    gObjectUnref(provider)
+    publish(
+      [bytesProvider(mimeType: Self.imageMimeType(for: type), data: data)],
+      describing: "image data")
   }
 
   /// Publishes `url` under BOTH `text/uri-list` (the generic RFC 2483
@@ -178,30 +202,45 @@ public struct GTKClipboardWriting: PasteboardWriting {
   /// construction with `ClipnestPlatformLinux`'s own readers for both
   /// formats — see `FileClipboardPayload`'s doc comment.
   public func writeFileURL(_ url: URL) {
-    guard let clipboard = defaultClipboard() else { return }
+    // Nautilus-first order; both types stay independently offered since
+    // they're disjoint targets.
+    publish(
+      [
+        bytesProvider(
+          mimeType: LinuxClipboardConstants.gnomeCopiedFilesMimeType,
+          data: Data(FileClipboardPayload.gnomeCopiedFiles(for: url).utf8)),
+        bytesProvider(
+          mimeType: LinuxClipboardConstants.uriListMimeType,
+          data: Data(FileClipboardPayload.uriList(for: url).utf8)),
+      ], describing: "a file URL")
+  }
 
-    let gnomeBytes = gBytesNew(Data(FileClipboardPayload.gnomeCopiedFiles(for: url).utf8))
-    let gnomeProvider = gdkContentProviderNewForBytes(
-      mimeType: LinuxClipboardConstants.gnomeCopiedFilesMimeType, bytes: gnomeBytes)
-    gBytesUnref(gnomeBytes)
-
-    let uriListBytes = gBytesNew(Data(FileClipboardPayload.uriList(for: url).utf8))
-    let uriListProvider = gdkContentProviderNewForBytes(
-      mimeType: LinuxClipboardConstants.uriListMimeType, bytes: uriListBytes)
-    gBytesUnref(uriListBytes)
-
-    // `gdkContentProviderNewUnion` CONSUMES both references above — see
-    // `GdkContentProviderInterop.swift`'s top doc comment; neither
-    // `gnomeProvider` nor `uriListProvider` is unref'd individually.
-    // Nautilus-first order, matching this task's directive (functionally
-    // both MIME types stay independently offered regardless of order,
-    // since they're disjoint targets — see that file's `new_union` doc
-    // comment: order only disambiguates when providers overlap).
-    let union = gdkContentProviderNewUnion([gnomeProvider, uriListProvider])
+  /// The one way this type sets the clipboard: `providers` plus the
+  /// ownership marker (`clipnestOwnedMarkerMimeType`), as a single union.
+  /// The marker is how the capture path recognises Clipnest's own write on
+  /// Wayland — see `isOwnedByThisProcess`. `gdkContentProviderNewUnion`
+  /// consumes every reference in its input (see
+  /// `GdkContentProviderInterop.swift`); only the union is unref'd here.
+  private func publish(_ providers: [OpaquePointer], describing what: String) {
+    guard let clipboard = defaultClipboard() else {
+      providers.forEach(gObjectUnref)
+      return
+    }
+    let marker = bytesProvider(
+      mimeType: LinuxClipboardConstants.clipnestOwnedMarkerMimeType, data: Data())
+    let union = gdkContentProviderNewUnion(providers + [marker])
     if !gdkClipboardSetContent(clipboard, union) {
-      Self.logger.error("gdk_clipboard_set_content failed for a file URL")
+      Self.logger.error("gdk_clipboard_set_content failed for \(what)")
     }
     gObjectUnref(union)
+  }
+
+  /// A provider offering `data` as `mimeType`, owned by the caller (hand it
+  /// to `publish`).
+  private func bytesProvider(mimeType: String, data: Data) -> OpaquePointer {
+    let bytes = gBytesNew(data)
+    defer { gBytesUnref(bytes) }
+    return gdkContentProviderNewForBytes(mimeType: mimeType, bytes: bytes)
   }
 
   private func defaultClipboard() -> OpaquePointer? {
@@ -218,6 +257,10 @@ public struct GTKClipboardWriting: PasteboardWriting {
   /// `text/plain;charset=utf-8` — `LinuxClipboardConstants.textMimePriority`'s
   /// own top entry, same reasoning as `richTextMimeType` above.
   static let plainTextMimeType = LinuxClipboardConstants.textMimePriority[0]
+
+  /// `text/plain` — the second type `gdk_clipboard_set_text` offers, for
+  /// readers that don't ask for an explicit charset.
+  static let legacyPlainTextMimeType = LinuxClipboardConstants.plainTextMimeType
 
   /// The real MIME type to publish `data` under: `image/png`
   /// (`LinuxClipboardConstants.imageMimePriority`'s own top/preferred
