@@ -53,6 +53,13 @@ on:
 permissions:
   contents: write # needed to upload assets to the existing release
 
+# Container jobs run `run:` steps with `sh` (dash on the swift images),
+# which rejects `set -o pipefail` ("Illegal option -o pipefail") and failed
+# every build job of the v1.0.0 release. Use bash everywhere.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   check:
     if: >
