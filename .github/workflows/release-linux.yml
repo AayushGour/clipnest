@@ -304,6 +304,9 @@ jobs:
       - name: Upload .debs + .sha256 + tarballs to the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
+          # This job never checks out the repo, so gh cannot infer it from
+          # a .git dir ("fatal: not a git repository") — name it explicitly.
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           ls -la dist
