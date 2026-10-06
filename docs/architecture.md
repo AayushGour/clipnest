@@ -122,6 +122,7 @@ Key API surface:
 - `checkNow() async -> ClipItem?` — the deterministic, test-driven entry point; `start()`/`stop()` wrap it in a real `Timer` (`Clipboard/ClipboardMonitor.swift:148-165, 202-279`).
 - `pause()`/`resume()`/`isPaused` — `checkNow()` no-ops while paused (`Clipboard/ClipboardMonitor.swift:168-175`).
 - `ignore(changeCount:)` — tells the monitor a given pasteboard `changeCount` was Clipnest's own write (copy-on-select, a synthesized paste, the snippet-expansion clipboard fallback), so the next poll doesn't recapture it as an external copy (`Clipboard/ClipboardMonitor.swift:177-194`).
+  - **Linux does not rely on this.** The X11 serial behind `changeCount` bumps asynchronously, so the recorded value can be stale. Its own write then looked external, and the monitor requested its bytes from Clipnest's own GTK thread, the owner, which deadlocked for 30 s (T-HANG-SELECT1, fixed in 1.0.0). Linux instead recognises its own writes exactly: every write carries `application/x-clipnest-owned` (`GTKClipboardWriting.publish`), and `LinuxPasteboard` skips any change carrying it without requesting bytes. On GDK's X11 backend it also checks `gdk_clipboard_is_local` first.
 - `onCapture: (ClipItem) -> Void` — a plain (non-`Sendable`) stored closure, safe because the whole class is `@MainActor`; lets the composition root push a live update into the picker instead of the picker polling the store (`Clipboard/ClipboardMonitor.swift:108-121`).
 - `PasteboardReader.read(from:)` checks pasteboard types in **priority order** — `.fileURL` → image (`.tiff`/`.png`) → `.rtf` → `.string` — because a single copy commonly carries multiple representations at once and a generic type must never win over a more specific one present on the same pasteboard (`Clipboard/PasteboardReader.swift:72-104`).
 - `Classification.rawData` is populated for **both** `.image` and `.richText` (raw RTF bytes) — `readImage`/`readRichText` both set it (`Clipboard/PasteboardReader.swift:116-124, 155-167`); `.text`/`.link`/`.file` never carry `rawData`.
@@ -135,9 +136,9 @@ Key API surface:
 | `Paster` | `Paste/Paster.swift:136-210` | Writes `PasteContent` to the pasteboard, then — only if Accessibility is granted and a target is available — synthesizes ⌘V into the previously-frontmost app. |
 | `FrontmostAppTracker` | `Paste/FrontmostAppTracker.swift:55-79` | `@MainActor`. `record()`/`consume()` bridge "who was frontmost when the picker was about to open" to "who receives the synthesized paste." |
 | `SnippetExpander` | `Paste/SnippetExpander.swift:28-89` | `@MainActor`. Backs the global ⌥⌘E hotkey: AX-first selection read/replace, clipboard-with-restore fallback. |
-| `EventSynthesizing` (protocol) | `Paste/EventSynthesizing.swift:12-17` | Injectable ⌘V synthesis; real impl `CGEventSynthesizer` in `Paster.swift:91-126`. |
+| `EventSynthesizing` (protocol) | `Paste/EventSynthesizing.swift:12-30` | Injectable ⌘V synthesis; real impl `CGEventSynthesizer` in `Paster.swift:91-126`. |
 | `SelectedTextAccessing` (protocol) | `Paste/SelectedTextAccessing.swift:7-16` | Injectable AX-backed selection read/replace; real impl `AXSelectedTextAccessor` lives in `ClipnestApp` (App-only concrete type behind a Core protocol). |
-| `SelectionReplacing` (protocol) | `Paste/SelectionReplacing.swift:38-45` | `@MainActor` protocol for the universal clipboard-borrow-and-restore fallback; real impl `ClipboardSelectionReplacer` lives in `ClipnestApp`. |
+| `SelectionReplacing` (protocol) | `Paste/SelectionReplacing.swift:99-106` | `@MainActor` protocol for the universal clipboard-borrow-and-restore fallback; real impl `ClipboardSelectionReplacer` lives in `ClipnestApp`. `SelectionReplaceResult` (`:4-72`) gained `.declinedTerminalTarget` (T-TERMPASTE1) — the transaction declines outright, before any clipboard I/O, when the frontmost app is a known terminal emulator, since its copy-then-paste-with-no-delete-step mechanism corrupts text there instead of replacing it. |
 
 `PasteContent` (`Paste/Paster.swift:27-32`) has **four** cases — `.text(String)`, `.image(Data)`, `.file(URL)`, `.richText(rtf: Data, plain: String)` — the last of which post-dates `docs/API.md`'s documented three-case enum; `Paster.paste(_:targetingFrontmostApp:)` (`Paste/Paster.swift:179-209`) handles all four, writing both `.rtf` and `.string` representations for `.richText` via `PasteboardWriting.writeRichText(rtf:plain:)` (`Paste/Paster.swift:56-59, 78-82`).
 
@@ -223,13 +224,13 @@ Both SwiftData stores share a package-internal `deleteBlobs(for:using:)` helper 
 | `HotkeyManager` | `System/HotkeyManager.swift:54-66` | Registers the two global hotkeys via `KeyboardShortcuts`. |
 | `PermissionsManager` | `System/PermissionsManager.swift:42-89` | Thin wrapper over `AXIsProcessTrusted()`/`AXIsProcessTrustedWithOptions(_:)` — the single place Accessibility trust state is read. |
 | `AXSelectedTextAccessor` | `System/SelectedTextAccessing.swift:20-52` | Concrete `SelectedTextAccessing`, backed by the system-wide AX focused element. |
-| `ClipboardSelectionReplacer` | `System/ClipboardSelectionReplacer.swift:22-134` | Concrete `SelectionReplacing` — the universal synthesized-copy/paste-with-restore fallback. |
+| `ClipboardSelectionReplacer` | `System/ClipboardSelectionReplacer.swift:108-296` | Concrete `SelectionReplacing` — the universal synthesized-copy/paste-with-restore fallback. Declines outright (no clipboard I/O) when the frontmost app is a known terminal emulator (`MacTerminalAppRegistry`, T-TERMPASTE1). |
 
 `HotkeyManager` defines two `KeyboardShortcuts.Name`s: `.togglePicker` (default **⌥⌘V**) and `.expandSnippet` (default **⌥⌘E**) (`System/HotkeyManager.swift:29-40`); `register(onToggle:)`/`registerExpandSnippet(onExpand:)` are thin `KeyboardShortcuts.onKeyDown` calls (`System/HotkeyManager.swift:57-65`).
 
 `PermissionsManager` exposes two distinct checks with different UX consequences: `isGranted` (silent — feeds the picker's paste-availability check and must never prompt) and `isGrantedPromptingIfNeeded()` (prompts macOS's "grant access" dialog if not already granted — used **only** from an actual paste attempt, never from launch or opening the picker) (`System/PermissionsManager.swift:49-89`).
 
-`ClipboardSelectionReplacer.replaceSelection(bodyForSelection:)` (`System/ClipboardSelectionReplacer.swift:50-84`) owns the entire clipboard-borrow transaction: suppress → snapshot → synthesize ⌘C → resolve body → write body + synthesize ⌘V → restore snapshot → re-enable, all under one `defer`.
+`ClipboardSelectionReplacer.replaceSelection(bodyForSelection:)` (`System/ClipboardSelectionReplacer.swift:163-243`) first checks whether the frontmost app (`FrontmostAppReferenceProviding`) is a known terminal emulator (`MacTerminalAppRegistry.isTerminal(bundleIdentifier:)`, T-TERMPASTE1) and returns `.declinedTerminalTarget` immediately if so — no suppression, no snapshot, no synthesized keystroke, since this transaction's copy-then-paste-with-no-delete-step mechanism would corrupt text there instead of replacing it. Otherwise it owns the entire clipboard-borrow transaction: suppress → snapshot → synthesize ⌘C → resolve body → write body + synthesize ⌘V → restore snapshot → re-enable, all under one `defer`.
 
 #### UI/Picker (+ UI/Components) — `ClipnestApp/Sources/UI/`
 
@@ -386,28 +387,33 @@ sequenceDiagram
         end
     else AX can't read a selection (Electron/Chrome/Java apps)
         Exp->>CR: replaceSelection(bodyForSelection:)
-        CR->>Monitor: beginSuppression() -> pause()
-        CR->>CR: snapshot current clipboard
-        CR->>CR: synthesize ⌘C, poll for pasteboard change (<=500ms)
-        alt clipboard changed
-            CR->>Store: bodyForSelection(selection) -> findByKeyword
-            alt match
-                CR->>CR: write body to clipboard, synthesize ⌘V, settle 120ms
-            else no match
-                Note over CR: returns .noMatch
+        CR->>CR: is frontmost app a known terminal? (MacTerminalAppRegistry, T-TERMPASTE1)
+        alt frontmost app is a terminal
+            Note over CR: returns .declinedTerminalTarget — NO clipboard I/O at all
+        else not a terminal
+            CR->>Monitor: beginSuppression() -> pause()
+            CR->>CR: snapshot current clipboard
+            CR->>CR: synthesize ⌘C, poll for pasteboard change (<=500ms)
+            alt clipboard changed
+                CR->>Store: bodyForSelection(selection) -> findByKeyword
+                alt match
+                    CR->>CR: write body to clipboard, synthesize ⌘V, settle 120ms
+                else no match
+                    Note over CR: returns .noMatch
+                end
+            else no change
+                Note over CR: returns .noSelection
             end
-        else no change
-            Note over CR: returns .noSelection
+            CR->>CR: restore original clipboard snapshot
+            CR->>Monitor: ignore(changeCount) + resume()
         end
-        CR->>CR: restore original clipboard snapshot
-        CR->>Monitor: ignore(changeCount) + resume()
         alt result != .replaced
             Exp->>Exp: beep()
         end
     end
 ```
 
-Grounding: `SnippetExpander.expand()` (`Sources/ClipnestCore/Paste/SnippetExpander.swift:62-88`); `ClipboardSelectionReplacer.replaceSelection(bodyForSelection:)` (`ClipnestApp/Sources/System/ClipboardSelectionReplacer.swift:50-84`); `SnippetStore.findByKeyword(_:)` (`Sources/ClipnestCore/Store/SnippetStore.swift:40-44`, implemented at `Sources/ClipnestCore/Store/SwiftDataSnippetStore.swift:195-215`). The suppression wiring (`beginSuppression`/`endSuppression` → `ClipboardMonitor.pause()`/`.ignore(changeCount:)`+`.resume()`) is set up in `AppEnvironment.init` (`ClipnestApp/Sources/App/AppEnvironment.swift:238-247`) so the transient copy/paste never lands in captured history and the restored clipboard isn't itself recaptured.
+Grounding: `SnippetExpander.expand()` (`Sources/ClipnestCore/Paste/SnippetExpander.swift:74-108`); `ClipboardSelectionReplacer.replaceSelection(bodyForSelection:)` (`ClipnestApp/Sources/System/ClipboardSelectionReplacer.swift:163-243`, terminal-decline gate at `:163-178`); `MacTerminalAppRegistry.isTerminal(bundleIdentifier:)` (`Sources/ClipnestCore/Platform/macOS/MacTerminalAppRegistry.swift`); `SelectionReplaceResult.declinedTerminalTarget` (`Sources/ClipnestCore/Paste/SelectionReplacing.swift:35-71`); `SnippetStore.findByKeyword(_:)` (`Sources/ClipnestCore/Store/SnippetStore.swift:40-44`, implemented at `Sources/ClipnestCore/Store/SwiftDataSnippetStore.swift:195-215`). The suppression wiring (`beginSuppression`/`endSuppression` → `ClipboardMonitor.pause()`/`.ignore(changeCount:)`+`.resume()`) is set up in `AppEnvironment.init` (`ClipnestApp/Sources/App/AppEnvironment.swift:238-247`) so the transient copy/paste never lands in captured history and the restored clipboard isn't itself recaptured — none of it runs at all on the terminal-decline path.
 
 ---
 
@@ -514,6 +520,10 @@ graph LR
 
 **CI (`.github/workflows/release.yml`):** triggers on every push to `main` (plus manual `workflow_dispatch`). A cheap `check` job reads `MARKETING_VERSION` out of `project.yml` and checks whether `v<version>` is already tagged; if not, the `release` job runs a `swift format lint --recursive --strict` gate over `Sources Tests` and, separately, `ClipnestApp/Sources` (`.github/workflows/release.yml:83-88` — zero lint errors required before anything builds), then `swift test`, `scripts/build.sh`, optionally signs+notarizes (only if the Developer ID secrets are present — `HAS_SIGNING` gate), packages the DMG, and creates the GitHub Release (which also creates the tag, since a `GITHUB_TOKEN`-pushed tag doesn't re-trigger `on: push: tags`). The Release's `.dmg` asset is the single distribution artifact — `scripts/install.sh`/`scripts/update.sh` curl it directly, so there is no package-manager manifest for the workflow to keep in sync.
 
+**CI (`.github/workflows/ci.yml`):** the PR gate for the Linux port (`feat/linux-port` and onward) — `release.yml` above only builds/releases the macOS app on push to `main`, so this is the only workflow that validates a PR against the Ubuntu targets before merge. Triggers on `pull_request` (any branch, including one that adds this workflow file for the first time — GitHub reads a `pull_request`-triggered workflow from the PR's own merge ref, not the base branch, so it does not need to pre-exist on `main`) plus manual `workflow_dispatch`. Runs a `build-and-test` job, matrixed over `[jammy, noble]`, **inside** the real `swift:6.0-jammy`/`swift:6.0-noble` Docker Official Images (not GitHub's hosted Ubuntu runner userland — see the workflow's own top comment for why); each leg installs the apt system deps `Package.swift`'s `providers:` entries declare, then runs `swift build`, `swift test`, and `scripts/lint.sh Sources Tests`.
+
+**Lint reproducibility (`scripts/lint.sh`, T-LINT2):** `swift format` disagrees with itself across toolchains — this image's bundled swift-format is a `main`-branch build (`swift format --version` → `main`), not a tagged release, and it does not always agree with Apple's swift-format shipped in a developer's own Xcode/toolchain (verified: they wrap a multi-line `@escaping` closure-type parameter differently, and a file-scoped `// swift-format-ignore-file: <Rule>` directive is honoured by Apple's build but silently ignored by `main`). Rather than trust "whatever `swift format` is on PATH," both this workflow and any developer run the same `scripts/lint.sh`: it checks the resolved `swift format --version` against the version this exact pinned image is known to report, runs natively when it matches (the path this CI job itself takes — zero overhead), and otherwise re-executes itself inside `swift:6.0-jammy` via `docker run` so the verdict always comes from the literal binary CI trusts. A version mismatch that docker can't resolve, or that persists even inside the pinned image, fails loudly rather than silently certifying against a different binary — see the script's own header comment for the full rationale and the alternatives it rejected (a second SwiftPM dependency on swift-format; a root `.swift-format` rules config, which cannot express a line-wrap *algorithm* difference; a hand-installed toolchain with no verification).
+
 **The Xcode 26 CI requirement** — explicitly called out in `release.yml`'s own comment (`.github/workflows/release.yml:63-69`):
 
 ```yaml
@@ -551,9 +561,9 @@ Because CI already standardizes on Xcode 26, `SwiftDataClipStore.makeTestContain
 ## 10. Extension points & known constraints
 
 **Shipped-but-unwired:**
-- `ClipStore.enforceRetention(cap:)` is fully implemented and tested in both `SwiftDataClipStore`/`InMemoryClipStore` but has no call site in `ClipnestApp` — history grows unbounded until manually deleted. Wiring it (a Settings toggle + a periodic call, per the README roadmap's "Configurable retention") requires no `ClipnestCore` change, only an `AppEnvironment`/Settings addition.
 - `Snippet.keyword` exists on the model and is what `SnippetStore.findByKeyword(_:)` matches against, but the picker's Snippets form only exposes Title ("Tag") and Body — `keyword` is currently always set equal to the title's role in practice via that same field, with no separate rebinding UI (see `docs/API.md`'s Model section and `ClipnestApp/Sources/UI/Picker/SnippetFormView.swift`).
-- `PrivacyFilter.shouldCapture`'s `customExcludedBundleIDs` parameter is wired end-to-end in `ClipboardMonitor` (via `excludedBundleIDsProvider`) but `AppEnvironment` always supplies the default empty closure (`{ [] }`) — there is no Settings UI yet to populate it, matching the README roadmap's "excluded apps" item.
+
+(`ClipStore.enforceRetention(cap:)` and `PrivacyFilter.shouldCapture`'s `customExcludedBundleIDs` — both previously listed here as unwired — are now wired end-to-end: `ClipnestApp/Sources/UI/Settings/HistorySettingsView.swift` and `AppEnvironment.enforceRetentionNow()`/`scheduleRetentionEnforcement()` (`ClipnestApp/Sources/App/AppEnvironment.swift:242-244,556-618`) drive retention from `SettingsStore.retentionCap`, and `ClipnestApp/Sources/UI/Settings/AppsSettingsView.swift`/`SettingsStore.userExcludedBundleIDs` feed `ClipboardMonitor`'s `excludedBundleIDsProvider`. Neither the `UI/Settings/` module nor `SettingsStore` has its own module-reference entry in [§3.2](#32-clipnestapp) yet — a real gap in this document, out of scope for this pass, flagged for whoever documents that area next.)
 
 **Structural constraints, by design:**
 - **No App Sandbox.** Distribution is a non-sandboxed, Developer-ID-signed `.dmg` (`.claude/coding-standards.md`, Stack section) — this is what lets `fileReference` be a plain file-URL string with no security-scoped bookmark machinery (`Sources/ClipnestCore/Model/ClipItem.swift:35-40`).

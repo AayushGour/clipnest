@@ -1,0 +1,43 @@
+#!/bin/sh
+# postrm for clipnest.
+#
+# Never touches per-user data (~/.config/clipnest, ~/.local/share/clipnest,
+# ~/.config/autostart/app.clipnest.Clipnest.desktop) on remove OR purge —
+# a system package purge must not destroy personal clipboard history, and
+# dpkg has no supported mechanism to reach into every user's home directory
+# anyway. Manual cleanup is documented in clipnest(1)'s UNINSTALLING
+# section instead.
+set -e
+
+case "$1" in
+  purge)
+    if getent group clipnest-input >/dev/null 2>&1; then
+      delgroup --system clipnest-input >/dev/null 2>&1 || true
+    fi
+    ;;
+  remove | upgrade | failed-upgrade | abort-install | abort-upgrade | disappear) ;;
+  *)
+    echo "postrm called with unknown argument \`$1'" >&2
+    exit 1
+    ;;
+esac
+
+# Recompile/refresh system caches after files have been removed (dpkg runs
+# postrm remove/purge AFTER deleting the package's files), so stale
+# schema/desktop/icon entries don't linger. Best-effort, same reasoning as
+# clipnest.postinst.
+if command -v glib-compile-schemas >/dev/null 2>&1 && [ -d /usr/share/glib-2.0/schemas ]; then
+  glib-compile-schemas /usr/share/glib-2.0/schemas >/dev/null 2>&1 || true
+fi
+
+if command -v update-desktop-database >/dev/null 2>&1 && [ -d /usr/share/applications ]; then
+  update-desktop-database -q /usr/share/applications >/dev/null 2>&1 || true
+fi
+
+if command -v gtk-update-icon-cache >/dev/null 2>&1 && [ -d /usr/share/icons/hicolor ]; then
+  gtk-update-icon-cache -q -t /usr/share/icons/hicolor >/dev/null 2>&1 || true
+fi
+
+#DEBHELPER#
+
+exit 0

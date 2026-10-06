@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC
+ "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  Grants membership in the dedicated `clipnest-input` system group (see
+  packaging/linux/udev/clipnest-uinput.rules and debian/clipnest.postinst),
+  which is what actually lets Clipnest open /dev/uinput to synthesize
+  keystrokes for auto-paste. This is the ONLY sanctioned way that group
+  membership is ever granted — clipnest.postinst creates the group but
+  never adds a user to it (see that script's own comment); everything else
+  is this one explicit, user-initiated, admin-authenticated action,
+  triggered from Clipnest's own Settings, never automatically.
+
+  org.freedesktop.policykit.exec.path binds this action to one specific,
+  minimal helper (packaging/linux/scripts/clipnest-grant-input) — the
+  standard polkit idiom for scoping `pkexec <program>` to a tailored auth
+  requirement instead of the generic, always-full-admin
+  org.freedesktop.policykit.exec action. See that script for exactly what
+  it does (usermod -aG, nothing else, and only for the invoking user).
+-->
+<policyconfig>
+  <vendor>Clipnest</vendor>
+  <vendor_url>https://github.com/AayushGour/clipnest</vendor_url>
+  <icon_name>app.clipnest.Clipnest</icon_name>
+
+  <action id="app.clipnest.grant-input">
+    <description>Allow Clipnest to create virtual input devices for auto-paste</description>
+    <message>Authentication is required to let Clipnest synthesize keystrokes for auto-paste. This adds your user account to the "clipnest-input" group — it does NOT grant access to read your keyboard or mouse input, only to create a new virtual input device. You must log out and back in before this takes effect.</message>
+    <icon_name>app.clipnest.Clipnest</icon_name>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>no</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/libexec/clipnest/clipnest-grant-input</annotate>
+  </action>
+</policyconfig>

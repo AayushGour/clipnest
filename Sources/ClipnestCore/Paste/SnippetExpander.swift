@@ -1,6 +1,8 @@
-import AppKit
 import Foundation
-import os
+
+#if os(macOS)
+  import AppKit
+#endif
 
 /// Backs the global snippet-expansion hotkey (⌥⌘E): reads the current
 /// selection, looks it up as a snippet keyword, and replaces the selection
@@ -26,7 +28,8 @@ import os
 /// is main-actor-isolated (callers get a plain, non-`unsafe` stored property).
 @MainActor
 public final class SnippetExpander {
-  private static let logger = Logger(subsystem: ClipnestLog.subsystem, category: "SnippetExpander")
+  private static let logger = ClipnestLogger(
+    subsystem: ClipnestLog.subsystem, category: "SnippetExpander")
 
   private let snippetStore: any SnippetStore
   private let selectedText: any SelectedTextAccessing
@@ -37,7 +40,7 @@ public final class SnippetExpander {
     snippetStore: any SnippetStore,
     selectedText: any SelectedTextAccessing,
     clipboardReplacer: any SelectionReplacing,
-    beep: @escaping () -> Void = { NSSound.beep() }
+    beep: @escaping () -> Void = PlatformDefaults.beep
   ) {
     self.snippetStore = snippetStore
     self.selectedText = selectedText
@@ -59,22 +62,38 @@ public final class SnippetExpander {
 
   /// Reads the current selection and replaces it with the matched snippet
   /// body; beeps if nothing was selected or nothing matched.
+  ///
+  /// **Tier-decision logging (routed bug report, 2026-09):** this method
+  /// previously gave no indication which of the two strategies ran, which
+  /// made a Firefox-only clipboard-fallback failure indistinguishable from
+  /// the Accessibility path silently misbehaving. Every `.notice` line
+  /// below logs only a tier name and a boolean/outcome — never the
+  /// selection text or the snippet body — matching coding-standards.md's
+  /// privacy rule and every existing `ClipnestLogger` call site in this
+  /// codebase.
   public func expand() async {
     // 1) Accessibility path — no clipboard side effect where it works.
     if let selection = selectedText.readSelectedText(),
       !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     {
+      Self.logger.notice("tier=accessibility: selection read succeeded")
       guard let snippetBody = await body(for: selection) else {
         // AX read succeeded, so the keyword is real — a clipboard re-read
         // would yield the same non-match. Beep and stop.
+        Self.logger.notice("tier=accessibility: outcome=noMatch")
         beep()
         return
       }
       if selectedText.replaceSelectedText(with: snippetBody) {
+        Self.logger.notice("tier=accessibility: outcome=replaced")
         return
       }
       // AX read worked but the write was refused — fall through to the
       // clipboard path, which pastes the body via a synthesized ⌘V.
+      Self.logger.notice("tier=accessibility: write refused, falling through to clipboard tier")
+    } else {
+      Self.logger.notice(
+        "tier=accessibility: no selection readable, falling through to clipboard tier")
     }
 
     // 2) Clipboard fallback — works in ANY app (Electron/Chrome/etc.), and
@@ -82,8 +101,64 @@ public final class SnippetExpander {
     // selection at all, or read it but couldn't write.
     let result = await clipboardReplacer.replaceSelection(
       bodyForSelection: { await self.body(for: $0) })
+    Self.logger.notice("tier=clipboard: outcome=\(String(describing: result))")
     if result != .replaced {
       beep()
     }
   }
 }
+
+#if os(macOS)
+  extension PlatformDefaults {
+    /// The production "nothing matched" feedback on macOS — the standard
+    /// system alert sound.
+    public static var beep: () -> Void { { NSSound.beep() } }
+  }
+#else
+  extension PlatformDefaults {
+    /// ASCII BEL (`\a`) — writing this byte to a terminal rings its bell
+    /// (and, under the X11/Xorg default `xset b` configuration, the
+    /// hardware/PC-speaker bell too on a plain X session), with no display
+    /// connection and no GTK/GDK link required. Internal (not `private`),
+    /// like `PrivacyFilter`'s concealed/transient raw UTI values, so
+    /// `SnippetExpanderTests` can pin its exact value directly — a typo'd
+    /// byte here would silently swap "audible feedback" for "print an
+    /// arbitrary control character," exactly the kind of silent failure
+    /// this feature's whole fix (T-BUG5) exists to prevent.
+    static let terminalBellByte: UInt8 = 0x07
+
+    /// T-BUG5 (parity-audit bug #5): previously a silent no-op — a snippet
+    /// expansion that matched nothing (or had no selection) gave the user
+    /// NO feedback at all on Linux, unlike macOS's audible `NSSound.beep()`
+    /// above, so there was no way to tell the feature had even run.
+    ///
+    /// `gdk_display_beep()` would be the closest Linux equivalent, but
+    /// it's unreachable from here: this file's module, `ClipnestCore`, is
+    /// a plain SPM library with ZERO third-party dependencies and no
+    /// GTK/display dependency at all by design (see coding-standards.md's
+    /// Dependency policy and Module layout — the whole point of this
+    /// module is being fully unit-testable with no UI/display). Linking
+    /// `CGtk4` into it would need a `Package.swift` change (out of this
+    /// task's scope, `Sources/ClipnestCore/Paste/Paster.swift`'s
+    /// `PlatformDefaults.beep` only) and would break that "zero UI"
+    /// contract for every other consumer of `ClipnestCore`. The terminal
+    /// bell is the dependency-free fallback the task's own brief names for
+    /// exactly this situation — no display, no GTK/GDK, and no extra
+    /// `libcanberra` dependency either (also not on coding-standards.md's
+    /// approved dependency list, and it would need its own new
+    /// `systemLibrary` target to add).
+    ///
+    /// This is audible only when Clipnest is actually attached to a
+    /// terminal (e.g. run manually or under CI) — a desktop-launched GUI
+    /// session's stderr is typically not a terminal at all. Still
+    /// injectable, like every other `PlatformDefaults.*` default (see
+    /// `SnippetExpander.init`'s `beep` parameter): a future Linux
+    /// composition-root change can override it with a real
+    /// `gdk_display_beep()`-backed closure once `LinuxAppEnvironment`
+    /// wires one up — out of this task's scope, since that file belongs to
+    /// a different owner.
+    public static var beep: () -> Void {
+      { FileHandle.standardError.write(Data([terminalBellByte])) }
+    }
+  }
+#endif

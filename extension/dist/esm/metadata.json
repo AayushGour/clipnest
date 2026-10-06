@@ -1,0 +1,9 @@
+{
+  "uuid": "clipnest@clipnest.app",
+  "name": "Clipnest",
+  "description": "Supplies Clipnest with the privileged capabilities a Wayland client cannot have on its own: clipboard events while unfocused, global shortcuts, synthetic paste, pointer position, and cursor-anchored window placement.",
+  "shell-version": ["45", "46", "47", "48", "49", "50"],
+  "version": 1,
+  "settings-schema": "app.clipnest.Clipnest.Keybindings",
+  "url": "https://github.com/AayushGour/clipnest"
+}

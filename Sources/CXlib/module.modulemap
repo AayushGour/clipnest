@@ -1,0 +1,7 @@
+module CXlib [system] {
+  header "shim.h"
+  link "X11"
+  link "Xfixes"
+  link "Xtst"
+  export *
+}

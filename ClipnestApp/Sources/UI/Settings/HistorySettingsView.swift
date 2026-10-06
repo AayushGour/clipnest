@@ -35,6 +35,7 @@
 // this view, matching coding-standards.md's "UI kept thin" rule.
 
 import ClipnestCore
+import ClipnestViewModels
 import SwiftUI
 
 struct HistorySettingsView: View {

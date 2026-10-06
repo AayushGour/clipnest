@@ -1,0 +1,181 @@
+import Foundation
+
+/// The ASCII type-code bytes used in D-Bus signature strings (the D-Bus
+/// Specification's "Type System" section) — kept in exactly ONE place so
+/// `DBusSignatureParser` never hardcodes a character literal inline.
+enum DBusTypeCode {
+  static let byte = UInt8(ascii: "y")
+  static let boolean = UInt8(ascii: "b")
+  static let int16 = UInt8(ascii: "n")
+  static let uint16 = UInt8(ascii: "q")
+  static let int32 = UInt8(ascii: "i")
+  static let uint32 = UInt8(ascii: "u")
+  static let int64 = UInt8(ascii: "x")
+  static let uint64 = UInt8(ascii: "t")
+  static let double = UInt8(ascii: "d")
+  static let string = UInt8(ascii: "s")
+  static let objectPath = UInt8(ascii: "o")
+  static let signature = UInt8(ascii: "g")
+  static let array = UInt8(ascii: "a")
+  static let structOpen = UInt8(ascii: "(")
+  static let structClose = UInt8(ascii: ")")
+  static let variant = UInt8(ascii: "v")
+  static let dictEntryOpen = UInt8(ascii: "{")
+  static let dictEntryClose = UInt8(ascii: "}")
+  /// `UNIX_FD` (D-Bus Specification's "Type System" table, code `h`) — on
+  /// the wire this is marshalled EXACTLY like a `UINT32` (see
+  /// `DBusValue.unixFD`'s doc comment: the body carries an INDEX, never the
+  /// real descriptor), so its type code exists only to round-trip through
+  /// `DBusSignatureParser`/`DBusValue.signatureCode` correctly.
+  static let unixFD = UInt8(ascii: "h")
+}
+
+/// A parsed D-Bus type signature — the shape decode needs to know BEFORE it
+/// can interpret raw bytes (unlike `DBusValue`, encoding never needs this:
+/// a `DBusValue` already knows its own shape).
+indirect enum DBusTypeSignature: Equatable, Sendable {
+  case byte, boolean, int16, uint16, int32, uint32, int64, uint64, double
+  case string, objectPath, signature, variant, unixFD
+  case array(DBusTypeSignature)
+  case structure([DBusTypeSignature])
+  case dictEntry(DBusTypeSignature, DBusTypeSignature)
+
+  /// Mirrors `DBusValue.alignment` exactly — see that property's doc
+  /// comment for the D-Bus alignment rules. `UNIX_FD` aligns like
+  /// `UINT32` (4) — the D-Bus Specification's alignment table gives it no
+  /// alignment of its own because it IS a `UINT32` on the wire.
+  var alignment: Int {
+    switch self {
+    case .byte, .signature: return 1
+    case .int16, .uint16: return 2
+    case .boolean, .int32, .uint32, .string, .objectPath, .array, .unixFD: return 4
+    case .int64, .uint64, .double, .structure, .dictEntry: return 8
+    case .variant: return 1
+    }
+  }
+
+  /// Alignment for a single element type given only as a signature
+  /// FRAGMENT string (e.g. `"v"`, `"{sv}"`, `"(ia{sv})"`) — needed because
+  /// `DBusValue.emptyArray(elementSignature:)` carries its element type
+  /// that way (a `String`, not a `DBusTypeSignature`; see that case's doc
+  /// comment for why), so `DBusByteWriter` has no decoded `DBusValue`/
+  /// `DBusTypeSignature` to ask `.alignment` of when it needs to pad a
+  /// genuinely empty array correctly. Reuses `DBusSignatureParser` (by
+  /// wrapping the fragment as `"a" + signature`, so a dict-entry fragment
+  /// like `"{sv}"` — only legal as an array's direct element per the
+  /// D-Bus grammar — parses the same way a real `a{sv}` would) rather
+  /// than hand-rolling a second type-code-to-alignment table that could
+  /// drift from this enum's own `alignment` property above.
+  static func alignment(ofElementSignature signature: String) -> Int {
+    guard let parsed = DBusSignatureParser.parse("a" + signature), parsed.count == 1,
+      case .array(let element) = parsed[0]
+    else { return DBusDefaults.emptyArrayElementAlignment }
+    return element.alignment
+  }
+}
+
+/// Common multi-character D-Bus signature FRAGMENTS needed as literal
+/// strings — e.g. to build `DBusValue.emptyArray(elementSignature:)`
+/// values, where the fragment can't be read off an actual `DBusValue`
+/// because there isn't one (the array is empty by construction). Kept
+/// alongside `DBusTypeCode`'s single-character codes for the same reason:
+/// one place, not scattered inline literals (coding-standards.md's "no
+/// magic strings" rule). `public`: every real user is `ClipnestLinuxAppKit`
+/// (`DBusMenuLayoutBuilder`, `SingleInstanceDecision`, `ShowPickerOptions`),
+/// a separate module from this one.
+public enum DBusElementSignature {
+  /// `STRING => VARIANT` dict entry — the element type of every `a{sv}`
+  /// this app builds: `org.freedesktop.Application.Activate`/`.Open`'s
+  /// `platform_data`, `com.canonical.dbusmenu`'s per-item `properties`,
+  /// and `ShowPickerOptions.encoded()`'s own `a{sv}` options dict.
+  public static let stringVariantDictEntry = "{sv}"
+  /// A bare `VARIANT` — the element type of `com.canonical.dbusmenu`'s
+  /// `children: av` (every child is itself a `VARIANT`-wrapped
+  /// `(i, a{sv}, av)` structure).
+  public static let variant = "v"
+  /// `(INT32, a{sv})` — the element type of `GetGroupProperties`'s
+  /// `-> a(ia{sv})` reply (see `DBusMenuMember.getGroupProperties`'s doc
+  /// comment for why real hosts call this).
+  public static let menuGroupPropertiesEntry = "(ia{sv})"
+}
+
+/// Parses a D-Bus signature string (e.g. `"(ii)"`, `"a{sv}"`, `"siiva{sv}"`)
+/// into the sequence of `DBusTypeSignature`s it describes. Pure and fully
+/// recursive-descent; returns `nil` on any malformed signature rather than
+/// guessing.
+enum DBusSignatureParser {
+  static func parse(_ signature: String) -> [DBusTypeSignature]? {
+    var remaining = ArraySlice(Array(signature.utf8))
+    var result: [DBusTypeSignature] = []
+    while !remaining.isEmpty {
+      guard let (type, rest) = parseOne(remaining) else { return nil }
+      result.append(type)
+      remaining = rest
+    }
+    return result
+  }
+
+  private static func parseOne(
+    _ chars: ArraySlice<UInt8>
+  ) -> (DBusTypeSignature, ArraySlice<UInt8>)? {
+    guard let first = chars.first else { return nil }
+    var rest = chars.dropFirst()
+    switch first {
+    case DBusTypeCode.byte: return (.byte, rest)
+    case DBusTypeCode.boolean: return (.boolean, rest)
+    case DBusTypeCode.int16: return (.int16, rest)
+    case DBusTypeCode.uint16: return (.uint16, rest)
+    case DBusTypeCode.int32: return (.int32, rest)
+    case DBusTypeCode.uint32: return (.uint32, rest)
+    case DBusTypeCode.int64: return (.int64, rest)
+    case DBusTypeCode.uint64: return (.uint64, rest)
+    case DBusTypeCode.double: return (.double, rest)
+    case DBusTypeCode.string: return (.string, rest)
+    case DBusTypeCode.objectPath: return (.objectPath, rest)
+    case DBusTypeCode.signature: return (.signature, rest)
+    case DBusTypeCode.variant: return (.variant, rest)
+    case DBusTypeCode.unixFD: return (.unixFD, rest)
+    case DBusTypeCode.array:
+      // DICT_ENTRY (`{kv}`) is only a legal type when it's the DIRECT
+      // element of an array (`a{kv}`) — the D-Bus Specification's type
+      // grammar has no production for a bare/standalone `{kv}` anywhere
+      // else (as a struct field, another array's element type via a
+      // second level of nesting incorrectly, or a top-level signature
+      // entry). Handling it here, rather than as a general `parseOne`
+      // case reachable from anywhere, is what makes `"{sv}"` alone
+      // correctly rejected as malformed instead of silently accepted.
+      if rest.first == DBusTypeCode.dictEntryOpen {
+        guard let (dictEntry, remaining) = parseDictEntry(rest) else { return nil }
+        return (.array(dictEntry), remaining)
+      }
+      guard let (element, remaining) = parseOne(rest) else { return nil }
+      return (.array(element), remaining)
+    case DBusTypeCode.structOpen:
+      var fields: [DBusTypeSignature] = []
+      while rest.first != DBusTypeCode.structClose {
+        guard let (field, remaining) = parseOne(rest) else { return nil }
+        fields.append(field)
+        rest = remaining
+        if rest.isEmpty { return nil }
+      }
+      rest = rest.dropFirst()  // consume ')'
+      return (.structure(fields), rest)
+    default:
+      return nil
+    }
+  }
+
+  /// Parses `{keyType valueType}` (the `{` has already been confirmed
+  /// present but NOT yet consumed by the caller) — factored out of
+  /// `parseOne` since it's reachable from exactly one place: immediately
+  /// after an `a` (see that case's comment above).
+  private static func parseDictEntry(
+    _ chars: ArraySlice<UInt8>
+  ) -> (DBusTypeSignature, ArraySlice<UInt8>)? {
+    let afterOpenBrace = chars.dropFirst()  // consume '{'
+    guard let (key, afterKey) = parseOne(afterOpenBrace) else { return nil }
+    guard let (value, afterValue) = parseOne(afterKey) else { return nil }
+    guard afterValue.first == DBusTypeCode.dictEntryClose else { return nil }
+    return (.dictEntry(key, value), afterValue.dropFirst())
+  }
+}

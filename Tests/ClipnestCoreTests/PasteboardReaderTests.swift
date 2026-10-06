@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 import Testing
 
@@ -7,16 +6,22 @@ import Testing
 /// A fake pasteboard used to drive `PasteboardReader` without touching the real
 /// system pasteboard, per coding-standards.md ("never touch `NSPasteboard` from
 /// a test").
+///
+/// P2-A (Linux port): spelled in terms of `ClipMediaType` (not
+/// `NSPasteboard.PasteboardType` directly) — the exact same type on macOS
+/// (`ClipMediaType` is a plain `typealias` there, see `ClipMediaType.swift`),
+/// so this is a zero-behavior-change rename that also drops this file's need
+/// for `import AppKit` entirely, letting the whole suite run on Linux too.
 private struct FakePasteboard: PasteboardReading {
-  var availableTypes: [NSPasteboard.PasteboardType]
-  var strings: [NSPasteboard.PasteboardType: String] = [:]
-  var datas: [NSPasteboard.PasteboardType: Data] = [:]
+  var availableTypes: [ClipMediaType]
+  var strings: [ClipMediaType: String] = [:]
+  var datas: [ClipMediaType: Data] = [:]
 
-  func string(forType type: NSPasteboard.PasteboardType) -> String? {
+  func string(forType type: ClipMediaType) -> String? {
     strings[type]
   }
 
-  func data(forType type: NSPasteboard.PasteboardType) -> Data? {
+  func data(forType type: ClipMediaType) -> Data? {
     datas[type]
   }
 }
@@ -191,22 +196,35 @@ struct PasteboardReaderTests {
     #expect(result?.byteSize == pngData.count)
     // T-PF2 finding (now superseded by T-PF5b, see below): whenever both
     // representations are offered, `rawData`/`byteSize` are derived from
-    // the PNG bytes, never the TIFF bytes.
-    //
-    // T-PF5b: `contentHash` itself is no longer a raw-byte hash for
-    // `.image` — it's `PasteboardReader`'s default (real, uninjected)
-    // `CoreGraphicsImagePixelHasher`'s format-independent PIXEL-content
-    // hash of `pngData`. This is exactly what fixes the T-PF2-era
-    // "container changes the digest" problem the old version of this
-    // comment described: the SAME picture now hashes identically whether
-    // it's captured as PNG or TIFF (proven directly, chunk-size and
-    // container-independence both, by `CoreGraphicsImagePixelHasherTests`)
-    // — this test only additionally confirms `PasteboardReader`'s default
-    // init wires that real hasher in, not a stub.
-    let expectedHash = CoreGraphicsImagePixelHasher().pixelContentHash(of: pngData)
-    #expect(result?.contentHash == expectedHash)
-    #expect(result?.contentHash != BlobStore.contentHash(of: pngData))
-    #expect(result?.contentHash != BlobStore.contentHash(of: tiffData))
+    // the PNG bytes, never the TIFF bytes. This part of the test is
+    // platform-agnostic (rawData/byteSize selection, not hashing) and runs
+    // on every platform.
+    #if os(macOS)
+      // P2-A (Linux port): only this half is gated — it exercises
+      // `PasteboardReader`'s DEFAULT (real, uninjected) pixel hasher, which
+      // is the Apple-only `CoreGraphicsImagePixelHasher` on macOS but the
+      // always-nil `UnavailableImagePixelHasher` off it (see
+      // `PlatformDefaults.imagePixelHasher`) — off macOS `contentHash` would
+      // fall back to the raw-byte hash, which is exactly what the assertions
+      // below prove it must NOT equal here. `PasteboardReaderPixelHashTests`
+      // below already covers this seam's portable contract via an injected
+      // fake, on every platform.
+      //
+      // T-PF5b: `contentHash` itself is no longer a raw-byte hash for
+      // `.image` — it's `PasteboardReader`'s default (real, uninjected)
+      // `CoreGraphicsImagePixelHasher`'s format-independent PIXEL-content
+      // hash of `pngData`. This is exactly what fixes the T-PF2-era
+      // "container changes the digest" problem the old version of this
+      // comment described: the SAME picture now hashes identically whether
+      // it's captured as PNG or TIFF (proven directly, chunk-size and
+      // container-independence both, by `CoreGraphicsImagePixelHasherTests`)
+      // — this test only additionally confirms `PasteboardReader`'s default
+      // init wires that real hasher in, not a stub.
+      let expectedHash = CoreGraphicsImagePixelHasher().pixelContentHash(of: pngData)
+      #expect(result?.contentHash == expectedHash)
+      #expect(result?.contentHash != BlobStore.contentHash(of: pngData))
+      #expect(result?.contentHash != BlobStore.contentHash(of: tiffData))
+    #endif
   }
 
   @Test("TIFF is used when it's the only image representation offered")
@@ -377,17 +395,30 @@ struct PasteboardReaderTests {
     // synchronous helper so it can still be read from inside the async
     // closures below; the helper itself does nothing actor-related, so this
     // doesn't weaken the check.
-    #expect(isCurrentlyOnMainThread())  // sanity: this test itself starts on the main thread
-
     let reader = PasteboardReader()
     let raw = PasteboardReader.RawPayload.plainText("off-main classify check")
 
+    // The STRUCTURAL half of the proof runs on every platform: `classify`
+    // takes only the `Sendable` `RawPayload`, so Swift 6 strict concurrency
+    // already rejects a `classify` that secretly needed `@MainActor` — this
+    // call would not compile inside `Task.detached` if it did.
     let wasMainThread = await Task.detached(priority: .utility) { () -> Bool in
       _ = reader.classify(raw)
       return isCurrentlyOnMainThread()
     }.value
 
-    #expect(!wasMainThread)
+    // The RUNTIME half is macOS-only, and deliberately so. On Darwin
+    // `@MainActor` is bound to the OS main thread, so `Thread.isMainThread`
+    // is a meaningful witness. On Linux it is not: swift-corelibs reports the
+    // real OS thread, while the MainActor executor runs this `@MainActor`
+    // test body on a cooperative-pool thread. There, BOTH the sanity check
+    // below and `!wasMainThread` would be measuring nothing — `!wasMainThread`
+    // would pass vacuously, which is worse than not asserting it, so it is
+    // gated rather than left to look like coverage it does not provide.
+    #if os(macOS)
+      #expect(isCurrentlyOnMainThread())  // sanity: this test starts on the main thread
+      #expect(!wasMainThread)
+    #endif
   }
 }
 
@@ -580,5 +611,106 @@ struct PasteboardReaderPixelHashTests {
     #expect(fileResult?.contentHash == BlobStore.contentHash(of: Data(urlString.utf8)))
 
     #expect(hasher.callCount == 0)
+  }
+}
+
+// MARK: - P2-A (Linux port): injected ImageMetadataProbing/RichTextFlattening
+
+/// A fake `ImageMetadataProbing` — proves `PasteboardReader` wires the
+/// injected probe into image classification, and that a probe returning
+/// `nil` falls back to the existing "undecodable" preview-text/hash
+/// behavior unchanged.
+private struct FakeImageMetadataProbing: ImageMetadataProbing {
+  let stubbedDimensions: (width: Int, height: Int)?
+
+  func pixelDimensions(of imageData: Data) -> (width: Int, height: Int)? {
+    stubbedDimensions
+  }
+}
+
+/// A fake `RichTextFlattening` — proves `PasteboardReader` wires the
+/// injected flattener into rich-text classification, only when no
+/// `fallbackPlainText` (`.string` representation) is available on the
+/// pasteboard, matching `plainTextPreview`'s existing priority order.
+private struct FakeRichTextFlattening: RichTextFlattening {
+  let stubbedPlainText: String?
+
+  func plainText(fromRTF data: Data) -> String? {
+    stubbedPlainText
+  }
+}
+
+@Suite("PasteboardReader injected ImageMetadataProbing/RichTextFlattening (P2-A)")
+struct PasteboardReaderPlatformSeamTests {
+
+  @Test("An injected ImageMetadataProbing drives the image previewText dimensions")
+  func injectedImageMetadataProbeDrivesPreviewText() {
+    let probe = FakeImageMetadataProbing(stubbedDimensions: (width: 999, height: 111))
+    let reader = PasteboardReader(imageMetadataProbe: probe)
+    // Bytes need not be a real image at all — the probe is a full stand-in
+    // for dimension detection, exactly like `FakeImagePixelHashing` is a
+    // full stand-in for hashing.
+    let imageData = Data([0x00, 0x01, 0x02, 0x03])
+    let pasteboard = FakePasteboard(availableTypes: [.png], datas: [.png: imageData])
+
+    let result = reader.read(from: pasteboard)
+
+    #expect(result?.kind == .image)
+    #expect(result?.previewText == "Image, 999\u{00D7}111")
+  }
+
+  @Test("A nil-returning ImageMetadataProbing falls back to the byte-count previewText")
+  func nilImageMetadataProbeFallsBackToByteCountPreview() {
+    let probe = FakeImageMetadataProbing(stubbedDimensions: nil)
+    let reader = PasteboardReader(imageMetadataProbe: probe)
+    let imageData = Data(count: 42)
+    let pasteboard = FakePasteboard(availableTypes: [.png], datas: [.png: imageData])
+
+    let result = reader.read(from: pasteboard)
+
+    #expect(result?.kind == .image)
+    #expect(result?.previewText.contains("999") == false)
+    #expect(result?.previewText.contains("Image") == true)
+  }
+
+  @Test(
+    "An injected RichTextFlattening drives the rich-text previewText when no fallback string exists"
+  )
+  func injectedRichTextFlattenerDrivesPreviewTextWithNoFallback() {
+    let flattener = FakeRichTextFlattening(stubbedPlainText: "  flattened content  ")
+    let reader = PasteboardReader(richTextFlattener: flattener)
+    let rtfData = Data("{\\rtf1 anything}".utf8)
+    let pasteboard = FakePasteboard(availableTypes: [.rtf], datas: [.rtf: rtfData])
+
+    let result = reader.read(from: pasteboard)
+
+    #expect(result?.kind == .richText)
+    #expect(result?.previewText == "flattened content")
+  }
+
+  @Test("The pasteboard's own .string fallback wins over RichTextFlattening, unchanged priority")
+  func fallbackPlainTextStillWinsOverRichTextFlattener() {
+    let flattener = FakeRichTextFlattening(stubbedPlainText: "should not be used")
+    let reader = PasteboardReader(richTextFlattener: flattener)
+    let rtfData = Data("{\\rtf1 anything}".utf8)
+    let pasteboard = FakePasteboard(
+      availableTypes: [.rtf, .string], strings: [.string: "the real fallback"],
+      datas: [.rtf: rtfData])
+
+    let result = reader.read(from: pasteboard)
+
+    #expect(result?.previewText == "the real fallback")
+  }
+
+  @Test("A nil-returning RichTextFlattening falls back to the \"Rich Text\" placeholder")
+  func nilRichTextFlattenerFallsBackToPlaceholder() {
+    let flattener = FakeRichTextFlattening(stubbedPlainText: nil)
+    let reader = PasteboardReader(richTextFlattener: flattener)
+    let rtfData = Data("{\\rtf1 anything}".utf8)
+    let pasteboard = FakePasteboard(availableTypes: [.rtf], datas: [.rtf: rtfData])
+
+    let result = reader.read(from: pasteboard)
+
+    #expect(result?.previewText == "Rich Text")
   }
 }

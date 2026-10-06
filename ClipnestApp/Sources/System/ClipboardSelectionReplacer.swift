@@ -46,6 +46,58 @@
 // -release poll's unexplained, reproducible latency cost on every single
 // expansion was not justified by the evidence. Left as a disclosed
 // follow-up rather than shipped blind or silently dropped.
+//
+// T-TERMPASTE1 (2026-09-14): routed bug report — with the keyword
+// drag-selected in Terminal.app, expansion produced `<keyword><body>`
+// instead of `<body>` (2/2 trials). The AX-trust contract in
+// `SnippetExpander` worked correctly (the phantom AX write, if any, would
+// have been caught and fallen through here) — the bug is in THIS tier's own
+// design: `replaceSelection`'s ⌘C→⌘V sequence has no explicit delete step.
+// It assumes "paste replaces the OS-level selection," which holds for
+// AppKit/WebKit/Electron controls but is FALSE for terminal emulators —
+// there, a mouse-drag highlight is a cosmetic, copy-only artifact
+// disconnected from the shell's real cursor position, so the synthesized
+// ⌘V always lands at the cursor (wherever that actually is) while the
+// highlighted text stays put: a corrupting APPEND, not a replace, every
+// single time.
+//
+// Sending N backspaces first (N = the highlighted text's length) was
+// considered and rejected. Checked against real prior art rather than
+// assumed: espanso and AutoKey (verified via DeepWiki against their actual
+// source, not marketing docs) both erase a trigger with backspaces, but
+// ONLY because they watch every keystroke of the trigger AS IT IS TYPED, so
+// the backspace count is a known, trusted quantity tied to the real cursor
+// (espanso's `Injector` sends exactly `backspace_limit`-bounded backspaces
+// for the trigger IT typed; AutoKey's `window_filter`/`send_mode` machinery
+// is the same shape). Clipnest's own UX is architecturally different: the
+// "keyword" here is whatever the user mouse-drag-highlighted — a quantity
+// this class never observed being typed, and whose position relative to
+// the REAL cursor is unknowable in a terminal (the whole reason this bug
+// exists). Backspacing that many characters would delete that many WRONG
+// characters at the actual cursor position — turning a visible, obviously-
+// wrong append into silent, invisible data destruction somewhere else on
+// the line. Strictly worse than today's bug, not a fix for it.
+//
+// Fix: decline outright, before ANY clipboard I/O, whenever the frontmost
+// app is a known terminal emulator (`MacTerminalAppRegistry`) — the only
+// choice that leaves the terminal byte-identical to before the hotkey was
+// pressed. Reported as `SelectionReplaceResult.declinedTerminalTarget`
+// (see that case's doc comment for the full case-by-case comparison against
+// "paste anyway" and "silently paste anyway," both rejected); `SnippetExpander
+// .expand()`'s existing `if result != .replaced { beep() }` already treats
+// this as a failure with no code change needed there, so the user gets the
+// same audible "it didn't happen" signal every other non-replaced outcome
+// already gives — just with the terminal actually left untouched instead of
+// corrupted.
+//
+// Reachability: this requires a PRE-EXISTING drag selection — the ordinary
+// flow (type keyword, press ⌥⌘E with nothing selected) returns
+// `.noSelection` and beeps, no corruption, unaffected by any of this. But
+// because this app's ONLY snippet-expansion trigger is "select the keyword,
+// then press the hotkey" (there is no type-ahead auto-expand the way
+// espanso/AutoKey/Alfred default to), a terminal user following that exact,
+// documented workflow hits this 100% of the time, not as some obscure edge
+// case — worth fixing, not worth dismissing as rare.
 
 import AppKit
 import ClipnestCore
@@ -64,6 +116,17 @@ final class ClipboardSelectionReplacer: SelectionReplacing {
     subsystem: ClipnestLog.subsystem, category: "ClipboardSelectionReplacer")
 
   private let pasteboard: NSPasteboard
+
+  /// T-TERMPASTE1: read once at the top of every `replaceSelection` call to
+  /// decide whether the frontmost app is a known terminal emulator — see
+  /// this file's header comment for why that decides whether the whole
+  /// transaction runs at all. Defaults to the real `NSWorkspace`-backed
+  /// provider, matching this initializer's existing `pasteboard: NSPasteboard
+  /// = .general` precedent (a genuinely functional production default, not
+  /// a no-op — this file is macOS-only, so there is exactly one real
+  /// implementation to default to, the same reasoning `FrontmostAppTracker
+  /// .init`'s own default follows).
+  private let frontmostAppProvider: any FrontmostAppReferenceProviding
 
   /// Called before the clipboard is borrowed (→ `ClipboardMonitor.pause()`),
   /// and after it's restored (→ ignore the restore's change + `resume()`), so
@@ -88,13 +151,32 @@ final class ClipboardSelectionReplacer: SelectionReplacing {
   /// clipboard is restored out from under it.
   private static let pasteSettle = Duration.milliseconds(120)
 
-  init(pasteboard: NSPasteboard = .general) {
+  init(
+    pasteboard: NSPasteboard = .general,
+    frontmostAppProvider: any FrontmostAppReferenceProviding = PlatformDefaults
+      .frontmostAppProvider
+  ) {
     self.pasteboard = pasteboard
+    self.frontmostAppProvider = frontmostAppProvider
   }
 
   func replaceSelection(bodyForSelection: (String) async -> String?) async
     -> SelectionReplaceResult
   {
+    let frontmostRef = frontmostAppProvider.currentFrontmostAppRef()
+    let isTerminalTarget = MacTerminalAppRegistry.isTerminal(
+      bundleIdentifier: frontmostRef?.bundleID)
+    Self.logger.notice(
+      "terminal-target check: isTerminalTarget=\(isTerminalTarget, privacy: .public) bundleID=\(frontmostRef?.bundleID ?? "?", privacy: .public)"
+    )
+    guard !isTerminalTarget else {
+      // T-TERMPASTE1: decline BEFORE any clipboard I/O — no suppression, no
+      // snapshot, no synthesized keystroke. See this file's header comment
+      // for the full rationale.
+      Self.logger.notice("outcome=declinedTerminalTarget")
+      return .declinedTerminalTarget
+    }
+
     beginSuppression()
     let snapshot = snapshotClipboard()
     defer {

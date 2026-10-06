@@ -1,0 +1,3 @@
+packaging/linux/vendor/onnxruntime/amd64/lib/libonnxruntime.so.1.28.1 usr/lib/x86_64-linux-gnu
+packaging/linux/vendor/onnxruntime/amd64/lib/libonnxruntime.so.1 usr/lib/x86_64-linux-gnu
+packaging/linux/vendor/onnxruntime/amd64/lib/libonnxruntime_providers_shared.so usr/lib/x86_64-linux-gnu

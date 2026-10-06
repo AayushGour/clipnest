@@ -27,11 +27,19 @@ private final class MockClipboardReplacer: SelectionReplacing {
   var simulatedSelection: String?
   private(set) var wasCalled = false
   private(set) var pastedBody: String?
+  /// T-TERMPASTE1: models a terminal-class frontmost app — when set, the
+  /// transaction is declined exactly like the real `ClipboardSelectionReplacer`
+  /// / `LinuxClipboardSelectionReplacer` do, before `simulatedSelection` is
+  /// even consulted (a real decline never reaches the copy step either).
+  var declinesTerminalTarget = false
 
   func replaceSelection(bodyForSelection: (String) async -> String?) async
     -> SelectionReplaceResult
   {
     wasCalled = true
+    guard !declinesTerminalTarget else {
+      return .declinedTerminalTarget
+    }
     guard let selection = simulatedSelection,
       !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     else {
@@ -123,6 +131,26 @@ struct SnippetExpanderTests {
     #expect(beeped == true)  // clipboard read nothing → .noSelection → beep
   }
 
+  @Test(
+    "T-TERMPASTE1: AX can't read and the clipboard tier declines a terminal-class target: beeps, does NOT report a false success"
+  )
+  func clipboardTierDeclinesTerminalTargetBeeps() async throws {
+    let ax = MockSelectedText()
+    ax.selection = nil
+    let clipboard = MockClipboardReplacer()
+    clipboard.declinesTerminalTarget = true
+    var beeped = false
+    let expander = SnippetExpander(
+      snippetStore: try await store(), selectedText: ax, clipboardReplacer: clipboard,
+      beep: { beeped = true })
+
+    await expander.expand()
+
+    #expect(clipboard.wasCalled == true)
+    #expect(clipboard.pastedBody == nil)  // nothing was ever pasted
+    #expect(beeped == true)
+  }
+
   @Test("AX reads + matches but the AX WRITE is refused: falls back to the clipboard")
   func axWriteRefusedFallsBackToClipboard() async throws {
     let ax = MockSelectedText()
@@ -141,4 +169,23 @@ struct SnippetExpanderTests {
     #expect(clipboard.pastedBody == "Best, Aayush")
     #expect(beeped == false)
   }
+
+  #if !os(macOS)
+    // T-BUG5 (parity-audit bug #5): macOS's `PlatformDefaults.beep` plays
+    // real system audio (`NSSound.beep()`) — a genuine side effect,
+    // deliberately never exercised directly by a test (every test above
+    // injects a spy `beep:` closure instead). The non-Apple default below
+    // only ever writes one well-known byte to stderr — a safe, side-
+    // effect-free-enough call to make directly, unlike a real pasteboard/
+    // keystroke/audio call — so both the byte VALUE and the closure's
+    // basic callability are worth pinning here.
+    @Test("Non-Apple PlatformDefaults.beep writes the exact ASCII BEL byte, not a silent no-op")
+    func nonAppleBeepDefaultIsRealNotSilent() {
+      #expect(PlatformDefaults.terminalBellByte == 0x07)
+      // Exercises the real closure body once, end to end — proving it
+      // doesn't crash/throw, which the old `{}` no-op trivially also
+      // "passed" but which is exactly what this fix replaces.
+      PlatformDefaults.beep()
+    }
+  #endif
 }

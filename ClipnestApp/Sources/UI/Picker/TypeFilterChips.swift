@@ -28,6 +28,7 @@
 // persists across tabs) are unchanged — only the chip's own rendering
 // moved into the shared component.
 import ClipnestCore
+import ClipnestViewModels
 import SwiftUI
 
 /// Filters the active tab's list by `ItemKind` via `selection`

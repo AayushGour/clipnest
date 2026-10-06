@@ -1,0 +1,37 @@
+.TH CLIPNEST-GRANT-INPUT 8 "2026" "clipnest" "System Administration"
+.SH NAME
+clipnest-grant-input \- add the current user to the clipnest-input group
+.SH SYNOPSIS
+.B pkexec clipnest-grant-input
+.SH DESCRIPTION
+.B clipnest-grant-input
+is invoked only via
+.BR pkexec (1),
+gated by the
+.B app.clipnest.grant-input
+polkit action, itself only ever triggered from an explicit button in
+Clipnest's own Settings \- never automatically, and never by the
+.B clipnest
+package's maintainer scripts.
+.PP
+It adds the user who authenticated the polkit prompt (identified via the
+.B PKEXEC_UID
+environment variable pkexec itself sets \- never a command-line argument)
+to the
+.B clipnest-input
+system group. Membership in this dedicated group grants only the ability
+to create a virtual input device via
+.IR /dev/uinput ,
+which Clipnest's auto-paste feature needs to synthesize a paste keystroke.
+It does
+.B not
+grant read access to real keyboard/mouse input \- that would require the
+.B input
+group instead, which this package deliberately never uses (see
+.IR /usr/lib/udev/rules.d/70-clipnest-uinput.rules ).
+.PP
+A re-login is required after running this before the new group membership
+takes effect, since Linux group membership is resolved at login time.
+.SH SEE ALSO
+.BR clipnest (1),
+.BR pkexec (1)

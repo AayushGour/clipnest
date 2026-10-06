@@ -1,0 +1,34 @@
+# SECURITY-CRITICAL, found via real container verification (not
+# theoretical): this package builds as `3.0 (native)` (debian/source/format),
+# which tars up the ENTIRE working directory into the source package with
+# no orig/diff split to fall back on and no awareness of .gitignore. A real
+# `dpkg-source -b .` run during this task's own verification confirmed that,
+# left unexcluded, it swept up `release-cert/` -- the user's REAL private
+# release-signing key material (see .gitignore's own "Private release
+# signing key — never commit" comment on that path) -- into the produced
+# .tar.xz/.dsc. That test ran inside a throwaway, --rm, read-only-mounted
+# Docker container with nothing ever copied back to the host, committed, or
+# uploaded, so nothing leaked -- but a maintainer running dpkg-buildpackage
+# from their own real, writable checkout (which does have release-cert/ on
+# disk, for the macOS signing flow) would not have that safety net. Mirrors
+# .gitignore's own exclusion list (kept in sync manually -- dpkg-source's
+# tar-ignore and git's .gitignore are different tools with different syntax,
+# so this can't be a single shared file, but the intent is identical).
+tar-ignore = .git
+tar-ignore = .build
+tar-ignore = .swiftpm
+tar-ignore = .code-review-graph
+tar-ignore = .superpowers
+tar-ignore = .DS_Store
+tar-ignore = ClipnestApp/*.xcodeproj
+tar-ignore = ClipnestApp/DerivedData
+tar-ignore = build
+tar-ignore = release-cert
+tar-ignore = archived-images
+tar-ignore = tools/glyph-classifier/.build
+tar-ignore = tools/glyph-classifier/.swiftpm
+tar-ignore = tools/glyph-classifier/dataset
+tar-ignore = tools/glyph-classifier/dataset_smoke
+tar-ignore = tools/glyph-classifier/output
+tar-ignore = tools/glyph-classifier/real_eval_crops
+tar-ignore = .claude/logs/stress-artifacts

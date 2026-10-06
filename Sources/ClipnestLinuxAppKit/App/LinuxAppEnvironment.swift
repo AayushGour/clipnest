@@ -1,0 +1,974 @@
+import ClipnestCore
+import ClipnestGTK
+import ClipnestLinuxOCR
+import ClipnestPlatformLinux
+import ClipnestSQLite
+import ClipnestViewModels
+import Foundation
+import Synchronization
+
+/// Clipnest's Linux composition root — the exact analogue of
+/// `ClipnestApp/Sources/App/AppEnvironment.swift`, adapted to this
+/// platform's real collaborators: `SQLiteClipStore`/`SQLiteSnippetStore`
+/// (`ClipnestSQLite`) instead of SwiftData, `LinuxPasteboard`/
+/// `X11ClipboardConnection` instead of `NSPasteboard`, and
+/// `LinuxEventSynthesizerFactory`'s uinput/XTEST/clipboard-only chain
+/// instead of `CGEventSynthesizer`.
+///
+/// **Learned from the macOS bug (D50):** `SwiftDataClipStore`/
+/// `SwiftDataSnippetStore` construction used to run inline on the main
+/// actor and could stall launch 15-82 seconds under a large retention cap
+/// — this `init` uses the exact same fix `AppEnvironment.init` already
+/// adopted: every blocking/expensive step (opening the two SQLite stores,
+/// probing/opening the uinput device or an X11 `Display` for the paste
+/// backend, and — T-HANG-SELECT1 hygiene fix — resolving/registering the
+/// IBus commit-tier client) runs inside its own
+/// `Task.detached(priority: .userInitiated)`, all four racing concurrently
+/// via `async let`, so launch is bounded by the SLOWEST of the four, never
+/// their sum — and this initializer itself returns to its caller
+/// (`LinuxAppLifecycle`) without blocking the thread the GTK main loop
+/// will run on.
+///
+/// **One shared `BlobStore` instance** for `clipStore` and
+/// `clipboardMonitor` — same rule `AppEnvironment.swift`'s own doc comment
+/// states, for the identical reason (two independently-constructed
+/// `BlobStore`s pointed at the same directory today are one refactor away
+/// from drifting apart).
+@MainActor
+final class LinuxAppEnvironment {
+  private static let logger = ClipnestLogger(
+    subsystem: ClipnestLog.subsystem, category: "LinuxAppEnvironment")
+
+  let blobStore: BlobStore
+  /// T-RT2: the real `SQLiteClipStore`, wrapped in a `NotifyingClipStore` —
+  /// see that type's doc comment (and `AppEnvironment.clipStore`'s exact
+  /// macOS mirror). Typed `any ClipStore` (not the concrete
+  /// `SQLiteClipStore`) — nothing in this file reaches for SQLite-specific
+  /// API on this property.
+  let clipStore: any ClipStore
+  let snippetStore: SQLiteSnippetStore
+  /// The ONE `SynchronizedKeyValueStore`-wrapped instance every settings
+  /// write in this process goes through (`settingsStore` below,
+  /// `IBusCommitClient`'s crash-safety marker writes) — see this file's
+  /// own `init` doc comment at its construction site for why sharing one
+  /// instance (not just one on-disk path) is load-bearing.
+  ///
+  /// Held (not just a local in `init`) so `restoreIBusEngineIfNeeded()`
+  /// below can route the quit-time IBus crash-safety restore through THIS
+  /// instance too — see that method's own doc comment for the data-loss
+  /// bug this closes.
+  private let keyValueStore: any KeyValueStore
+  let ocrBackfillViewModel: OCRBackfillViewModel
+  let privacyFilter: PrivacyFilter
+  let settingsStore: SettingsStore
+  let pasteboardReader: PasteboardReader
+  let clipboardMonitor: ClipboardMonitor
+  let paster: Paster
+  let frontmostAppTracker: FrontmostAppTracker
+  let pickerViewModel: PickerViewModel
+  let pickerWindow: PickerWindow
+  let settingsWindow: SettingsWindow
+  /// Linux parity pass (routed follow-up, 2026-09-06): closes the one
+  /// unfilled seam that made snippets read-only on Linux — see
+  /// `SnippetEditorWindow.swift`'s top doc comment. Held so `init` can wire
+  /// `pickerViewModel.presentSnippetEditor` to it below; nothing else in
+  /// this type reaches for it directly (mirrors `pickerWindow`/
+  /// `settingsWindow`, held for the identical reason).
+  let snippetEditorWindow: SnippetEditorWindow
+  let snippetExpander: SnippetExpander
+  /// T-SNIPPET-FF1: held so `LinuxAppLifecycle.wireShellHelper` can set
+  /// `clipboardReplacer.privilegedTextWriter` once a `ShellHelperClient`
+  /// exists — which happens strictly AFTER this `init` returns (see that
+  /// method's own doc comment on ordering), so it cannot be wired here.
+  /// `nil` (this property's own default) until then is correct, not a gap:
+  /// see `LinuxClipboardSelectionReplacer.privilegedTextWriter`'s doc
+  /// comment for why a missing Shell extension is a legitimate, graceful
+  /// degradation rather than a forgotten wiring.
+  let clipboardReplacer: LinuxClipboardSelectionReplacer
+  let updateChecker: UpdateChecker
+
+  /// Which paste backend `LinuxEventSynthesizerFactory` selected — logged
+  /// (metadata only) at startup for support/diagnostics, and used to feed
+  /// `Paster.isAccessibilityGranted`: on Linux there is no AX-style
+  /// permission to check, so "granted" means "a real keystroke-injection
+  /// backend is actually available" (`!= .clipboardOnly`).
+  let eventSynthesizerKind: SelectedEventSynthesizerKind
+
+  private var pendingRetentionTask: Task<Void, Never>?
+  private static let retentionDebounceInterval: Duration = .milliseconds(750)
+
+  /// The Linux port's analogue of `AppUpdater.currentVersion`
+  /// (`ClipnestApp/Sources/System/AppUpdater.swift`), which reads
+  /// `CFBundleShortVersionString` — this binary ships no bundle/plist, so
+  /// there is nothing to read that from at runtime, and no build step
+  /// substitutes a version into source today (`debian/rules` builds
+  /// straight `swift build -c release`, no codegen step). Kept as ONE named
+  /// constant (coding-standards.md's "no magic strings/numbers") rather than
+  /// scattered: it MUST move in lockstep with `ClipnestApp/project.yml`'s
+  /// `MARKETING_VERSION` and `debian/changelog`'s own upstream version —
+  /// `release-linux.yml` already reads that same `MARKETING_VERSION` to
+  /// version the `.deb`, so all three have to move together at every
+  /// release regardless; this is simply the fourth spot, and the cheapest
+  /// one to keep in sync (a single literal, greppable by the string
+  /// itself). A build-time-substituted version (e.g. via `debian/rules`)
+  /// would remove this manual step, but that is a packaging change outside
+  /// this task's scope (`Package.swift`/`debian/rules` are not owned here).
+  /// `nonisolated`: read from `updateChecker.installedVersion`'s `@Sendable
+  /// () -> String` closure below, which — being `@Sendable` — cannot
+  /// capture a `@MainActor`-isolated static property (this whole class is
+  /// `@MainActor`, so an un-annotated `static let` here would be isolated
+  /// too). Safe unconditionally: an immutable `String` literal has no
+  /// actor-affinity to protect in the first place.
+  ///
+  /// Module-visible (not `private`), not `public`: `LinuxAppLifecycle.run
+  /// (arguments:)`'s `--version` handling (T-BB2 fix) is this constant's
+  /// second reader, in `ClipnestLinuxAppKit` alongside this file — the
+  /// existing source of truth, so `--version` never grows a second
+  /// hardcoded copy of the version string.
+  nonisolated static let installedVersion = "1.0.0"
+
+  /// Resolves this process's own absolute executable path for
+  /// `AutostartDesktopFile.setEnabled(_:executablePath:)`'s `.desktop`
+  /// `Exec=` line — the session's autostart mechanism inherits neither this
+  /// process's `$PATH` resolution nor its working directory.
+  ///
+  /// Shared with `LinuxAppLifecycle.installGSettingsFloor()`, which has the
+  /// same requirement for its GSettings custom keybinding; see
+  /// `OwnExecutablePath` for why the older `CommandLine.arguments.first`
+  /// formula was broken for the packaged bare-command launch.
+  private static func resolveOwnExecutablePath() -> String {
+    OwnExecutablePath.resolve()
+  }
+
+  /// T-RT2: keeps this environment's subscription to `clipStore.changes`
+  /// alive for the app's lifetime — see `AppEnvironment
+  /// .clipStoreChangeSubscription`'s exact macOS mirror (including why this
+  /// is `var`, not `let`, with an implicit-`nil` Optional default).
+  private var clipStoreChangeSubscription: ClipStoreChangeSubscription?
+
+  /// `PickerViewModel.isVisible` is `private` (out of this task's scope to
+  /// widen), and the minimal `PickerWindow` contract exposes no visibility
+  /// getter either — every trigger (D-Bus, tray, hotkey) funnels through
+  /// `showPicker`/`hidePicker`/`togglePicker` below, which keep this box
+  /// current; `PickerWindow`'s own `onDismiss` (fired for a GTK-side
+  /// dismissal too — Esc, losing focus, whatever that type implements)
+  /// also updates it, from a closure built during `init` that therefore
+  /// can't capture `self` (not yet fully initialized at that point — see
+  /// this file's `PickerWindow(...)` construction below) — a small boxed
+  /// flag sidesteps that instead of a plain stored property. A reference
+  /// type wraps the `Mutex` (rather than storing one directly) because
+  /// `Mutex` is itself `~Copyable` and can only be consumed once; a class
+  /// reference can be captured by BOTH `self.isPickerVisibleBox` and the
+  /// `onDismiss` closure below. `onDismiss`'s calling thread isn't
+  /// specified by the minimal `PickerWindow` contract, so the box is
+  /// thread-safe rather than assumed main-thread-only.
+  private let isPickerVisibleBox: LockedBoolBox
+  private var isPickerVisible: Bool {
+    get { isPickerVisibleBox.value }
+    set { isPickerVisibleBox.value = newValue }
+  }
+
+  /// Whether the widget focused when the picker opened was a terminal,
+  /// latched in `showPicker` BEFORE the picker takes focus, and read by the
+  /// paste synthesizer to choose Ctrl+Shift+V over Ctrl+V — see
+  /// `ATSPIFocusedRoleReader`. Boxed for the same reason as
+  /// `isPickerVisibleBox`: the synthesizer is built (off-main) before
+  /// `self` exists.
+  private let pasteTargetIsTerminalBox: LockedBoolBox
+  private let isFocusedObjectTerminal: @Sendable () -> Bool
+
+  /// - Throws: whatever `SQLiteClipStore`/`SQLiteSnippetStore`'s
+  ///   production initializers throw (typed `ClipStoreError`/
+  ///   `SnippetStoreError.ioFailure`) — mirrors `AppEnvironment.init`'s
+  ///   own "no safe in-app fallback if persistence can't come up" contract
+  ///   exactly; surfaced to `LinuxAppLifecycle` rather than degraded.
+  init() async throws {
+    let visibilityBox = LockedBoolBox()
+    self.isPickerVisibleBox = visibilityBox
+    let terminalBox = LockedBoolBox()
+    self.pasteTargetIsTerminalBox = terminalBox
+
+    let blobStore = BlobStore(baseDirectory: BlobStore.defaultBaseDirectory())
+    let privacyFilter = PrivacyFilter()
+    // T-IBUS-REPLACER: constructed explicitly (rather than left to
+    // `SettingsStore.init`'s own default) so the EXACT SAME instance can
+    // also back `IBusCrashSafetyStateMachine`'s persisted-marker seam
+    // below — `JSONFileKeyValueStore` loads the whole settings file into
+    // memory once at construction and rewrites the whole file on every
+    // `set(_:forKey:)` (coding-standards.md's "config in one place"); two
+    // independent instances pointed at the same file would each hold a
+    // stale view of the other's writes and silently clobber them on the
+    // next save. One shared instance closes that hazard, mirroring this
+    // file's own top doc comment's "one shared `BlobStore` instance"
+    // precedent for the identical reason.
+    //
+    // Wrapped in `SynchronizedKeyValueStore` (security/correctness pass,
+    // T-IBUS-REPLACER): `JSONFileKeyValueStore`'s own doc comment states
+    // its thread safety rests ENTIRELY on "every real caller is
+    // `@MainActor`-isolated" — true before this task, when `SettingsStore`
+    // was its only caller. Sharing it with `IBusCrashSafetyStateMachine`
+    // breaks that invariant: `IBusCommitClient.replaceSelection` runs
+    // nonisolated, off the `@MainActor` this environment otherwise
+    // constructs everything on (real blocking `NSCondition.wait()` calls
+    // inside it must never block the GTK main thread — see that class's
+    // own top doc comment), so its crash-safety persist/restore writes can
+    // land on a genuinely different thread than a concurrent Settings
+    // change. Wrapping closes the race without touching
+    // `IBusCrashSafetyStateMachine`'s own pure/synchronous contract (its
+    // existing unit tests drive it directly with a fake store and plain
+    // sync closures) or `SettingsStore`'s.
+    //
+    // Stored as `self.keyValueStore` (reviewer pass, not just a local) so
+    // `restoreIBusEngineIfNeeded()` below can route the quit-time IBus
+    // crash-safety restore through this SAME instance too — see that
+    // method's own doc comment for the data-loss bug a second,
+    // independently-constructed instance caused at quit time.
+    let keyValueStore: any KeyValueStore = SynchronizedKeyValueStore(
+      wrapping: PlatformDefaults.keyValueStore)
+    self.keyValueStore = keyValueStore
+    let settingsStore = SettingsStore(defaults: keyValueStore)
+    let pasteboardReader = PasteboardReader()
+
+    async let clipStoreSetup: SQLiteClipStore = Task.detached(priority: .userInitiated) {
+      // The data directory (shared by both stores + `blobStore`'s own
+      // `blobs/` subdirectory) is locked to 0700 BEFORE either store's own
+      // `createDirectory` call can beat it there with a looser, umask-
+      // derived mode — see `XDGRuntimeDirectories.prepare`'s doc comment
+      // for why this fix lives here rather than in `ClipnestSQLite`
+      // (out of this task's scope).
+      try XDGRuntimeDirectories.prepare(XDGRuntimeDirectories.dataDirectory())
+      return try SQLiteClipStore(blobStore: blobStore)
+    }.value
+    async let snippetStoreSetup: SQLiteSnippetStore = Task.detached(priority: .userInitiated) {
+      try SQLiteSnippetStore()
+    }.value
+    async let synthesizerSetup:
+      (
+        synthesizer: any EventSynthesizing, kind: SelectedEventSynthesizerKind
+      ) = Task.detached(priority: .userInitiated) {
+        // Manual-verify only (needs real `/dev/uinput`/`X11`) — see
+        // `LinuxEventSynthesizerFactory`'s own doc comment for why this must
+        // run exactly once, off the main thread.
+        LinuxEventSynthesizerFactory.makeDefault(fallbackTerminalIdentifier: {
+          terminalBox.value ? TerminalAppRegistry.accessibleTerminalIdentifier : nil
+        })
+      }.value
+    // T-HANG-SELECT1 hygiene fix: `IBusCommitClient.resolveAndConnect` used
+    // to run synchronously, INLINE, further down this initializer (a real
+    // D-Bus connect + `RegisterComponent` + `CreateEngine` round trip,
+    // bounded but up to ~4.5s worst case with two connects and two calls at
+    // their now-actually-enforced timeouts — T-DBUSTIMEO1) — blocking the
+    // `@MainActor`/GTK thread for that whole span. Racing it here, as a
+    // fourth concurrent `Task.detached`, needs only `keyValueStore`
+    // (already constructed above, before this block) — nothing else built
+    // later in this initializer feeds INTO `resolveAndConnect` itself (only
+    // the RESULT is consumed later, alongside `frontmostAppProvider`).
+    // Wrapped in `IBusCrashSafetyReconciliationGate.runBlocking`:
+    // `resolveAndConnect` runs its OWN internal crash-safety reconcile pass
+    // (`IBusCommitClient.start()` -> `reconcileAtStartup()`) against the
+    // SAME marker `launch()`'s own top-level startup reconciliation just
+    // resolved (strictly before this initializer was even called) — see
+    // that gate's own doc comment for why serializing the two, even though
+    // both are now backgrounded, is load-bearing rather than defensive
+    // decoration.
+    async let ibusClientSetup: IBusCommitClient? = Task.detached(priority: .userInitiated) {
+      IBusCrashSafetyReconciliationGate.runBlocking {
+        IBusCommitClient.resolveAndConnect(store: keyValueStore)
+      }
+    }.value
+
+    let (rawClipStore, snippetStore, synthesizerResult, ibusClient) = try await (
+      clipStoreSetup, snippetStoreSetup, synthesizerSetup, ibusClientSetup
+    )
+
+    // T-RT2: wraps the real store — see `NotifyingClipStore`'s doc comment,
+    // and `AppEnvironment.init`'s exact macOS mirror of this same line.
+    // Every consumer below receives THIS wrapped value via the `clipStore`
+    // local — never `rawClipStore` directly.
+    let clipStore = NotifyingClipStore(wrapping: rawClipStore)
+
+    self.blobStore = blobStore
+    self.privacyFilter = privacyFilter
+    self.settingsStore = settingsStore
+    self.pasteboardReader = pasteboardReader
+    self.clipStore = clipStore
+    self.snippetStore = snippetStore
+    self.eventSynthesizerKind = synthesizerResult.kind
+    Self.logger.info("paste backend selected: \(String(describing: synthesizerResult.kind))")
+
+    let textRecognizer = OnnxTextRecognizer()
+    self.ocrBackfillViewModel = OCRBackfillViewModel(
+      coordinator: OCRBackfillCoordinator(
+        store: clipStore, blobStore: blobStore, recognizer: textRecognizer))
+
+    let sharedWriter = GTKClipboardWriting(
+      pasteboardChangeCount: { X11ClipboardConnection.shared.changeSerial })
+
+    let frontmostAppProvider = LinuxFrontmostAppReferenceProvider()
+    // T-WLPASTE-NIL1 (P0): explicit, never relying on `Paster`'s own
+    // refuse-by-default fallback — see `Paster.synthesizesWithoutVerifiedTarget`'s
+    // doc comment. `LinuxFrontmostAppReferenceProvider` resolves a target
+    // through X11's `_NET_ACTIVE_WINDOW`, so it can only ever verify a
+    // target on an X11 session (including an XWayland client under
+    // Wayland); a native-Wayland client is not an X11 client at all and
+    // always resolves to `nil` there — indistinguishable, from `Paster`'s
+    // side, from "nothing is focused." `sessionType != .x11` (Wayland OR
+    // `.unknown` — the SAME fail-closed-toward-Wayland convention
+    // `LinuxEventSynthesizerFactory`'s XTEST gating already uses for the
+    // identical "can't prove X11 is safe to assume" reasoning) is therefore
+    // the correct trigger: on those sessions, a `nil` target must still get
+    // a best-effort, un-targeted synthesized paste (uinput posts through
+    // the kernel to whatever actually holds focus) instead of the silent
+    // no-op T-WLPASTE-NIL1 reported — confirmed live on the VM: a native-
+    // Wayland GTK4 target received nothing before this fix, an XWayland
+    // target (`GDK_BACKEND=x11`) already worked.
+    let sessionType = SessionType.detect(environment: ProcessInfo.processInfo.environment)
+    let paster = Paster(
+      pasteboard: sharedWriter,
+      eventSynthesizer: synthesizerResult.synthesizer,
+      isAccessibilityGranted: { synthesizerResult.kind != .clipboardOnly },
+      frontmostAppProvider: frontmostAppProvider,
+      synthesizesWithoutVerifiedTarget: sessionType != .x11
+    )
+    self.paster = paster
+
+    let frontmostAppTracker = FrontmostAppTracker(provider: frontmostAppProvider)
+    self.frontmostAppTracker = frontmostAppTracker
+
+    self.clipboardMonitor = ClipboardMonitor(
+      store: clipStore,
+      privacyFilter: privacyFilter,
+      reader: pasteboardReader,
+      blobStore: blobStore,
+      pasteboard: LinuxPasteboard(isOwnedByThisProcess: {
+        sharedWriter.isOwnedByThisProcess
+      }),
+      frontmostApplicationProvider: LinuxFrontmostApplicationProvider(
+        ownProgramName: ClipnestControlName.programName),
+      excludedBundleIDsProvider: {
+        MainActor.assumeIsolated { Set(settingsStore.userExcludedBundleIDs) }
+      },
+      captureEnabledProvider: {
+        MainActor.assumeIsolated { settingsStore.isCaptureEnabled }
+      },
+      textRecognizer: textRecognizer,
+      textRecognitionEnabledProvider: {
+        MainActor.assumeIsolated { settingsStore.isTextRecognitionEnabled }
+      },
+      textRecognitionQualityProvider: {
+        MainActor.assumeIsolated { settingsStore.textRecognitionQuality }
+      }
+    )
+
+    // `SnippetExpander`'s Accessibility-first tier: `ATSPITextAccessor`
+    // needs a live a11y-bus connection; when none is reachable (no a11y
+    // bus in this session, or the resolve/connect fails), this degrades to
+    // `NullSelectedTextAccessing` so `SnippetExpander` falls straight
+    // through to its universal clipboard-replace tier instead of crashing
+    // or throwing — matches this task's "treat OCR/AX as optional, degrade
+    // cleanly" directive for every optional subsystem, not just OCR.
+    let accessibility = Self.makeAccessibilityServices()
+    let selectedTextAccessing = accessibility.selectedText
+    self.isFocusedObjectTerminal = accessibility.isFocusedObjectTerminal
+    let clipboardReplacer = LinuxClipboardSelectionReplacer(
+      poster: synthesizerResult.synthesizer as? any SyntheticKeystrokePosting
+        ?? NullSyntheticKeystrokePosting(),
+      pasteboard: LinuxPasteboard(isOwnedByThisProcess: {
+        sharedWriter.isOwnedByThisProcess
+      }), writer: sharedWriter,
+      frontmostAppProvider: frontmostAppProvider
+    )
+    self.clipboardReplacer = clipboardReplacer
+
+    // T-IBUS-REPLACER (D-IBUS-1..6): snippet expansion's tier 2, an IBus
+    // commit — immune to Wayland's per-device modifier merging BY
+    // CONSTRUCTION (a D-Bus signal, never a synthesized keystroke), unlike
+    // `clipboardReplacer` above. Degrades to a permanent no-op tier on any
+    // failure (no `ibus-daemon`, unresolvable address, failed connect,
+    // failed registration) — the same graceful-nil convention
+    // `makeAccessibilityServices()` already uses for AT-SPI, so a missing
+    // IBus daemon never blocks snippet expansion, it just skips straight
+    // to the clipboard tier every time.
+    //
+    // `ibusClient` itself was already resolved above, concurrently with
+    // `clipStoreSetup`/`snippetStoreSetup`/`synthesizerSetup` (T-HANG-SELECT1
+    // hygiene fix) — this is consuming that already-awaited result, not a
+    // second `resolveAndConnect` call.
+    let ibusReplacer: any SelectionReplacing
+    if let ibusClient {
+      ibusReplacer = LinuxIBusSelectionReplacer(
+        client: ibusClient, frontmostAppProvider: frontmostAppProvider)
+      Self.logger.info("IBus commit tier available for snippet expansion")
+    } else {
+      ibusReplacer = NullIBusSelectionReplacer()
+      Self.logger.info(
+        "IBus commit tier unavailable this session — snippet expansion is AT-SPI + clipboard only"
+      )
+    }
+    let tieredSelectionReplacer = LinuxTieredSelectionReplacer(
+      ibusReplacer: ibusReplacer, clipboardReplacer: clipboardReplacer)
+
+    self.snippetExpander = SnippetExpander(
+      snippetStore: snippetStore, selectedText: selectedTextAccessing,
+      clipboardReplacer: tieredSelectionReplacer)
+
+    let monitor = clipboardMonitor
+    clipboardReplacer.beginSuppression = { [weak monitor] in monitor?.pause() }
+    clipboardReplacer.endSuppression = { [weak monitor] in
+      monitor?.ignore(changeCount: X11ClipboardConnection.shared.changeSerial)
+      monitor?.resume()
+    }
+
+    let viewModel = PickerViewModel(
+      clipStore: clipStore, snippetStore: snippetStore, pasteboard: sharedWriter,
+      blobStore: blobStore, paster: paster, frontmostAppTracker: frontmostAppTracker,
+      // T-RT2: lets an already-open picker re-query itself when SOMETHING
+      // ELSE mutates this store — a Settings "Clear All History…", or
+      // background retention — without either of those call sites needing
+      // to know `pickerViewModel` exists.
+      storeChanges: clipStore.changes)
+    self.pickerViewModel = viewModel
+
+    let pickerWindow = PickerWindow(
+      viewModel: viewModel,
+      // Routed bug report ("pasting does nothing... the app gives the user
+      // no indication why"): required, not defaulted — same
+      // cross-platform-seam rule `reinstallToggleHotkeyFloor` documents.
+      // Drives `PickerWindow`'s honest-footer wording and its one-time
+      // "copied — press Ctrl+V" notice on `.clipboardOnly` (see
+      // `PickerWindow.showClipboardOnlyNoticeThenDismiss()`).
+      isAutoPasteAvailable: synthesizerResult.kind != .clipboardOnly,
+      onDismiss: {
+        // Only the owner-side flag. `PickerWindow.dismiss()` — the single
+        // path every user-initiated dismissal now routes through — has
+        // already called `hide()`, which calls `viewModel.didHide()` on the
+        // GTK thread before this closure runs. Calling `didHide()` again
+        // here would be redundant, and doing it from a `Task { @MainActor }`
+        // made it land AFTER this closure returned, so the flag and the
+        // view model briefly disagreed.
+        visibilityBox.value = false
+      })
+    self.pickerWindow = pickerWindow
+    // `dismiss()` (via `dismissAfterPasteAttempt()` below), not `hide()`:
+    // hiding alone left `visibilityBox` true, so the next hotkey ran the
+    // "hide" half of `togglePicker` against an already-hidden window and
+    // appeared to do nothing.
+    //
+    // `dismissAfterPasteAttempt()`, not plain `dismiss()`: this closure is
+    // `PickerViewModel`'s ONE shared dismiss hook, called both after a real
+    // paste attempt (`select(_:)`/`pasteSnippet(_:)`) and from
+    // `openSettingsFromPicker()` (Ctrl+,) — see `PickerWindow
+    // .pasteAttemptPending`'s doc comment for how that method tells the two
+    // apart (`markPasteAttemptPending()`, called from `PickerWindow
+    // +Keyboard.swift`'s `.commit` dispatch and `PickerWindow+Rows.swift`'s
+    // row-activation handler, both this task's files) and shows the
+    // routed bug report's one-time "copied — press Ctrl+V" notice only for
+    // the former, only on `.clipboardOnly`, only once per process.
+    viewModel.dismiss = { [weak pickerWindow] in pickerWindow?.dismissAfterPasteAttempt() }
+    viewModel.suppressOwnPasteboardWrite = { [weak monitor] changeCount in
+      monitor?.ignore(changeCount: changeCount)
+    }
+
+    // Linux parity pass (routed follow-up, 2026-09-06): mirrors
+    // `AppEnvironment.init`'s macOS wiring of `viewModel.presentSnippetEditor`
+    // (`ClipnestApp/Sources/App/AppEnvironment.swift`) as closely as this
+    // platform allows. `onSave` decides create vs. update by switching on
+    // `mode` — the exact same `mode` this `presentSnippetEditor` closure was
+    // just called with — matching macOS exactly; `SnippetEditorWindow` (GTK)
+    // itself has no opinion on `SnippetStore`, same contract as its macOS
+    // counterpart. `onClose` calls `pickerWindow.refocusAfterEditorClose()`
+    // (see that method's doc comment) — the GTK counterpart of macOS's
+    // `panel.makeKey(); viewModel.refocusSearchField()`. No `pickerPanel`-
+    // style positioning parameter: GTK4 has no portable window-move API for
+    // this window to use even if it took one (see `SnippetEditorWindow
+    // .swift`'s top doc comment).
+    let snippetEditorWindow = SnippetEditorWindow()
+    self.snippetEditorWindow = snippetEditorWindow
+    viewModel.presentSnippetEditor = {
+      [weak snippetEditorWindow, weak viewModel, weak pickerWindow] mode in
+      guard let snippetEditorWindow, let viewModel else { return }
+      // Real bug found by this task's own runtime verification (see
+      // `PickerWindow.isEditorSessionActive`'s doc comment): presenting
+      // this real, activating `GtkWindow` makes the picker's OWN
+      // `notify::is-active` fire `false` too, which — without this flag —
+      // fully dismissed the picker (hid it AND cancelled the view model's
+      // in-flight queries) instead of just losing window-manager
+      // prominence, unlike macOS's side-by-side non-dismissing design.
+      // Cleared inside `refocusAfterEditorClose()` itself, deferred to the
+      // next main-loop idle iteration — see that method's doc comment for
+      // a second, more severe real bug found in this exact handoff (a
+      // synchronous close-then-present X11 grab race, 225%+ CPU) and why
+      // clearing this flag early, before that deferred step runs, would
+      // reopen the window `isEditorSessionActive` exists to close.
+      pickerWindow?.setEditorSessionActive(true)
+      snippetEditorWindow.show(
+        mode: mode,
+        // Stacks the editor above the picker. Without it the editor opens
+        // BEHIND the picker (which is a _NET_WM_WINDOW_TYPE_UTILITY window,
+        // and WMs keep those above ordinary toplevels), so clicking "+"
+        // looked like it did nothing.
+        transientParent: pickerWindow?.transientParentWindow,
+        onSave: { title, body, keyword in
+          switch mode {
+          case .create, .createFromClip:
+            viewModel.createSnippet(title: title, body: body, keyword: keyword)
+          case .edit(let snippet):
+            viewModel.updateSnippet(snippet.id, title: title, body: body, keyword: keyword)
+          }
+        },
+        onClose: { [weak pickerWindow] in
+          pickerWindow?.refocusAfterEditorClose()
+        })
+    }
+
+    let updateChecker = UpdateChecker()
+    // P10-A: was never set — `installedVersion` defaulted to `"?"`, which
+    // made `UpdateChecker.isUpdateAvailable(installed:latestTag:)`'s
+    // not-equal comparison permanently `true` (a `"?"` never equals a real
+    // release tag), so the picker's "update available" dot showed even on
+    // the latest version. Mirrors `AppEnvironment.init`'s `updateChecker
+    // .installedVersion = { AppUpdater.currentVersion }` — see
+    // `Self.installedVersion`'s doc comment for why Linux has no
+    // `CFBundleShortVersionString` equivalent to read this from at runtime.
+    updateChecker.installedVersion = { Self.installedVersion }
+    updateChecker.onStateChanged = { [weak viewModel] available, latest in
+      viewModel?.isUpdateAvailable = available
+      viewModel?.latestVersion = latest
+    }
+    self.updateChecker = updateChecker
+
+    // P10-A: `AutostartDesktopFile` (this module) is unreachable from
+    // `ClipnestGTK` — `ClipnestGTK` depends on neither `ClipnestLinuxAppKit`
+    // nor anything that re-exports it (Package.swift's dependency edge runs
+    // the other way: `ClipnestLinuxAppKit -> ClipnestGTK`; the reverse would
+    // be a cycle). So `SettingsWindow` gets the launch-at-login capability
+    // as two plain closures, resolved here at the composition root — the
+    // same "inject a closure across a module boundary" shape already used
+    // for `captureEnabledProvider`/`excludedBundleIDsProvider` above and
+    // `placeWindowHandler` below, not a new pattern.
+    let resolvedExecutablePath = Self.resolveOwnExecutablePath()
+
+    self.settingsWindow = SettingsWindow(
+      settings: settingsStore,
+      updateChecker: updateChecker,
+      clipStore: clipStore,
+      ocrBackfillViewModel: ocrBackfillViewModel,
+      // T-OCR9/T-OCR10 (this task): resolved ONCE here at the composition
+      // root, not re-checked on every Settings open — `clipnest-ocr`/
+      // `clipnest-ocr-data` are only ever installed or removed by a
+      // package manager action outside this process's own lifetime, so a
+      // launch-time snapshot is correct (same reasoning `eventSynthesizerKind`
+      // above already applies to a different one-shot machine-capability
+      // check). See `SettingsWindow.isTextRecognitionAvailable`'s doc
+      // comment for what this gates.
+      isTextRecognitionAvailable: OnnxTextRecognizer.isAvailable,
+      launchAtLoginProvider: { AutostartDesktopFile.isEnabled() },
+      setLaunchAtLogin: { enabled in
+        try AutostartDesktopFile.setEnabled(enabled, executablePath: resolvedExecutablePath)
+      },
+      // T-OPT2 (a concurrent agent's Settings > Shortcuts rebinding work):
+      // required, no default — same module as this file, so no import
+      // needed. `ToggleHotkeyFloorBinding`/`Hotkeys/**` are that agent's
+      // files, not this one's; only this call site's new argument is mine.
+      reinstallToggleHotkeyFloor: { accelerator in
+        ToggleHotkeyFloorBinding.reinstallFloor(withAccelerator: accelerator)
+      },
+      reinstallExpandSnippetHotkeyFloor: { accelerator in
+        ExpandSnippetHotkeyFloorBinding.reinstallFloor(withAccelerator: accelerator)
+      },
+      // T-OPT3: the uinput auto-paste grant seam — `UInputPermissionChecker`/
+      // `GrantInputHelperClient` (this module, new files) are the real,
+      // side-effect-having implementations `SettingsWindow+Permissions.swift`
+      // (`ClipnestGTK`) cannot reach directly. No default value on either
+      // parameter (see `SettingsWindow.uinputPermissionStatusProvider`'s doc
+      // comment) — both are required here.
+      uinputPermissionStatusProvider: {
+        UInputPermissionChecker.currentStatus()
+      },
+      requestUInputGrant: { completion in
+        GrantInputHelperClient.requestGrant(completion: completion)
+      },
+      // T-LXUPD: the Linux self-update seam — `LinuxAppUpdater` (this
+      // module, new file) does the real `apt-cache policy` / `curl` /
+      // `pkexec apt-get install` work `SettingsWindow+General.swift`
+      // (`ClipnestGTK`) cannot reach directly. No default value on either
+      // closure (see `SettingsWindow.detectUpdateProvenance`'s doc
+      // comment) — both required here, same as `uinputPermissionStatusProvider`/
+      // `requestUInputGrant` above. `installedVersionText`/`aptUpgradeCommand`
+      // are plain, precomputed values (nothing to inject as a closure).
+      installedVersionText: Self.installedVersion,
+      detectUpdateProvenance: {
+        await LinuxAppUpdater.detectProvenance()
+      },
+      performLinuxAppUpdate: { onStep in
+        await LinuxAppUpdater.performUpdate(installedVersion: Self.installedVersion, onStep: onStep)
+      },
+      aptUpgradeCommand: LinuxAppUpdater.aptUpgradeCommand(),
+      // T-WB1-GTKBUMP (P0 mitigation, decision D81): resolved ONCE here,
+      // same "one-shot machine-capability fact, read at the composition
+      // root" shape as `isTextRecognitionAvailable`/`eventSynthesizerKind`
+      // above — `GTKClipboardCrashNoticeDetection.detectCurrent()`
+      // (`ClipnestGTK`'s own real GTK-version/`GDK_IS_X11_DISPLAY` FFI
+      // read) must run AFTER `ClipnestGTKApplication.initializeGTK()`
+      // (`gtk_init()`) has already opened the default display — true here,
+      // since `LinuxAppLifecycle.run()` calls `initializeGTK()` before
+      // constructing this environment. No default value on this parameter
+      // — see `reinstallToggleHotkeyFloor`'s doc comment for why a
+      // defaulted cross-platform seam is a build-time-invisible way to
+      // ship a dead feature.
+      gtkClipboardCrashNoticeInfo: GTKClipboardCrashNoticeDetection.detectCurrent())
+
+    // Keyboard-parity pass (routed follow-up): `PickerViewModel.openSettings`
+    // (used by `openSettingsFromPicker()`, now reachable via the picker's own
+    // `Ctrl+,` — `ClipnestGTK/Window/PickerWindow+Keyboard.swift`'s
+    // `.openSettings` case) defaults to a no-op and was never wired on Linux
+    // — only macOS's `PickerView.swift` `.onAppear` set it. Without this, the
+    // picker would dismiss on `Ctrl+,` but never actually show Settings.
+    // Wired to the exact same `openSettings()` the tray/D-Bus "Settings…"
+    // entry already calls (`LinuxAppLifecycle.swift`), mirroring
+    // `AppEnvironment`'s macOS equivalent one line up the stack.
+    viewModel.openSettings = { [weak self] in self?.openSettings() }
+
+    // T-LXUPD: closes another instance of the exact silent-seam-default trap
+    // coding-standards.md documents (`presentSnippetEditor`/`openSettings`
+    // above) — `PickerViewModel.appVersion`/`requestAppUpdate` both default
+    // to a no-op/empty value and were never set anywhere on Linux. No
+    // picker-footer UI consumes them yet (`PickerWindow*.swift` is out of
+    // this task's owned-files scope this session — another agent owns it),
+    // but wiring them now means the moment picker-footer parity lands there,
+    // this "just works" instead of silently no-op'ing a third time.
+    // `requestAppUpdate` opens Settings' General tab — the real
+    // install/apt-command surface this task adds (`SettingsWindow
+    // +General.swift`) — rather than performing the update directly from
+    // here, since there is no picker-side confirmation/progress UI to drive
+    // yet. Placed after `self.settingsWindow` is constructed (definite
+    // initialization: `openSettings()` reads it).
+    viewModel.appVersion = Self.installedVersion
+    viewModel.requestAppUpdate = { [weak self] in self?.openSettings() }
+
+    monitor.onCapture = { [weak self, weak viewModel] _ in
+      viewModel?.handleNewCapture()
+      self?.scheduleRetentionEnforcement()
+    }
+
+    // T-RT2/T-HANG6: forwards every deletion/full-clear this store observes
+    // — regardless of which call site caused it (`pickerViewModel
+    // .delete(_:)`/`deleteHighlighted()` above, or a Settings "Clear All
+    // History…" call once wired to this same injected `clipStore`) — into
+    // `clipboardMonitor`'s existing (T-HANG5) pending-OCR cancellation, so a
+    // still-scheduled recognition job never outlives the row it targets.
+    // `[weak monitor]` (the same local already used above), not `[weak
+    // self]`: see `AppEnvironment`'s exact macOS mirror of this subscription
+    // for why capturing `self` at an earlier point in this initializer trips
+    // Swift's definite-initialization check.
+    self.clipStoreChangeSubscription = clipStore.changes.subscribe { [weak monitor] change in
+      Task { @MainActor in
+        guard let monitor else { return }
+        switch change {
+        case .deleted(let id):
+          monitor.cancelPendingRecognition(for: id)
+        case .clearedAll:
+          monitor.cancelAllPendingRecognition()
+        case .inserted, .updated, .retentionApplied:
+          break
+        }
+      }
+    }
+
+    // Event-driven capture (P2-A): the X11/XFixes backend calls this
+    // closure on ITS OWN background event thread the instant it observes
+    // a real selection-ownership change — never the GTK/main thread. The
+    // `Task { @MainActor in ... }` hop is exactly what
+    // `GTKMainActorBridge`/`DispatchMainQueuePump` exists to make actually
+    // resume (see that type's doc comment) — this is the single most
+    // frequent real-world exercise of that mechanism in the whole app.
+    X11ClipboardConnection.shared.onSelectionChanged = { [weak monitor] _, _ in
+      Task { @MainActor in _ = await monitor?.checkNow() }
+    }
+  }
+
+  /// Attempts to stand up the AT-SPI Accessibility-first tier for
+  /// `SnippetExpander`: resolves the a11y bus address off the session bus,
+  /// connects, and starts an `ATSPIFocusTracker`. Real, manual-verify-only
+  /// D-Bus I/O — see `ATSPITextAccessor`/`ATSPIFocusTracker`'s own doc
+  /// comments; degrades to `NullSelectedTextAccessing` on any failure
+  /// (missing `DBUS_SESSION_BUS_ADDRESS`, unreachable a11y bus, ...).
+  private static func makeAccessibilityServices() -> (
+    selectedText: any SelectedTextAccessing, isFocusedObjectTerminal: @Sendable () -> Bool
+  ) {
+    guard
+      let sessionBusAddress = ProcessInfo.processInfo.environment["DBUS_SESSION_BUS_ADDRESS"],
+      let a11yAddress = AccessibilityBusResolver.resolveAddress(
+        sessionBusAddress: sessionBusAddress),
+      let callConnection = DBusConnection.connect(address: a11yAddress, timeout: .seconds(1)),
+      let signalConnection = DBusConnection.connect(address: a11yAddress, timeout: .seconds(1))
+    else {
+      logger.info("AT-SPI accessibility bus unavailable — snippet expansion is clipboard-only")
+      return (NullSelectedTextAccessing(), { false })
+    }
+
+    let focusTracker = ATSPIFocusTracker(connection: signalConnection)
+    focusTracker.start()
+    let selectedText = ATSPITextAccessor(
+      caller: callConnection, focusedObject: { focusTracker.currentFocusedObject() },
+      nextSerial: { callConnection.allocateSerial() })
+    let roleReader = ATSPIFocusedRoleReader(
+      caller: callConnection, focusedObject: { focusTracker.currentFocusedObject() },
+      nextSerial: { callConnection.allocateSerial() })
+    return (selectedText, { roleReader.isFocusedObjectTerminal() })
+  }
+
+  /// Starts real clipboard capture. Call exactly once, from
+  /// `LinuxAppLifecycle.run()`.
+  func startCapture() {
+    clipboardMonitor.startEventDriven()
+  }
+
+  func startUpdateChecking() {
+    updateChecker.start(settings: settingsStore)
+  }
+
+  /// **Reviewer fix (data-loss bug, T-IBUS-CRASHWIRE follow-up):**
+  /// `LinuxAppLifecycle`'s quit path (`restoreIBusEngineBeforeQuit()`) used
+  /// to construct its OWN fresh `PlatformDefaults.keyValueStore()` — a
+  /// brand-new `JSONFileKeyValueStore` that loads its own in-memory
+  /// snapshot of the settings file at construction — rather than reusing
+  /// THIS environment's single `keyValueStore` above. That is a real,
+  /// non-theoretical data-loss bug, not just a lint nit: `JSONFileKeyValueStore
+  /// .persist()` rewrites the WHOLE settings file on every write, so once
+  /// `LinuxAppEnvironment` exists, a concurrent settings write through
+  /// `keyValueStore` (this instance) and a quit-time write through a
+  /// SEPARATE, stale-snapshotted instance can silently revert each other —
+  /// last write wins, no error, the user just loses a setting they changed
+  /// moments before quitting.
+  ///
+  /// Exposed so `LinuxAppLifecycle.restoreIBusEngineBeforeQuit()` can route
+  /// through THIS instance once `environment` exists, instead of ever
+  /// constructing a second one post-launch. `launch()`'s own STARTUP
+  /// reconciliation call (`IBusCrashSafetyReconciler.restoreIfMarkerPresent
+  /// (store: PlatformDefaults.keyValueStore)`) is deliberately NOT routed
+  /// through here and keeps its own fresh instance — that call runs before
+  /// this environment (and therefore `keyValueStore`) exists at all, and at
+  /// that point in `launch()` nothing else in the process could possibly be
+  /// writing settings concurrently (provably sequential: this environment's
+  /// `init` — the only other writer — hasn't even started yet). Do not
+  /// "fix" that startup call to match this one; they differ because the
+  /// hazard this method closes genuinely does not exist yet at startup.
+  func restoreIBusEngineIfNeeded() {
+    IBusCrashSafetyReconciler.restoreIfMarkerPresent(store: keyValueStore)
+  }
+
+  /// Set by `LinuxAppLifecycle` once a `ShellHelperClient` exists — see
+  /// `PickerWindow.swift`'s own doc comment (the OTHER agent's file):
+  /// GTK4 dropped `gtk_window_move`/keep-above/skip-taskbar entirely (no
+  /// Wayland equivalent), so `windowToken` exists specifically so
+  /// `ClipnestLinuxApp` can ask the Shell extension's
+  /// `PlaceWindow(window_token, x, y, flags)` to do it via Mutter — the
+  /// only thing that can, on a Wayland session. Defaults to a no-op so a
+  /// picker with no extension installed still opens (compositor-default
+  /// placement), just not pointer-anchored.
+  var placeWindowHandler: (_ windowToken: String, _ x: Int, _ y: Int) -> Void = { _, _, _ in }
+
+  /// Shows the picker — mirrors `AppEnvironment.showPicker()`'s single
+  /// choke point for every trigger (D-Bus `TogglePicker`/`ShowPicker`, the
+  /// tray's "Open Clipnest", a hotkey). `willShow()` is called explicitly
+  /// here (rather than from a GTK-side hook, which the minimal
+  /// `PickerWindow` contract doesn't expose) since this IS the one place
+  /// every trigger already funnels through.
+  func showPicker(at point: (x: Int, y: Int)?) {
+    // T-HOTKEYGAP1 diagnostics: the two hotkey delivery paths land in
+    // DIFFERENT entry points — the Shell extension's `ShortcutActivated`
+    // calls `showPicker(at:)` directly, while the GSettings floor's
+    // `clipnest --toggle-picker` goes through `togglePicker()`. Logging
+    // only one of them made a working extension-path hotkey read exactly
+    // like a dead one during this investigation's first positive-control
+    // run. Metadata only (one boolean).
+    Self.logger.info("showPicker: hasPoint=\(point != nil)")
+    frontmostAppTracker.record()
+    pasteTargetIsTerminalBox.value = isFocusedObjectTerminal()
+    pickerViewModel.willShow()
+    pickerWindow.show(at: point)
+    if let point {
+      placeWindowHandler(pickerWindow.windowToken, point.x, point.y)
+    }
+    isPickerVisible = true
+  }
+
+  func hidePicker() {
+    pickerWindow.hide()
+    isPickerVisible = false
+  }
+
+  func togglePicker(at point: (x: Int, y: Int)? = nil) {
+    // T-HOTKEYGAP1 diagnostics: the toggle hotkey reaching this process at
+    // all is the fact under test when the Shell extension is disabled and
+    // the GSettings floor is supposed to take over — and it was previously
+    // invisible in the log, so "the hotkey is dead" and "the hotkey fired
+    // but the window did not appear" could not be told apart. Metadata
+    // only (two booleans).
+    Self.logger.info("togglePicker: visibleBefore=\(isPickerVisible) hasPoint=\(point != nil)")
+    if isPickerVisible {
+      hidePicker()
+    } else {
+      showPicker(at: point)
+    }
+  }
+
+  func openSettings() {
+    settingsWindow.show()
+  }
+
+  /// The tray's "Pause Capture" toggle — the inverse of Settings → General
+  /// → "Enable clipboard capture", one setting behind both, as on macOS.
+  var isCapturePaused: Bool {
+    get { !settingsStore.isCaptureEnabled }
+    set { settingsStore.isCaptureEnabled = !newValue }
+  }
+
+  func expandSnippet() {
+    Task { await snippetExpander.expand() }
+  }
+
+  /// Mirrors `AppEnvironment.enforceRetentionNow()` exactly (best-effort,
+  /// logged not surfaced) — run once at launch.
+  func enforceRetentionNow() {
+    let cap = settingsStore.retentionCap
+    let retentionStore = clipStore
+    Task {
+      do {
+        try await retentionStore.enforceRetention(cap: cap)
+      } catch {
+        Self.logger.error("retention enforcement failed at launch: \(String(describing: error))")
+      }
+    }
+  }
+
+  /// Mirrors `AppEnvironment.scheduleRetentionEnforcement()` exactly — see
+  /// that method's doc comment for the debounce reasoning (T-PF1/D2).
+  private func scheduleRetentionEnforcement() {
+    pendingRetentionTask?.cancel()
+    let retentionStore = clipStore
+    pendingRetentionTask = Task { [weak self] in
+      do {
+        try await Task.sleep(for: Self.retentionDebounceInterval)
+      } catch {
+        return
+      }
+      guard let self else { return }
+      let cap = self.settingsStore.retentionCap
+      do {
+        try await retentionStore.enforceRetention(cap: cap)
+      } catch {
+        Self.logger.error(
+          "retention enforcement failed after capture: \(String(describing: error))")
+      }
+      self.pendingRetentionTask = nil
+    }
+  }
+}
+
+/// Degrades `SnippetExpander`'s Accessibility-first tier to "never
+/// readable" when no a11y bus connection could be established — see
+/// `LinuxAppEnvironment.makeAccessibilityServices()`. `ClipnestCore` has no
+/// portable default for this protocol the way it does for
+/// `EventSynthesizing`'s `NoOpEventSynthesizing` (`SelectedTextAccessing`'s
+/// concrete implementations are always app-layer, per that protocol's own
+/// doc comment), so this app supplies its own.
+private struct NullSelectedTextAccessing: SelectedTextAccessing {
+  func readSelectedText() -> String? { nil }
+  @discardableResult
+  func replaceSelectedText(with text: String) -> Bool { false }
+}
+
+/// Degrades `LinuxClipboardSelectionReplacer`'s synthesized Copy/Paste to
+/// "always fails" on the rare event `LinuxEventSynthesizerFactory
+/// .makeDefault()`'s result doesn't ALSO conform to
+/// `SyntheticKeystrokePosting` — true today only for
+/// `NullClipboardOnlyEventSynthesizer` (which by construction never should
+/// need to post a raw chord anyway, since `Paster` itself already reports
+/// `.eventPostFailed` for that backend).
+private struct NullSyntheticKeystrokePosting: SyntheticKeystrokePosting {
+  @discardableResult
+  func post(_ chord: KeyChord) -> Bool { false }
+}
+
+/// Degrades `LinuxTieredSelectionReplacer`'s IBus tier to "always fall
+/// through, zero I/O" when `IBusCommitClient.resolveAndConnect` fails (no
+/// `ibus-daemon`, unresolvable address, failed connect/registration) — the
+/// same graceful-nil convention `NullSelectedTextAccessing` above already
+/// uses for AT-SPI. Always returns `.noSelection`, the SAME case
+/// `LinuxIBusSelectionReplacer` returns for every one of its own
+/// non-terminal reasons (D-IBUS-1's fall-through table), so
+/// `LinuxTieredSelectionReplacer` cannot tell "IBus is unavailable this
+/// session" apart from "IBus tried and found nothing" without reading the
+/// log line either type emits — an intentional, cheap distinction that
+/// never needs to reach the composer's own decision, only diagnostics.
+@MainActor
+private struct NullIBusSelectionReplacer: SelectionReplacing {
+  func replaceSelection(bodyForSelection: (String) async -> String?) async
+    -> SelectionReplaceResult
+  {
+    .noSelection
+  }
+}
+
+/// Wraps any `KeyValueStore` with a `Mutex` so it's genuinely safe to share
+/// across actor-isolation boundaries (T-IBUS-REPLACER security/correctness
+/// pass) — see `LinuxAppEnvironment.init`'s own comment at its one call
+/// site for the specific race this closes: `JSONFileKeyValueStore`'s
+/// thread safety otherwise rests entirely on every caller being
+/// `@MainActor`-isolated, an invariant `IBusCrashSafetyStateMachine`'s
+/// nonisolated background use would silently violate if the shared
+/// instance were passed through unwrapped. Every call serializes through
+/// one lock; `JSONFileKeyValueStore` itself stays completely unaware this
+/// wrapper exists.
+///
+/// **Why one shared instance (not just this wrapper) is the actual fix
+/// (reviewer pass):** the `Mutex` only protects concurrent access to ONE
+/// instance's own in-memory `storage`. Two SEPARATE `SynchronizedKeyValueStore`s
+/// (or two raw `JSONFileKeyValueStore`s) each wrapping a fresh load of the
+/// SAME on-disk file are still unsafe together — each holds its own
+/// snapshot, and whichever persists last silently wins, discarding
+/// whatever the other wrote. That is exactly the bug `LinuxAppEnvironment
+/// .restoreIBusEngineIfNeeded()` exists to close: routing the quit-time
+/// restore through `LinuxAppEnvironment`'s own single instance (this
+/// class), never a second one. See `SynchronizedKeyValueStoreTests.swift`
+/// for both halves pinned directly: two independent instances over the
+/// same file DO lose a write; the same shared instance, hit concurrently
+/// from two threads, does not.
+///
+/// Not `private`: `@testable import ClipnestLinuxAppKit` needs `internal`
+/// visibility to construct this directly in
+/// `SynchronizedKeyValueStoreTests.swift` — `LinuxAppEnvironment.init`
+/// itself does real SQLite/uinput/X11 I/O and cannot be constructed in a
+/// unit test (manual-verify only, same as `IBusCommitClient`), so this
+/// wrapper's own correctness is the testable surface for that fix.
+final class SynchronizedKeyValueStore: KeyValueStore, @unchecked Sendable {
+  private let mutex: Mutex<any KeyValueStore>
+
+  init(wrapping store: any KeyValueStore) {
+    self.mutex = Mutex(store)
+  }
+
+  func object(forKey key: String) -> Any? { mutex.withLock { $0.object(forKey: key) } }
+  func string(forKey key: String) -> String? { mutex.withLock { $0.string(forKey: key) } }
+  func stringArray(forKey key: String) -> [String]? {
+    mutex.withLock { $0.stringArray(forKey: key) }
+  }
+  func bool(forKey key: String) -> Bool { mutex.withLock { $0.bool(forKey: key) } }
+  func set(_ value: Any?, forKey key: String) { mutex.withLock { $0.set(value, forKey: key) } }
+}
+
+/// A thread-safe `Bool` box (`isPickerVisibleBox`, `pasteTargetIsTerminalBox`)
+/// — see `LinuxAppEnvironment.isPickerVisibleBox`'s
+/// doc comment for why this wraps `Mutex<Bool>` in a reference type rather
+/// than storing the (`~Copyable`) `Mutex` directly: a class reference can
+/// be captured by more than one closure/property, a noncopyable value
+/// cannot.
+private final class LockedBoolBox: @unchecked Sendable {
+  private let mutex = Mutex<Bool>(false)
+  var value: Bool {
+    get { mutex.withLock { $0 } }
+    set { mutex.withLock { $0 = newValue } }
+  }
+}
