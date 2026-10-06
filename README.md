@@ -16,7 +16,7 @@
 
 ---
 
-<!-- TODO(T78): add site link once Pages is live -->
+**Website & docs → [aayushgour.github.io/clipnest](https://aayushgour.github.io/clipnest/)** · Clipnest by Aayush Gour — not affiliated with other apps named ClipNest.
 
 ## Why Clipnest?
 

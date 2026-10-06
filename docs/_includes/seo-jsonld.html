@@ -26,8 +26,12 @@
       opensource.org) are literal strings on purpose — `absolute_url`
       only makes sense for paths on *this* site; applying it to an
       off-site URL would be wrong, not safer.
-    - `operatingSystem` is macOS-only ("macOS 14+") — zero Linux/GTK/
-      Wayland strings anywhere in this file.
+    - `operatingSystem` lists both shipped platforms (macOS 14+, and
+      Ubuntu 22.04/24.04 with GNOME since 1.0) — matches README.md.
+    - `alternateName` disambiguates this Clipnest from the unrelated
+      products that share the name (other "ClipNest" clipboard apps on
+      the Mac App Store / Microsoft Store, several video services). Every
+      variant names something true: the platforms, the author, the repo.
 
   T88 (review follow-up) — REMOVED the WebSite block this include used to
   ship here. jekyll-seo-tag (called via `{%- seo -%}` earlier in this
@@ -59,13 +63,19 @@
   "@context": "https://schema.org",
   "@type": "SoftwareApplication",
   "name": "Clipnest",
-  "alternateName": "Clipnest Clipboard Manager for Mac",
-  "description": "Clipnest is a free, open-source, native macOS clipboard manager. It remembers everything you copy — text, links, images, and files — with instant search, pinning, and reusable snippets that expand by keyword in any app. Optional on-device OCR; 100% local, no account, no cloud, no telemetry.",
+  "alternateName": [
+    "Clipnest Clipboard Manager",
+    "Clipnest for Mac",
+    "Clipnest for Linux",
+    "Clipnest by Aayush Gour",
+    "AayushGour/clipnest"
+  ],
+  "description": "Clipnest is a free, open-source, native clipboard manager for macOS and Linux (Ubuntu with GNOME). It remembers everything you copy — text, links, images, and files — with instant search, pinning, and reusable snippets that expand by keyword in any app. Optional on-device OCR; 100% local, no account, no cloud, no telemetry.",
   "applicationCategory": "UtilitiesApplication",
   "applicationSubCategory": "Clipboard Manager",
-  "operatingSystem": "macOS 14+",
-  "softwareVersion": "0.9.0",
-  "softwareRequirements": "macOS 14 Sonoma or later",
+  "operatingSystem": ["macOS 14+", "Linux (Ubuntu 22.04+, GNOME)"],
+  "softwareVersion": "1.0.0",
+  "softwareRequirements": "macOS 14 Sonoma or later; or Ubuntu 22.04/24.04 with GNOME (X11 or Wayland), amd64 or arm64",
   "downloadUrl": "https://github.com/AayushGour/clipnest/releases/latest",
   "installUrl": "https://github.com/AayushGour/clipnest/releases/latest",
   "fileSize": "1.7MB",

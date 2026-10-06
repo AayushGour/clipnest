@@ -1,7 +1,7 @@
 ---
 layout: page
 title: "Frequently Asked Questions — Clipnest"
-description: "Answers to common questions about Clipnest: pricing, privacy, supported macOS versions, snippets, OCR, permissions, and how it compares to other clipboard managers."
+description: "Answers to common questions about Clipnest: pricing, privacy, supported systems (macOS and Linux), snippets, OCR, permissions, and how it compares to other clipboard managers."
 permalink: /faq/
 ---
 
@@ -16,6 +16,22 @@ permalink: /faq/
 <div class="faq-answer" markdown="1">
 
 Yes. Clipnest is free with no paid tier, no account, and no in-app purchases, and it's released under the [MIT license](https://github.com/AayushGour/clipnest/blob/main/LICENSE) — the full source is on [GitHub](https://github.com/AayushGour/clipnest) for anyone to read, fork, or modify. There's no trial, no feature gate, and nothing held back for a future paid version.
+
+</div>
+
+</details>
+
+<details class="faq-item" markdown="1">
+
+<summary markdown="1">
+
+## Is this the same as the other apps called ClipNest?
+
+</summary>
+
+<div class="faq-answer" markdown="1">
+
+No. This Clipnest is the free, open-source clipboard manager for macOS and Linux built by Aayush Gour, with its source at [github.com/AayushGour/clipnest](https://github.com/AayushGour/clipnest) and its home at this site. It is unrelated to the other products that share the name — including clipboard apps called ClipNest on the Mac App Store and the Microsoft Store, and several video and editing services. This Clipnest is not sold on any app store: it's downloaded only from its [GitHub releases](https://github.com/AayushGour/clipnest/releases/latest), and it's the only one of them that runs on Linux (Ubuntu with GNOME).
 
 </div>
 
@@ -63,7 +79,7 @@ No — that's the point of how Clipnest is signed. Every Clipnest release is sig
 
 <div class="faq-answer" markdown="1">
 
-Clipnest is **not** notarized with a paid Apple Developer ID, and if you download its `.dmg` straight from a browser, macOS's Gatekeeper will show the "unidentified developer" warning. The supported install path avoids this entirely: `scripts/install.sh` (the one-line curl command on the [Download page]({{ "/download/" | relative_url }})) downloads over `curl`, which never sets the quarantine flag that triggers that Gatekeeper check in the first place — instead, the script verifies the `.dmg` against a published SHA-256 checksum before ever mounting it. Every release is still signed, just with one long-lived, self-signed certificate rather than a Developer ID — enough to keep your Accessibility grant stable across updates (see above), but not enough on its own to satisfy notarization. Clipnest is v0.9.0 and about a month old; if you'd rather wait for a fully notarized, Gatekeeper-clean build, that's on the roadmap but not shipped yet.
+Clipnest is **not** notarized with a paid Apple Developer ID, and if you download its `.dmg` straight from a browser, macOS's Gatekeeper will show the "unidentified developer" warning. The supported install path avoids this entirely: `scripts/install.sh` (the one-line curl command on the [Download page]({{ "/download/" | relative_url }})) downloads over `curl`, which never sets the quarantine flag that triggers that Gatekeeper check in the first place — instead, the script verifies the `.dmg` against a published SHA-256 checksum before ever mounting it. Every release is still signed, just with one long-lived, self-signed certificate rather than a Developer ID — enough to keep your Accessibility grant stable across updates (see above), but not enough on its own to satisfy notarization. Clipnest is still a young project; if you'd rather wait for a fully notarized, Gatekeeper-clean build, that's on the roadmap but not shipped yet.
 
 </div>
 
@@ -121,13 +137,15 @@ Clipnest can optionally read the text inside a copied screenshot, entirely on yo
 
 <summary markdown="1">
 
-## What macOS versions does Clipnest support?
+## What systems does Clipnest support?
 
 </summary>
 
 <div class="faq-answer" markdown="1">
 
-macOS 14 (Sonoma) or later, on both Apple Silicon and Intel Macs.
+**Mac:** macOS 14 (Sonoma) or later, on both Apple Silicon and Intel Macs.
+
+**Linux:** Ubuntu 22.04 and 24.04 with GNOME, on X11 or Wayland, for amd64 and arm64. The Linux version is a native GTK 4 app built from the same Swift core, with the same history, search, pinned items, snippets with keyword expansion, on-device OCR and Settings. Install steps are in the [README](https://github.com/AayushGour/clipnest#linux-ubuntu).
 
 </div>
 
