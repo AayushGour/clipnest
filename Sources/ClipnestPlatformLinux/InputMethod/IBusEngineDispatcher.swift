@@ -254,8 +254,9 @@ public final class IBusEngineDispatcher {
   /// cannot influence `handle(_:message:)`'s reply even in principle,
   /// because its return type carries no information back.
   public var onProcessKeyEvent: (_ keyval: UInt32, _ keycode: UInt32, _ state: UInt32) -> Void
-  public var onSetSurroundingText:
+  public typealias SurroundingTextHandler =
     (_ text: IBusText, _ cursorPos: UInt32, _ anchorPos: UInt32) -> Void
+  public var onSetSurroundingText: SurroundingTextHandler
   public var onPropertyActivate: (_ name: String, _ state: UInt32) -> Void
   /// Returns the newly-created engine's object path (e.g. via
   /// `IBusPath.engine(id:)` with a freshly-allocated id) — this dispatcher
@@ -272,9 +273,7 @@ public final class IBusEngineDispatcher {
     onReset: @escaping () -> Void,
     onSetCapabilities: @escaping (IBusCapabilities) -> Void,
     onProcessKeyEvent: @escaping (_ keyval: UInt32, _ keycode: UInt32, _ state: UInt32) -> Void,
-    onSetSurroundingText: @escaping (
-      _ text: IBusText, _ cursorPos: UInt32, _ anchorPos: UInt32
-    ) -> Void,
+    onSetSurroundingText: @escaping SurroundingTextHandler,
     onPropertyActivate: @escaping (_ name: String, _ state: UInt32) -> Void,
     onCreateEngine: @escaping (_ engineName: String) -> String
   ) {
