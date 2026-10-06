@@ -66,6 +66,9 @@ cp "$here/README.md" "$stage/README.md"
 ( cd "$stage" && shasum -a 256 -- * > SHA256SUMS )
 
 mkdir -p "$out_dir"
+# Absolute: tar runs from inside "$work" below, so a relative out_dir (CI
+# passes plain `dist`) would otherwise resolve under the temp dir and fail.
+out_dir="$(cd "$out_dir" && pwd)"
 tarball="$out_dir/${stage_name}.tar.gz"
 
 if [ "$(uname -s)" = "Darwin" ]; then

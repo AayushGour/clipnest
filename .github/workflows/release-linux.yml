@@ -145,7 +145,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: debs-${{ matrix.series }}
-          path: dist/*
+          # Only what this job built: the checkout's dist/ also holds older
+          # checked-in tarballs, which must not ride along onto this release.
+          path: |
+            dist/*.deb
+            dist/*.sha256
           if-no-files-found: error
 
       - name: Publish to the PPA (signed source upload)
@@ -264,7 +268,10 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: tarball-${{ matrix.arch }}
-          path: dist/*.tar.gz
+          # Exact name, not dist/*.tar.gz: the checkout's dist/ also holds
+          # older checked-in tarballs, which must not ride along onto this
+          # release.
+          path: dist/clipnest-${{ env.VERSION }}-linux-${{ matrix.arch }}.tar.gz
           if-no-files-found: error
 
   publish:
