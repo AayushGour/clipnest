@@ -164,8 +164,18 @@ struct BlobStoreTests {
   func defaultBaseDirectoryWithNoOverrideResolvesToProductionPath() {
     let resolved = BlobStore.defaultBaseDirectory(environment: [:])
 
-    let expectedAppSupport =
-      FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+    #if os(macOS)
+      let expectedAppSupport =
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+    #else
+      // The injected environment is empty, so no XDG_DATA_HOME: the XDG
+      // fallback is the home directory + `.local/share`. Not compared
+      // against `.applicationSupportDirectory`, which reads the *real*
+      // process $HOME — GitHub's container jobs set HOME=/github/home while
+      // root's passwd home is /root, so the two disagree in CI only.
+      let expectedAppSupport: URL? = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(BlobStore.xdgDataHomeFallbackRelativePath, isDirectory: true)
+    #endif
     #expect(resolved == expectedAppSupport?.appendingPathComponent("Clipnest", isDirectory: true))
   }
 

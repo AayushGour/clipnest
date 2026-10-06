@@ -16,7 +16,7 @@
 
 ---
 
-**Website & docs → [aayushgour.github.io/clipnest](https://aayushgour.github.io/clipnest/)** · Clipnest by Aayush Gour — not affiliated with other apps named ClipNest.
+**Website & docs → [aayushgour.github.io/clipnest](https://aayushgour.github.io/clipnest/)** · [Changelog](CHANGELOG.md) · Clipnest by Aayush Gour — not affiliated with other apps named ClipNest.
 
 ## Why Clipnest?
 
