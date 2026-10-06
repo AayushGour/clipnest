@@ -1,0 +1,1279 @@
+// PickerViewModel.swift
+//
+// Plan task T11 (state half): owns the picker's live search state. Pulled
+// out of `PickerView` (rather than ad hoc `@State`) because async work needs
+// a stable owner that survives across SwiftUI view-body re-evaluations, not
+// a value recreated with the view.
+//
+// Plan task T16: `select(_:)` routes through `Paster` (real synthesized ⌘V
+// when Accessibility is granted, clipboard-only fallback otherwise) instead
+// of writing `NSPasteboard` directly — see that method's doc comment.
+//
+// Plan task T23: adds `activeTab` (History/Pinned/Snippets — see
+// `TabSwitcher.swift`) and the Snippets tab's own state + CRUD. `select(_:)`
+// and `pasteSnippet(_:)` both funnel through one shared `performPaste(_:
+// frontmostApp:)` so the paste + self-write-suppression logic exists in
+// exactly one place (T-PERF1: each caller captures `frontmostApp` and
+// dismisses itself, before calling in — `select(_:)` needs to sequence that
+// after an async content load, so it could no longer be done inside the
+// shared helper).
+//
+// T50/T51 — DB-virtualization (routed follow-up to D23/T47's flagged-but-
+// deliberately-not-fixed gap: "`ClipStore.fetchAll` has no result cap,
+// re-fetches the entire history table every ~0.4s poll"): this file used to
+// hold the ENTIRE history (`allItems: [ClipItem]`) in memory, re-fetched via
+// `ClipStore.fetchAll` on an ~0.4s `Timer`-backed poll loop, and
+// filtered/sorted it client-side via `SearchFilter`/`SnippetSearchFilter` on
+// every search-text/tab change. That's gone. `ClipStore.query(...)`/
+// `SnippetStore.query(...)` (T49/T50) now do ALL filtering + sorting +
+// pagination in the store; this view model holds only the current *window*
+// — `rows: [ClipItem]` (History/Pinned; the two tabs share one window/paging
+// state since only one is ever visible at a time and they're mutually
+// exclusive scopes) and `snippetRows: [Snippet]` (Snippets, its own window/
+// paging state) — plus infinite-scroll paging (`loadMoreIfNeeded()`, called
+// by `PickerView` when the last loaded row appears). `SearchFilter`/
+// `SnippetSearchFilter` (the in-memory filters this replaced) are deleted —
+// dead code once nothing calls them; `SearchHighlighter` is UNCHANGED and
+// still used for display (see `ItemRow`/`SnippetRow`/`HighlightedText`) —
+// highlighting the small *visible* window client-side is display work, not
+// querying, and stays cheap regardless of history size.
+//
+// No more periodic full-table poll: `willShow()` queries page 0 once, and
+// live captures push a re-query via `ClipboardMonitor.onCapture` (wired in
+// `AppEnvironment`, which owns both) — `handleNewCapture()` re-queries page 0
+// (a single bounded fetch, not a full-table scan) only when the picker is
+// actually visible AND History is the active tab (Pinned/Snippets can't
+// contain a freshly-captured, always-unpinned item; a hidden picker has
+// nothing to refresh for). Local mutations (pin/unpin, delete, snippet CRUD)
+// re-query the *current* window depth (offset 0 up to however many rows/
+// snippets are already loaded, not just one page) via `refreshRowsWindow`/
+// `refreshSnippetsWindow`, so scrolling further before a mutation doesn't
+// collapse the list back down to one page.
+//
+// Every query is now a real async `ClipStore`/`SnippetStore` call (a local
+// SwiftData fetch, not free but fast) instead of a synchronous in-memory
+// filter pass — so, unlike the old design, there is no path left that
+// updates `rows`/`snippetRows` with zero suspension points. Search-text
+// changes (typing) debounce `Self.searchDebounce` (400ms — widened from the
+// old in-memory filter's 120ms, since every keystroke's requery is now a
+// real store round-trip, not a pure CPU filter pass); tab switches and
+// kind-filter (chip) changes requery immediately, no debounce. A single
+// generation counter per pipeline (each pipeline's own `PagedQuery.generation`
+// — see `PagedQuery.swift`) guarantees latest-request-wins even when
+// multiple async triggers race
+// (e.g. a debounce resolving while a mutation-triggered window refresh is
+// also in flight) — whichever requery *started* most recently is the only
+// one ever allowed to land in `rows`/`snippetRows`.
+//
+// flush-before-commit (carried over from T47/D25's stale-commit-action fix,
+// re-implemented for the new async pipeline): Return/⌘P/⌘S/⌘⌫ must act on
+// the row matching what's currently in the search field, never a stale one
+// left over from before a still-pending debounced requery resolves.
+// `flushPendingRowsQuery()`/`flushPendingSnippetsQuery()` cancel whatever's
+// pending (sleeping or in flight) and run a fresh, *immediate* (no sleep)
+// query instead — bounding the wait to actual store latency, not whatever's
+// left of the 400ms debounce window. Every commit-action entry point now
+// kicks off an internal `Task` that awaits the flush before reading
+// `highlightedItem`/`highlightedSnippet` — the *external* method signatures
+// stay synchronous `Void`, so `PickerView`'s key handler is unchanged.
+//
+// Search-focus fix (tester critique, `search-input-critique.md`): the async
+// `await` this file's top doc comment describes (every query is now a real
+// store round-trip, no synchronous path left) created a first-responder
+// race in `PickerView`: writing `List(selection:)` *programmatically* makes
+// AppKit's `NSTableView` claim key-view status inside `PickerPanel`, and
+// since that write now lands *after* an `await` — on open, and again ~400ms
+// after every keystroke via the debounced reload — it landed *after* the
+// search field's own `.focused()` request instead of before it, silently
+// stealing keyboard focus and making the field untypeable. Fix: bump
+// `focusToken` (`PickerView` already re-asserts `isSearchFieldFocused` on
+// every change, see that property's doc comment) at the tail of
+// `applyRowsSelectionPolicy`/`applySnippetsSelectionPolicy` — i.e. every
+// time an async query settles and (re)writes `selectedItemID`/
+// `selectedSnippetID` — so the field's focus claim is always the *last* one
+// applied, regardless of `await` timing. Deliberately placed there rather
+// than at each call site: `applyRowsSelectionPolicy`/
+// `applySnippetsSelectionPolicy` are called *only* from the query pipeline
+// (first-page requery, post-mutation window refresh) — never from a manual
+// row click or arrow-key navigation, both of which write
+// `selectedItemID`/`selectedSnippetID` directly — so this can't re-steal
+// focus from a row the user explicitly clicked, and it can't touch
+// `SnippetEditorWindow`'s key status either (a separate `NSWindow`;
+// `focusToken` only ever re-asserts first responder *within* `PickerPanel`,
+// which has no effect while a different window is key).
+//
+// Search-debounce + loader fix (routed follow-up, 2026-08-11,
+// `search-debounce-loader-report.md`): even with the focus race above
+// fixed, the search field itself was still bound directly to this view
+// model's `query.text` (`PickerView`'s `TextField(..., text:
+// $viewModel.query.text)`), so *every keystroke* only became visible in the
+// field once the resulting async store round-trip resolved — the field
+// visibly lagged behind typing (up to the full 400ms debounce plus the
+// store's own latency). Fixed by decoupling the field from the query
+// entirely: `PickerView` now owns the field's live text as a local,
+// synchronous `@State` (zero async in the input path), and calls
+// `searchTextChanged(_:)` on every change. `query.text` is repurposed here
+// to mean "the text that was actually last queried" (renamed in spirit, not
+// in name, to avoid touching every call site that already correctly reads
+// it for match-highlighting/empty-state messaging — see `ItemRow`/
+// `SnippetRow`'s `query:` parameter and `PickerView`'s `emptyStateMessage`/
+// `snippetsEmptyState`, all unchanged) — it's now written in exactly one
+// place, in `onFirstPageQueryLanded(text:)` (called via `PagedQuery`'s
+// `onLanded` closure at the tail of a landed first-page query — see
+// `PagedQuery.runFirstPage`), once a query for that text has actually
+// landed. The live-but-not-yet-
+// queried text lives separately, in `currentSearchText`. `query`'s own
+// `didSet` now only reacts to a `kindFilter` change (a chip click) — a
+// text-only change reaches it exactly once, internally, when the above
+// sync happens, and is deliberately ignored there (seeing `oldValue !=
+// query` true but `kindFilter` unchanged) to avoid re-triggering a query
+// for text that was *already just queried*. `isSearching` is the new
+// loader signal: true from the instant a search-driving trigger fires
+// (keystroke, tab switch, kind-filter chip) until its result lands;
+// `PickerView`'s list area shows a `ProgressView()` in its place while
+// true, per this fix's target design — see `searchTextChanged(_:)`'s and
+// `runActiveTabQuery(policy:debounced:)`'s doc comments for the full
+// per-trigger breakdown, and `PickerView.content`'s doc comment for the
+// loader gate itself. Deliberately NOT flipped for live-capture requeries
+// (`handleNewCapture()`) or post-mutation window refreshes (`togglePin`/
+// `delete`/snippet CRUD, via `refreshRowsWindow`/`refreshSnippetsWindow`) —
+// out of scope for this fix (see the routing spec's item 7) and those
+// already have their own non-jarring `.softReconcile`/`.selectNear`
+// behavior that a loader flash would only interrupt.
+//
+// DRY follow-up (review #6): the Rows and Snippets query pipelines below
+// used to each carry their own copy of the debounce/cancel scheduling, the
+// generation-counter race guard, page-state bookkeeping, flush-before-
+// commit, and load-more bail logic — ~250 duplicated lines differing only
+// in element type, the actual store fetch call, the target `@Published`
+// array, and the selection-policy applier. That shared shape is now
+// `PagedQuery<Element>` (see `PagedQuery.swift`); `rowsQuery`/`snippetsQuery`
+// below are its two instances, and every method in the "Rows" and
+// "Snippets" sections is a thin wrapper supplying that pipeline's differing
+// bits as closures. `rows`/`snippetRows` (the actual `@Published` arrays
+// `PickerView` binds to) deliberately stay stored directly on this type
+// rather than moving into `PagedQuery` — see that file's top doc comment
+// for why.
+//
+// M-4 extraction (reviewer finding: this file carried too many
+// responsibilities): two genuinely self-contained clusters moved out to
+// `extension PickerViewModel` files in this same directory — pure code
+// motion, no behavior change. `PickerViewModel+Preview.swift` owns the
+// hover-driven preview-popover coordination (`hoverItem(_:)`,
+// `previewHoverChanged(_:)`, and their private resolve/scheduling
+// machinery). `PickerViewModel+Paste.swift` owns pasting
+// (`select(_:plainText:)`, `pasteContent(for:plainText:)`,
+// `pasteSnippet(_:)`, `performPaste(_:frontmostApp:)`). Everything else — the Rows/
+// Snippets query pipelines described above, selection-policy application,
+// keyboard-navigation/commit actions, and Snippets CRUD — stayed here: they
+// share `rowsQuery`/`snippetsQuery`/`clipStore`/`snippetStore` and each
+// other's private helpers so tightly (by design — see the "DRY follow-up"
+// comment above) that splitting them would mean widening most of this
+// file's private surface just to reconnect the pieces, trading one
+// responsibility-labeled file for several tightly-coupled ones. A few
+// stored properties the two extracted files need (`hoveredItemID`/
+// `isHoveringPreview`/`previewTask`/`previewTargetID`'s setter, `paster`/
+// `frontmostAppTracker`/`pasteboard`, `logger`) widened from `private` to
+// `internal` — Swift's `private` is file-scoped and extensions can't hold
+// stored instance properties, so this was the minimum required for the
+// split; each widened symbol's own doc comment explains why, and none of
+// them gained a new caller outside `PickerViewModel`/its extensions.
+
+// P5 (Phase 3, Linux port): `Combine` does not exist on Linux — this is the
+// one conditional import the extraction into `ClipnestViewModels` requires.
+// See `ClipnestObservation/ObservableObject.swift`'s doc comment for the
+// portable `ObservableObject`/`@Published` stand-in used on the `#else`
+// branch (API-shaped identically to Combine's). P10-D adds the one
+// exception to "nothing else in this file changes": a stored
+// `objectWillChange` property declared right on the class below, under the
+// same `#if !canImport(Combine)` gate — see that property's doc comment.
+// `import AppKit` is gone — this file's only AppKit use was the
+// literal `NSPasteboard.general` default below, now routed through
+// `PlatformDefaults.pasteboard` (see `init`), the same seam every other
+// platform-specific default in this codebase already resolves through.
+import ClipnestCore
+import Foundation
+
+#if canImport(Combine)
+  import Combine
+#else
+  import ClipnestObservation
+#endif
+
+/// Drives `PickerView`: live, DB-driven search over `ClipStore` history
+/// (History/Pinned tabs) and `SnippetStore` (Snippets tab), infinite-scroll
+/// paging over both, and select-to-paste for both. See this file's top doc
+/// comment for the T50/T51 windowed-query design.
+@MainActor
+public final class PickerViewModel: ObservableObject {
+  // P10-D (Linux port, GTK4 view layer): on Apple platforms this is
+  // Combine's real, compiler-synthesized `objectWillChange` (unaffected —
+  // the whole block below compiles out via `#if !canImport(Combine)`, byte-
+  // identical to before this task). On Linux, `ClipnestObservation`'s
+  // `ObservableObject` protocol deliberately provides NO default
+  // `objectWillChange` (see that file's doc comment, defect #2): the real
+  // Apple/Combine behavior this replicates is the compiler AUTOMATICALLY
+  // synthesizing a stored `let objectWillChange = ObservableObjectPublisher()`
+  // for any type with at least one `@Published` property that doesn't
+  // already declare its own — which Swift only does for its own `Combine`
+  // protocol, not a plain one this module defines. This property is that
+  // synthesis, done by hand: ONE stored instance, so every read returns the
+  // SAME publisher (the actual bug being fixed — a computed default handed
+  // back a fresh, never-subscribable instance per access), and
+  // `PickerWindow` (`Sources/ClipnestGTK/Window/PickerWindow.swift`)
+  // subscribes to it directly to replace its former 33ms poll loop.
+  #if !canImport(Combine)
+    public let objectWillChange = ObservableObjectPublisher()
+  #endif
+
+  // Not `private` (M-4 extraction — see `PickerViewModel+Paste.swift`'s top
+  // doc comment): `PickerViewModel+Paste.swift` also logs through this, and
+  // `private` is file-scoped in Swift. Still only ever used from within
+  // `PickerViewModel` and its extensions.
+  // P5 (Phase 3, Linux port): `os.Logger` doesn't exist on Linux — `import
+  // os` fails outright there. `ClipnestLogger` (`ClipnestCore/Logging.swift`)
+  // is the existing portable wrapper (wraps `os.Logger` on Apple platforms,
+  // prints on any other) already used elsewhere in this codebase for exactly
+  // this reason; every call site below drops `os.Logger`'s `privacy:
+  // .public` interpolation specifier (not supported by a plain `String`)
+  // since `ClipnestLogger.error(_:)` already treats its whole message as
+  // public — identical net effect, see that method's doc comment.
+  static let logger = ClipnestLogger(subsystem: ClipnestLog.subsystem, category: "PickerViewModel")
+
+  /// How many rows/snippets a single `query(...)` call fetches — both the
+  /// initial page and every subsequent `loadMoreIfNeeded()` page. Large
+  /// enough that a typical picker viewport rarely needs a second page,
+  /// small enough that even a slow disk read stays well under a frame;
+  /// picked as a middle value of T51's ~50–100 target range.
+  private static let pageSize = 75
+
+  /// Debounce window for search-text-driven requeries (typing) only — tab
+  /// switches and kind-filter (chip) changes requery immediately. See this
+  /// file's top doc comment for why this widened from the old in-memory
+  /// filter's 120ms (T47/D23).
+  private static let searchDebounce = Duration.milliseconds(400)
+
+  /// The *applied* query — `text` is the text a store query has actually
+  /// run for (only ever written by this file, in
+  /// `onFirstPageQueryLanded(text:)`, once that query's result has landed —
+  /// see that method's doc comment); `kindFilter` is still the live, directly-bound chip
+  /// selection (`PickerView`'s `TypeFilterChips(selection:
+  /// $viewModel.query.kindFilter)`). See this file's top "Search-debounce +
+  /// loader fix" doc comment for why `text` and the *live* field contents
+  /// (`currentSearchText`) are no longer the same thing. `ItemRow`/
+  /// `SnippetRow`'s highlighting and `PickerView`'s empty-state message both
+  /// read `query.text` — deliberately, so what's highlighted/reported always
+  /// matches what's actually shown, never a keystroke still in flight.
+  @Published public var query = SearchQuery() {
+    didSet {
+      guard oldValue != query else { return }
+      guard oldValue.kindFilter != query.kindFilter else {
+        // A text-only change reaches here in exactly one situation: this
+        // file itself just synced `query.text` to the text a query landed
+        // for (see this property's doc comment) — never from an external
+        // write, since `PickerView`'s search field binds a local `@State`,
+        // not `query.text`, directly. Re-running a query for text that was
+        // *just* queried would be redundant, so this is a deliberate no-op.
+        return
+      }
+      // A kind-filter change (chip click) requeries immediately against
+      // whatever's currently live in the search field — same trigger shape
+      // as a tab switch, see `activeTab`'s `didSet` below.
+      runActiveTabQuery(policy: .hardReset, debounced: false)
+    }
+  }
+  /// Which of the three tabs is currently showing (T23). Switching tabs
+  /// hard-resets selection/scroll/paging the same way a search-text change
+  /// does — the previous tab's window has no meaning once a completely
+  /// different list is on screen. Deliberately does **not** reset `query`
+  /// on tab switch: a search stays active across tabs unless the picker
+  /// itself is reopened (`willShow()` resets it).
+  @Published public var activeTab: PickerTab = .history {
+    didSet {
+      guard oldValue != activeTab else { return }
+      runActiveTabQuery(policy: .hardReset, debounced: false)
+      // Switching tabs clears any open popover (the pointer is over the tab
+      // bar, not a row). Clearing the hover state and re-resolving closes a
+      // stale History/Pinned popover on the way to Snippets, and leaves the
+      // popover correctly closed until the pointer hovers a row again. See
+      // `PickerViewModel+Preview.swift` (M-4 extraction).
+      resetHoverForTabSwitch()
+    }
+  }
+
+  /// The current *window* of History/Pinned rows loaded from `ClipStore` —
+  /// NOT the whole table (see this file's top doc comment). History/Pinned
+  /// share this one array + its paging state (`rowsQuery.page`) since only
+  /// one of the two is ever visible at a time.
+  @Published public private(set) var rows: [ClipItem] = []
+  @Published public var selectedItemID: ClipItem.ID?
+  /// The item whose preview should currently show (hover takes priority over
+  /// keyboard selection). Driven by `hoverItem(_:)` / selection changes with
+  /// the debounce delays below. Nil = no preview. Not `private(set)` (M-4
+  /// extraction — see `PickerViewModel+Preview.swift`'s top doc comment):
+  /// its mutator, `setPreviewTarget(_:)`, now lives in that file, and
+  /// `private` is file-scoped in Swift.
+  @Published public var previewTargetID: ClipItem.ID?
+  /// The current window of Snippets rows loaded from `SnippetStore`.
+  @Published public private(set) var snippetRows: [Snippet] = []
+  @Published public var selectedSnippetID: Snippet.ID?
+  /// Bumped on every `willShow()` (the panel opening) AND at the tail of
+  /// `applyRowsSelectionPolicy`/`applySnippetsSelectionPolicy` (every async
+  /// query-pipeline settlement — first-page requery, post-mutation window
+  /// refresh) — see this file's top "Search-focus fix" doc comment.
+  /// `PickerView` observes this to re-assert the search field's first
+  /// responder status each time it changes, defeating the race where the
+  /// `List`'s own programmatic selection write would otherwise claim
+  /// first-responder status *after* the field's request and silently steal
+  /// keyboard focus.
+  @Published public private(set) var focusToken = 0
+  /// Bumped whenever the visible window should be presented fresh from the
+  /// top (a `.hardReset`-resolved query) — `PickerView` observes this to
+  /// scroll the current tab's list back to the top.
+  @Published public private(set) var scrollToTopToken = 0
+  /// Bumped exactly once per `willShow()` (the picker opening) — separate
+  /// from `focusToken`, which *also* bumps on every query settlement (far
+  /// more often than just on open). `PickerView` observes this one
+  /// specifically to reset its local `searchText` `@State` back to empty
+  /// each time the picker (re)opens, mirroring the reset `query =
+  /// SearchQuery()` already does for the applied query — reusing
+  /// `focusToken` for this would wipe the user's in-progress keystroke
+  /// every time an unrelated query (e.g. the debounce that just fired)
+  /// happened to settle.
+  @Published public private(set) var searchResetToken = 0
+  /// True while a search-driving trigger (typing, tab switch, or a
+  /// kind-filter chip click) has a query in flight — from the instant the
+  /// trigger fires until its result lands in `rows`/`snippetRows`.
+  /// `PickerView` shows a loader in place of the list while this is `true`
+  /// — see this file's top "Search-debounce + loader fix" doc comment.
+  /// Deliberately not touched by live-capture requeries or post-mutation
+  /// window refreshes; see that doc comment for why.
+  @Published public private(set) var isSearching = false
+  /// The text currently live in `PickerView`'s search field — i.e. the
+  /// user's actual, up-to-the-keystroke input, synchronously mirrored here
+  /// by `searchTextChanged(_:)` on every change. Decoupled from
+  /// `query.text` (which only updates once a query for that text has
+  /// actually run) so that tab switches, kind-filter changes, and the
+  /// flush-before-commit path (`flushPendingRowsQuery`/
+  /// `flushPendingSnippetsQuery`) can always query against what's *actually
+  /// in the field right now*, never a stale already-applied value.
+  private var currentSearchText = ""
+
+  /// Set by the composition root once the panel exists (see
+  /// `AppEnvironment`) — breaks the construction-order cycle where the
+  /// panel's own content needs a way to dismiss the panel that hosts it.
+  public var dismiss: () -> Void = {}
+
+  /// Set by the composition root (see `AppEnvironment`) to
+  /// `ClipboardMonitor.ignore(changeCount:)`. Called immediately after a
+  /// paste writes to the pasteboard (fix round 1, bug #1) so the running
+  /// monitor's next poll doesn't recapture Clipnest's own write as a new
+  /// external copy. Defaults to a no-op so this type stays usable without a
+  /// monitor in previews/tests that don't care about suppression.
+  public var suppressOwnPasteboardWrite: (Int) -> Void = { _ in }
+
+  /// Set by the composition root (see `AppEnvironment`) to show
+  /// `SnippetEditorWindow` in the given mode. Defaults to a no-op so this
+  /// type stays usable in previews without the composition root's window.
+  public var presentSnippetEditor: (SnippetFormMode) -> Void = { _ in }
+
+  /// Set by the composition root (see `AppEnvironment`) to
+  /// `ItemPreviewController.update(item:blobStore:besideAnchor:)`. Called by
+  /// `PickerView` on every `previewTargetID` change, with the target
+  /// `ClipItem` already resolved from `rows` (`nil` to hide the preview).
+  /// Kept as an injected closure — same pattern as `dismiss`/
+  /// `presentSnippetEditor`/`suppressOwnPasteboardWrite` — so this view
+  /// model (and `PickerView`) stay free of any direct `NSPanel`/AppKit
+  /// dependency; defaults to a no-op so this type stays usable in previews
+  /// without the composition root's controller.
+  public var updatePreview: (ClipItem?) -> Void = { _ in }
+
+  /// Set by the composition root (see `AppEnvironment`) to
+  /// `AppUpdater.currentVersion`. Shown by `PickerView.shortcutHintBar` as
+  /// `v<appVersion>`. Defaults to empty so this type stays usable in
+  /// previews/tests without the composition root.
+  public var appVersion: String = ""
+
+  /// Set by the composition root (see `AppEnvironment`) to
+  /// `AppUpdater.runUpdate`. Called by `PickerView` once the user confirms
+  /// the update `.confirmationDialog` triggered by tapping the version
+  /// label. Kept as an injected closure — same pattern as `dismiss`/
+  /// `presentSnippetEditor`/`updatePreview` — so this view model (and
+  /// `PickerView`) never touch `NSWorkspace`/AppKit directly; defaults to a
+  /// no-op so this type stays usable in previews/tests without the
+  /// composition root.
+  public var requestAppUpdate: () -> Void = {}
+
+  /// Set by the composition root (see `AppEnvironment`) — T-SET5. `PickerView`
+  /// is the only place in this call chain that can read
+  /// `@Environment(\.openSettings)` (an environment value, unreachable from
+  /// this plain `ObservableObject`), so it wires this closure to `{
+  /// openSettings(); SettingsFocusCoordinator.focusAfterOpening() }` — the
+  /// exact same two-step sequence `MenuBarContent`'s "Settings…" item uses,
+  /// not a second, independently-drifting copy (coding-standards.md's DRY
+  /// rule). Called by `openSettingsFromPicker()`, below. Defaults to a no-op
+  /// so this type stays usable in previews/tests without a live SwiftUI
+  /// environment.
+  public var openSettings: () -> Void = {}
+
+  /// Set by the composition root (see `AppEnvironment`) from
+  /// `UpdateChecker.onStateChanged` — whether the background 24h check
+  /// (approved feature) currently believes a newer release exists. Drives
+  /// the small dot indicator next to the version label in
+  /// `PickerView.shortcutHintBar`. Purely informational: this never
+  /// triggers a download itself — `requestAppUpdate()` above (an explicit
+  /// user click) is still the only path that does. Defaults to `false` so
+  /// this type stays usable in previews/tests without the composition
+  /// root's checker.
+  @Published public var isUpdateAvailable: Bool = false
+
+  /// The version `isUpdateAvailable` refers to, set alongside it from the
+  /// same `UpdateChecker.onStateChanged` callback. Deliberately plain, not
+  /// `@Published`: `PickerView` only ever reads it in the same view update
+  /// as `isUpdateAvailable` (which already triggers the redraw), so a
+  /// second publish would be redundant. `nil` whenever `isUpdateAvailable`
+  /// is `false`.
+  public var latestVersion: String?
+
+  private let clipStore: any ClipStore
+  private let snippetStore: any SnippetStore
+  /// T-RT2: subscription to the composition root's `NotifyingClipStore
+  /// .changes` (passed in as `storeChanges:` — `nil` in every existing
+  /// test/preview call site, so this is fully additive/opt-in for anyone
+  /// not wired to it). Held only to keep the subscription alive for this
+  /// view model's lifetime — cancels itself automatically on `deinit` (see
+  /// `ClipStoreChangeSubscription`'s doc comment), same shape as
+  /// `ClipnestObservation.ObservationCancellable`. Reacts ONLY to changes
+  /// this view model did NOT already cause itself: `.clearedAll` (Settings'
+  /// "Clear All History…") and `.retentionApplied` (background retention).
+  /// `.inserted`/`.updated`/`.deleted` are deliberately ignored here — a
+  /// live capture already reaches this type via `ClipboardMonitor
+  /// .onCapture` -> `handleNewCapture()`, and this view model's own
+  /// `togglePin(_:)`/`delete(_:)` already re-query themselves right after
+  /// their own `clipStore` call — reacting to those same events a second
+  /// time here would just be a redundant, generation-counter-discarded
+  /// requery, not a correctness fix. See `handleExternalStoreChange(_:)`.
+  private var storeChangesSubscription: ClipStoreChangeSubscription?
+  /// Not `private` (M-4 extraction — see `PickerViewModel+Paste.swift`'s top
+  /// doc comment): `performPaste(_:frontmostApp:)` there reads `changeCount`
+  /// off this. Still only ever used from within `PickerViewModel`/its
+  /// extensions.
+  let pasteboard: any PasteboardWriting
+  /// Used by `ItemRow` to load thumbnail bytes for `.image` rows (via
+  /// `BlobStore.read(blobPath:)`) — the actual thumbnail-loading logic lives
+  /// there, not in this view model. Defaults to a real `BlobStore` pointed
+  /// at the production directory so this type stays usable in previews
+  /// without the composition root's shared instance.
+  public let blobStore: BlobStore
+  /// T16: performs the real paste (pasteboard write + synthesized ⌘V when
+  /// Accessibility is granted, clipboard-only otherwise). Not `private` (M-4
+  /// extraction — see `PickerViewModel+Paste.swift`'s top doc comment):
+  /// `performPaste(_:frontmostApp:)` there needs it. Still only ever used
+  /// from within `PickerViewModel`/its extensions.
+  let paster: Paster
+  /// T16: supplies the app that was frontmost right before the picker
+  /// opened, recorded by `AppEnvironment.showPicker()`. Not `private` — same
+  /// reason as `paster`'s doc comment above.
+  let frontmostAppTracker: FrontmostAppTracker
+
+  /// True between `willShow()` and `didHide()` — gates whether a live
+  /// capture (`handleNewCapture()`) bothers requerying at all; nothing
+  /// re-queries a hidden picker.
+  private var isVisible = false
+
+  /// The row currently under the pointer, reported by `ItemRow.onHover` via
+  /// `hoverItem(_:)` — `nil` when the pointer isn't over any row. Not
+  /// `private` (M-4 extraction — see `PickerViewModel+Preview.swift`'s top
+  /// doc comment): all the logic that reads/writes this now lives there,
+  /// and `private` is file-scoped in Swift, so this stored property (which
+  /// must stay declared here — extensions can't hold stored instance
+  /// properties) needs at least `internal` access to reach it.
+  var hoveredItemID: ClipItem.ID?
+  /// Whether the pointer is currently over the preview popover itself
+  /// (reported by `ItemPreview.onHover` via `previewHoverChanged(_:)`). While
+  /// `true` the popover stays open so it can be hovered and scrolled; it
+  /// closes only once BOTH this and `hoveredItemID` are clear. Not
+  /// `private` — see `hoveredItemID`'s doc comment above for why.
+  var isHoveringPreview = false
+  /// The in-flight/pending debounce that will next re-resolve the popover —
+  /// cancelled and replaced by every `scheduleResolve(delay:)`, so only the
+  /// most recent hover change lands. Cancelled in `didHide()` (via
+  /// `cancelPreviewAndHide()` — see `PickerViewModel+Preview.swift`). Not
+  /// `private` — see `hoveredItemID`'s doc comment above for why.
+  var previewTask: Task<Void, Never>?
+
+  /// The Rows (History/Pinned) and Snippets paged-query pipelines — see this
+  /// file's top "DRY follow-up" doc comment and `PagedQuery.swift`. Each
+  /// owns its own paging/generation/task-lifecycle state; the observed item
+  /// arrays (`rows`/`snippetRows`) stay on this type (see below).
+  private let rowsQuery = PagedQuery<ClipItem>(pageSize: PickerViewModel.pageSize)
+  private let snippetsQuery = PagedQuery<Snippet>(pageSize: PickerViewModel.pageSize)
+
+  /// The three ways a completed query's result settles selection — mirrors
+  /// what the pre-T50 design's `SelectionPolicy` did against an in-memory
+  /// filter result; unchanged in spirit, just now applied to a store query
+  /// result instead. Internal (not `private`) since `PagedQuery` — a
+  /// separate type — takes this as a parameter type; still module-private in
+  /// effect, only referenced from this file and `PagedQuery.swift`.
+  enum SelectionPolicy {
+    /// Selects the new first result unconditionally — search-text change,
+    /// tab switch, a fresh `willShow()`, or a flush.
+    case hardReset
+    /// Keeps the current selection if it's still visible in the new
+    /// result set, falling back to the first result otherwise — a live
+    /// capture landing, or a post-mutation window refresh, so an
+    /// unrelated background change doesn't yank the user's current
+    /// selection.
+    case softReconcile
+    /// Selects whichever row now sits at `previousIndex` (clamped to the
+    /// new, possibly-shorter result set) — post-delete, so removing a row
+    /// doesn't relocate the highlight to the top of a long list. `nil`
+    /// falls back to `.softReconcile`'s policy.
+    case selectNear(previousIndex: Int?)
+  }
+
+  /// - Parameter storeChanges: T-RT2 — the SAME `NotifyingClipStore.changes`
+  ///   broadcaster wrapping `clipStore`, if the composition root wired one
+  ///   up (`AppEnvironment`/`LinuxAppEnvironment` always do; test/preview
+  ///   call sites that pass a bare `InMemoryClipStore` typically don't).
+  ///   `nil` (the default) makes this view model behave exactly as before
+  ///   this task — no subscription, no behavior change — so no existing
+  ///   call site needs to change unless it wants the fix. See
+  ///   `storeChangesSubscription`'s doc comment for what this reacts to.
+  public init(
+    clipStore: any ClipStore,
+    snippetStore: any SnippetStore,
+    pasteboard: any PasteboardWriting = PlatformDefaults.pasteboard,
+    blobStore: BlobStore = BlobStore(baseDirectory: BlobStore.defaultBaseDirectory()),
+    paster: Paster = Paster(),
+    frontmostAppTracker: FrontmostAppTracker = FrontmostAppTracker(),
+    storeChanges: ClipStoreChangeBroadcaster? = nil
+  ) {
+    self.clipStore = clipStore
+    self.snippetStore = snippetStore
+    self.pasteboard = pasteboard
+    self.blobStore = blobStore
+    self.paster = paster
+    self.frontmostAppTracker = frontmostAppTracker
+    storeChangesSubscription = storeChanges?.subscribe { [weak self] change in
+      Task { @MainActor in self?.handleExternalStoreChange(change) }
+    }
+  }
+
+  /// T-RT2: reacts to a `ClipStoreChange` this view model did not itself
+  /// cause — see `storeChangesSubscription`'s doc comment for exactly which
+  /// cases reach here and why the rest are ignored. Both cases re-query the
+  /// Rows pipeline (History/Pinned — the only pipeline `ClipStore` mutations
+  /// can affect; Snippets has its own separate `SnippetStore`), and both are
+  /// gated on `isVisible`, mirroring `handleNewCapture()`'s "nothing
+  /// re-queries a hidden picker" rule — a hidden picker gets a fresh
+  /// `willShow()` requery the next time it's opened regardless.
+  private func handleExternalStoreChange(_ change: ClipStoreChange) {
+    guard isVisible else { return }
+    switch change {
+    case .clearedAll:
+      // A hard invalidation — every item is gone, so there is no
+      // "current selection" worth preserving. Mirrors `willShow()`'s own
+      // policy for a fresh, from-scratch load.
+      scheduleRowsQuery(.hardReset, text: currentSearchText, debounced: false)
+    case .retentionApplied:
+      // Only ever trims OLD unpinned items, typically off the currently
+      // visible window — reconcile rather than hard-reset so an unrelated
+      // background pass never yanks the user's current selection.
+      scheduleRowsQuery(.softReconcile, text: currentSearchText, debounced: false)
+    case .inserted, .updated, .deleted:
+      break
+    }
+  }
+
+  /// Called by `PickerPanel.onWillShow`, right before the panel is ordered
+  /// to the front. Resets the search query (which also requeries page 0 via
+  /// `query`'s `didSet` — superseded a line later by the explicit,
+  /// immediate requery below; harmless, see that `didSet`'s doc comment),
+  /// resets the live search text (`currentSearchText` and, via
+  /// `searchResetToken`, `PickerView`'s local `searchText` `@State`) back to
+  /// empty, starts live-capture visibility, requeries both pipelines' page 0
+  /// fresh, and requests search-field focus. Deliberately does not reset
+  /// `activeTab` — reopening the picker keeps whichever tab was last
+  /// active, matching ordinary tabbed-UI expectations.
+  public func willShow() {
+    isVisible = true
+    currentSearchText = ""
+    isSearching = false
+    query = SearchQuery()
+    focusToken += 1
+    searchResetToken += 1
+    scheduleRowsQuery(.hardReset, text: currentSearchText, debounced: false)
+    scheduleSnippetsQuery(.hardReset, text: currentSearchText, debounced: false)
+  }
+
+  /// T23 fix round: called by the composition root once
+  /// `SnippetEditorWindow` closes and `PickerPanel` regains key status —
+  /// re-focuses the search field the same way opening the picker does. The
+  /// only external-facing re-focus trigger; the internal query-pipeline
+  /// re-focus (see `reassertSearchFieldFocus()`) is separate but shares the
+  /// same `focusToken` bump.
+  public func refocusSearchField() {
+    reassertSearchFieldFocus()
+  }
+
+  /// Called by `PickerPanel.onDidHide`. Stops live-capture requeries (see
+  /// `isVisible`) and cancels every in-flight/pending query — a hidden
+  /// picker has no reason to keep querying the store or mutating
+  /// `@Published` state.
+  public func didHide() {
+    isVisible = false
+    rowsQuery.cancelAll()
+    snippetsQuery.cancelAll()
+    cancelPreviewAndHide()
+  }
+
+  /// Wired by `AppEnvironment` to `ClipboardMonitor.onCapture` (T51): a new
+  /// external copy just landed in the store. Only bothers requerying if the
+  /// picker is actually visible and History is the active tab — see this
+  /// file's top doc comment. Requeries page 0 only (`scheduleRowsQuery`,
+  /// never `loadMoreRows`) — a single bounded fetch, not the removed
+  /// full-table poll. Uses `.softReconcile` (not `.hardReset`) so a
+  /// background capture doesn't yank the user's current selection, matching
+  /// the old poll design's same choice for its non-initial refreshes.
+  /// Queries against `currentSearchText` (the live field contents) rather
+  /// than the possibly-stale `query.text`, so a capture landing while a
+  /// debounced search is still pending resolves against what the user
+  /// actually typed, not an older applied value — see this file's top
+  /// "Search-debounce + loader fix" doc comment. Deliberately does not flip
+  /// `isSearching` (out of scope for that fix, see `isSearching`'s doc
+  /// comment) — if a debounced search happened to be in flight, this
+  /// resolves it early (same generation-counter-guarded outcome either
+  /// way), otherwise it's a silent, loader-free background refresh exactly
+  /// as before.
+  public func handleNewCapture() {
+    guard isVisible, activeTab == .history else { return }
+    scheduleRowsQuery(.softReconcile, text: currentSearchText, debounced: false)
+  }
+
+  // MARK: - Search input (decoupled from the query — see this file's top
+  // "Search-debounce + loader fix" doc comment)
+
+  /// Called by `PickerView`'s `.onChange(of: searchText)` on every keystroke
+  /// in the search field — which is now a pure local `@State` the field
+  /// binds directly, with zero async in the input path (see this file's top
+  /// doc comment). This method is the *only* place typing reaches the query
+  /// pipeline: it records the live text, turns the loader on immediately,
+  /// and (re)starts a fresh `Self.searchDebounce` window via
+  /// `runActiveTabQuery`'s `debounced: true` — only once the user pauses
+  /// that long does a store query actually run. The field itself never
+  /// awaits any of this; it already shows the keystroke by the time this
+  /// runs.
+  ///
+  /// Guards on `text != currentSearchText` first: `willShow()` resets
+  /// `currentSearchText` directly (synchronously, before it bumps
+  /// `searchResetToken`), but `PickerView`'s own `searchText = ""` reset —
+  /// driven by observing that same token — lands one SwiftUI update cycle
+  /// later and, if the field had text before the picker was last hidden,
+  /// *also* fires this method via `.onChange(of: searchText)`. Without this
+  /// guard that redundant call would flip `isSearching` back on and restart
+  /// a pointless 400ms debounce for text that's already applied, flashing
+  /// the loader on every reopen-after-a-search. Also simply correct in
+  /// general: a no-op text "change" has nothing to debounce or requery.
+  public func searchTextChanged(_ text: String) {
+    guard text != currentSearchText else { return }
+    currentSearchText = text
+    runActiveTabQuery(policy: .hardReset, debounced: true)
+  }
+
+  /// Shared dispatch for every trigger that should (re)query the *currently
+  /// active* tab's pipeline against `currentSearchText`: typing
+  /// (`searchTextChanged(_:)`, `debounced: true`), a tab switch, and a
+  /// kind-filter chip click (the latter two `debounced: false` — see
+  /// `activeTab`'s and `query`'s `didSet`s). Always flips `isSearching` on
+  /// immediately; `onFirstPageQueryLanded(text:)` flips it back off once the
+  /// result actually lands (called via `PagedQuery`'s `onLanded` closure —
+  /// see `PagedQuery.runFirstPage`), so the loader shows for
+  /// the debounce wait (typing) or just the brief real store round-trip
+  /// (tab switch/kind-filter, which skip the debounce sleep but still incur
+  /// a real `await`).
+  ///
+  /// Also cancels whichever pipeline's task ISN'T the now-active tab's:
+  /// `scheduleRowsQuery`/`scheduleSnippetsQuery` only ever cancel their
+  /// *own* task, so a debounce left pending on a tab the user has since
+  /// switched away from would otherwise keep sleeping and, once it woke,
+  /// run to completion and unconditionally clear `isSearching` — which
+  /// could land in the middle of (and prematurely hide the loader for) a
+  /// genuinely in-flight query on the tab actually on screen now. Since
+  /// switching tabs already treats "the previous tab's window" as
+  /// meaningless (see `activeTab`'s doc comment), abandoning its pending
+  /// query too is the same call, just extended to the search-debounce case.
+  private func runActiveTabQuery(policy: SelectionPolicy, debounced: Bool) {
+    isSearching = true
+    switch activeTab {
+    case .history, .pinned:
+      snippetsQuery.cancelPendingQuery()
+      scheduleRowsQuery(policy, text: currentSearchText, debounced: debounced)
+    case .snippets:
+      rowsQuery.cancelPendingQuery()
+      scheduleSnippetsQuery(policy, text: currentSearchText, debounced: debounced)
+    }
+  }
+
+  // MARK: - Rows (History/Pinned) query pipeline
+  //
+  // Every method below is a thin `rowsQuery` (`PagedQuery<ClipItem>`)
+  // wrapper — see `PagedQuery.swift` for the shared debounce/generation/
+  // load-more mechanics these delegate to. `kind`/`scope` are captured into
+  // local `let`s *here*, synchronously, before handing them to `rowsQuery` —
+  // i.e. snapshotted at schedule time, per this file's top "Search-debounce
+  // + loader fix" doc comment, never re-read live once a debounced/in-
+  // flight fetch actually runs. `fetchRowsPage` is the one place the actual
+  // `ClipStore.query` call lives, reused by all four methods that need it.
+
+  /// The one place `ClipStore.query(...)`'s throws are absorbed to `[]` —
+  /// shared by every Rows pipeline method that fetches a page.
+  private func fetchRowsPage(
+    text: String, kind: ItemKind?, scope: ClipScope, offset: Int, limit: Int
+  ) async -> [ClipItem] {
+    (try? await clipStore.query(text: text, kind: kind, scope: scope, offset: offset, limit: limit))
+      ?? []
+  }
+
+  /// Shared by both pipelines' first-page landings — syncs the *applied*
+  /// query text to what was actually just queried (see `query`'s doc
+  /// comment) and clears the loader now that a result has landed.
+  private func onFirstPageQueryLanded(text: String) {
+    query.text = text
+    isSearching = false
+  }
+
+  /// Cancels any pending/in-flight first-page rows requery and starts a
+  /// fresh one — either after `Self.searchDebounce` (typing) or immediately
+  /// (every other trigger). See `PagedQuery.scheduleFirstPage`'s doc
+  /// comment.
+  private func scheduleRowsQuery(_ policy: SelectionPolicy, text: String, debounced: Bool) {
+    let kind = query.kindFilter
+    let scope: ClipScope = activeTab == .pinned ? .pinned : .history
+    rowsQuery.scheduleFirstPage(
+      text: text, debounced: debounced, debounce: Self.searchDebounce, policy: policy,
+      fetch: { [weak self] in
+        await self?.fetchRowsPage(
+          text: text, kind: kind, scope: scope, offset: 0, limit: Self.pageSize)
+          ?? []
+      },
+      setItems: { [weak self] in self?.rows = $0 },
+      applySelection: { [weak self] policy, result in
+        self?.applyRowsSelectionPolicy(policy, result: result)
+      },
+      onLanded: { [weak self] text in self?.onFirstPageQueryLanded(text: text) }
+    )
+  }
+
+  /// "Flushes" a pending rows requery before a commit action reads
+  /// `highlightedItem` — cancels whatever's pending (sleeping or already
+  /// in flight) and runs a fresh, immediate query instead of waiting out
+  /// whatever's left of the debounce window. See this file's top doc
+  /// comment. Queries against `currentSearchText` (the live field
+  /// contents), not the possibly-still-stale `query.text`, so a commit
+  /// action fired right after typing always acts on the row matching what's
+  /// actually in the search field. See `PagedQuery.flushPending`'s doc
+  /// comment for the no-op-when-nothing-pending behavior.
+  private func flushPendingRowsQuery() async {
+    let text = currentSearchText
+    let kind = query.kindFilter
+    let scope: ClipScope = activeTab == .pinned ? .pinned : .history
+    await rowsQuery.flushPending(
+      text: text,
+      fetch: { [weak self] in
+        await self?.fetchRowsPage(
+          text: text, kind: kind, scope: scope, offset: 0, limit: Self.pageSize)
+          ?? []
+      },
+      setItems: { [weak self] in self?.rows = $0 },
+      applySelection: { [weak self] policy, result in
+        self?.applyRowsSelectionPolicy(policy, result: result)
+      },
+      onLanded: { [weak self] text in self?.onFirstPageQueryLanded(text: text) }
+    )
+  }
+
+  /// Re-queries `rows` from offset 0 up through the currently-loaded window
+  /// size (at least one page) — used after a local mutation (pin/unpin,
+  /// delete) so the visible list reflects the change without collapsing
+  /// back to a single page if the user had scrolled further.
+  private func refreshRowsWindow(policy: SelectionPolicy) async {
+    let text = query.text
+    let kind = query.kindFilter
+    let scope: ClipScope = activeTab == .pinned ? .pinned : .history
+    await rowsQuery.refreshWindow(
+      policy: policy, currentCount: rows.count,
+      fetch: { [weak self] limit in
+        await self?.fetchRowsPage(text: text, kind: kind, scope: scope, offset: 0, limit: limit)
+          ?? []
+      },
+      setItems: { [weak self] in self?.rows = $0 },
+      applySelection: { [weak self] policy, result in
+        self?.applyRowsSelectionPolicy(policy, result: result)
+      }
+    )
+  }
+
+  private func loadMoreRows() {
+    let text = query.text
+    let kind = query.kindFilter
+    let scope: ClipScope = activeTab == .pinned ? .pinned : .history
+    rowsQuery.loadMore(
+      fetch: { [weak self] offset, limit in
+        await self?.fetchRowsPage(
+          text: text, kind: kind, scope: scope, offset: offset, limit: limit)
+          ?? []
+      },
+      appendItems: { [weak self] in self?.rows.append(contentsOf: $0) }
+    )
+  }
+
+  // MARK: - Snippets query pipeline (mirrors Rows above)
+
+  /// The one place `SnippetStore.query(...)`'s throws are absorbed to `[]` —
+  /// see `fetchRowsPage`'s matching doc comment.
+  private func fetchSnippetsPage(text: String, offset: Int, limit: Int) async -> [Snippet] {
+    (try? await snippetStore.query(text: text, offset: offset, limit: limit)) ?? []
+  }
+
+  private func scheduleSnippetsQuery(_ policy: SelectionPolicy, text: String, debounced: Bool) {
+    snippetsQuery.scheduleFirstPage(
+      text: text, debounced: debounced, debounce: Self.searchDebounce, policy: policy,
+      fetch: { [weak self] in
+        await self?.fetchSnippetsPage(text: text, offset: 0, limit: Self.pageSize) ?? []
+      },
+      setItems: { [weak self] in self?.snippetRows = $0 },
+      applySelection: { [weak self] policy, result in
+        self?.applySnippetsSelectionPolicy(policy, result: result)
+      },
+      onLanded: { [weak self] text in self?.onFirstPageQueryLanded(text: text) }
+    )
+  }
+
+  /// See `flushPendingRowsQuery`'s doc comment — mirrors it for the
+  /// Snippets pipeline, including querying against the live
+  /// `currentSearchText` rather than the possibly-stale `query.text`.
+  private func flushPendingSnippetsQuery() async {
+    let text = currentSearchText
+    await snippetsQuery.flushPending(
+      text: text,
+      fetch: { [weak self] in
+        await self?.fetchSnippetsPage(text: text, offset: 0, limit: Self.pageSize) ?? []
+      },
+      setItems: { [weak self] in self?.snippetRows = $0 },
+      applySelection: { [weak self] policy, result in
+        self?.applySnippetsSelectionPolicy(policy, result: result)
+      },
+      onLanded: { [weak self] text in self?.onFirstPageQueryLanded(text: text) }
+    )
+  }
+
+  private func refreshSnippetsWindow(policy: SelectionPolicy) async {
+    let text = query.text
+    await snippetsQuery.refreshWindow(
+      policy: policy, currentCount: snippetRows.count,
+      fetch: { [weak self] limit in
+        await self?.fetchSnippetsPage(text: text, offset: 0, limit: limit) ?? []
+      },
+      setItems: { [weak self] in self?.snippetRows = $0 },
+      applySelection: { [weak self] policy, result in
+        self?.applySnippetsSelectionPolicy(policy, result: result)
+      }
+    )
+  }
+
+  private func loadMoreSnippets() {
+    let text = query.text
+    snippetsQuery.loadMore(
+      fetch: { [weak self] offset, limit in
+        await self?.fetchSnippetsPage(text: text, offset: offset, limit: limit) ?? []
+      },
+      appendItems: { [weak self] in self?.snippetRows.append(contentsOf: $0) }
+    )
+  }
+
+  // MARK: - Infinite scroll (T51/T52)
+
+  /// Called by `PickerView` when the last currently-loaded row (whichever
+  /// tab is active) is about to appear on screen — fetches the next page
+  /// and appends it, unless a fetch is already in flight or the last page
+  /// came back short (`hasMore == false`: the store has nothing left to
+  /// give for the current text/kind/scope).
+  public func loadMoreIfNeeded() {
+    switch activeTab {
+    case .history, .pinned:
+      loadMoreRows()
+    case .snippets:
+      loadMoreSnippets()
+    }
+  }
+
+  // MARK: - Preview popover tracking (hover-only)
+  //
+  // Extracted (M-4) to `PickerViewModel+Preview.swift` — `hoverItem(_:)`,
+  // `previewHoverChanged(_:)`, and the private resolve/scheduling logic all
+  // live there now. `hoveredItemID`/`isHoveringPreview`/`previewTask`/
+  // `previewTargetID` stay declared above (stored properties can't move into
+  // an extension file) — see that file's top doc comment.
+
+  // MARK: - Selection policy (shared, generic over ClipItem/Snippet)
+
+  /// Resolves `policy` against `result` for either pipeline — shared via
+  /// generics since the three selection behaviors are identical regardless
+  /// of element type, mirroring this file's existing
+  /// `clampedIndex<Element: Identifiable>` precedent. Returns the id to
+  /// select (`nil` if `result` is empty) and whether `scrollToTopToken`
+  /// should bump.
+  // Deliberately not `private` — same rationale as `pasteContent`'s doc
+  // comment above: this is the exact selection-policy decision logic
+  // (`.hardReset`/`.softReconcile`/`.selectNear`) the reviews flagged as
+  // untested, and `@testable import` cannot reach a `private` member. See
+  // `PickerViewModelTests.swift`.
+  func resolvedSelection<Element: Identifiable>(
+    _ policy: SelectionPolicy, currentID: Element.ID?, result: [Element]
+  ) -> (id: Element.ID?, scrollToTop: Bool) {
+    switch policy {
+    case .hardReset:
+      return (result.first?.id, true)
+    case .softReconcile:
+      if let currentID, result.contains(where: { $0.id == currentID }) {
+        return (currentID, false)
+      }
+      return (result.first?.id, true)
+    case .selectNear(let previousIndex):
+      guard !result.isEmpty else { return (nil, false) }
+      guard let previousIndex else {
+        return resolvedSelection(.softReconcile, currentID: currentID, result: result)
+      }
+      let clampedIndex = min(max(previousIndex, 0), result.count - 1)
+      return (result[clampedIndex].id, false)
+    }
+  }
+
+  private func applyRowsSelectionPolicy(_ policy: SelectionPolicy, result: [ClipItem]) {
+    let (id, scrollToTop) = resolvedSelection(policy, currentID: selectedItemID, result: result)
+    selectedItemID = id
+    if scrollToTop { scrollToTopToken += 1 }
+    reassertSearchFieldFocus()
+  }
+
+  private func applySnippetsSelectionPolicy(_ policy: SelectionPolicy, result: [Snippet]) {
+    let (id, scrollToTop) = resolvedSelection(policy, currentID: selectedSnippetID, result: result)
+    selectedSnippetID = id
+    if scrollToTop { scrollToTopToken += 1 }
+    reassertSearchFieldFocus()
+  }
+
+  /// Re-asserts the search field's first-responder claim *after* the
+  /// selection write above — see this file's top "Search-focus fix" doc
+  /// comment and `focusToken`'s doc comment. Shared by both
+  /// `apply*SelectionPolicy` methods (DRY per coding-standards.md) rather
+  /// than duplicating the bump in each. Deliberately private and called only
+  /// from those two methods: they're reached solely by the async query
+  /// pipeline, as the `applySelection` closure `PagedQuery.runFirstPage`/
+  /// `PagedQuery.refreshWindow` invoke once a result lands (see
+  /// `scheduleRowsQuery`/`refreshRowsWindow`/`scheduleSnippetsQuery`/
+  /// `refreshSnippetsWindow`'s wiring), never by a manual row click or
+  /// `moveSelection(by:)` (both write `selectedItemID`/
+  /// `selectedSnippetID` directly) — so this can never re-steal focus from a
+  /// row the user explicitly selected.
+  private func reassertSearchFieldFocus() {
+    focusToken += 1
+  }
+
+  // MARK: - Selecting / pasting
+  //
+  // Extracted (M-4) to `PickerViewModel+Paste.swift` — `select(_:plainText:)`,
+  // `pasteContent(for:plainText:)`, `pasteSnippet(_:)`, and the private
+  // `performPaste(_:frontmostApp:)` all live there now (T-PERF1: `select`
+  // and `pasteContent` also moved off-main blob I/O behind `async`). See
+  // that file's top doc comment.
+
+  /// The `ClipItem` currently highlighted (`selectedItemID`), if it's both
+  /// set and still present in `rows`.
+  private var highlightedItem: ClipItem? {
+    guard let selectedItemID else { return nil }
+    return rows.first { $0.id == selectedItemID }
+  }
+
+  /// The `Snippet` currently highlighted (`selectedSnippetID`), if it's
+  /// both set and still present in `snippetRows`. Mirrors `highlightedItem`.
+  private var highlightedSnippet: Snippet? {
+    guard let selectedSnippetID else { return nil }
+    return snippetRows.first { $0.id == selectedSnippetID }
+  }
+
+  /// T-SET2, widened in T-SET4: what the footer's contextual `⌥⏎`/`⌘S`
+  /// hints need to know about the highlighted row — see
+  /// `HighlightedItemCapabilities`. `nil` on the Snippets tab (a `Snippet`
+  /// isn't a `ClipItem`, and neither hint's action varies by which snippet
+  /// is highlighted there — see `ShortcutHints.swift`'s top doc comment),
+  /// otherwise built from `highlightedItem` (`nil` too when nothing's
+  /// highlighted). Exposed instead of `highlightedItem` itself to keep this
+  /// view model's public surface minimal: `PickerView` needs the
+  /// capabilities to pick a hint string, not the whole item.
+  public var highlightedItemCapabilities: HighlightedItemCapabilities {
+    switch activeTab {
+    case .history, .pinned:
+      return HighlightedItemCapabilities(item: highlightedItem)
+    case .snippets:
+      return HighlightedItemCapabilities(item: nil)
+    }
+  }
+
+  /// Flushes whichever pipeline (`rows`/`snippetRows`) is currently active
+  /// before a commit action reads `highlightedItem`/`highlightedSnippet` —
+  /// see this file's top doc comment.
+  private func flushActiveTabPendingQuery() async {
+    switch activeTab {
+    case .history, .pinned:
+      await flushPendingRowsQuery()
+    case .snippets:
+      await flushPendingSnippetsQuery()
+    }
+  }
+
+  /// Enter/Return in the search field commits whichever row is currently
+  /// highlighted (defaults to the first result) — a `ClipItem` on History/
+  /// Pinned, a `Snippet` on Snippets (T23). Flushes any pending requery
+  /// first (internally, via a `Task` — the external signature stays
+  /// synchronous `Void` so `PickerView`'s key handler is unchanged) so a
+  /// Return fired right after typing always pastes the row matching what's
+  /// actually in the search field. `plainText` (default `false`) threads
+  /// straight through to `select(_:plainText:)` — irrelevant for Snippets,
+  /// which are already plain.
+  public func selectHighlighted(plainText: Bool = false) {
+    Task { [weak self] in
+      guard let self else { return }
+      await self.flushActiveTabPendingQuery()
+      switch self.activeTab {
+      case .history, .pinned:
+        guard let item = self.highlightedItem else { return }
+        self.select(item, plainText: plainText)
+      case .snippets:
+        guard let snippet = self.highlightedSnippet else { return }
+        self.pasteSnippet(snippet)  // snippets are already plain; flag irrelevant
+      }
+    }
+  }
+
+  /// T13: moves the highlighted row by `delta` (`-1` = ↑, `+1` = ↓),
+  /// clamping at the first/last *currently loaded* result rather than
+  /// wrapping around or triggering a page load — pagination is driven by
+  /// `PickerView`'s scroll-visibility signal (`loadMoreIfNeeded()`), not by
+  /// keyboard navigation reaching the last loaded row.
+  public func moveSelection(by delta: Int) {
+    switch activeTab {
+    case .history, .pinned:
+      guard let index = Self.clampedIndex(currentID: selectedItemID, in: rows, delta: delta)
+      else { return }
+      selectedItemID = rows[index].id
+    case .snippets:
+      guard
+        let index = Self.clampedIndex(currentID: selectedSnippetID, in: snippetRows, delta: delta)
+      else { return }
+      selectedSnippetID = snippetRows[index].id
+    }
+  }
+
+  /// ⌘, (see `PickerView`'s key handler, T-SET5): opens Settings.
+  ///
+  /// Dismisses the picker first, same as Esc — order matters, `dismiss()`
+  /// runs before `openSettings()` so the picker is already gone by the time
+  /// Settings takes over app activation, rather than racing it. This is a
+  /// UX choice, not a technical necessity: the picker is deliberately a
+  /// non-activating panel (`PickerPanel`), so simply opening Settings behind
+  /// it wouldn't corrupt anything mechanically. But Settings takes over the
+  /// app's *entire* activation for as long as it stays open
+  /// (`SettingsActivator` flips `.accessory` → `.regular` and
+  /// force-activates), so leaving a second Clipnest surface open behind it —
+  /// one the user didn't ask to keep — would just be confusing, and the
+  /// picker itself has no reason to still be open once the user has asked
+  /// for a different window.
+  public func openSettingsFromPicker() {
+    dismiss()
+    openSettings()
+  }
+
+  /// Returns the index `delta` away from whichever element in `collection`
+  /// currently has `currentID` (or `-1`, i.e. "before the first element,"
+  /// if nothing's currently selected — so `delta == 1` lands on index `0`),
+  /// clamped to `collection`'s bounds. `nil` if `collection` is empty.
+  private static func clampedIndex<Element: Identifiable>(
+    currentID: Element.ID?,
+    in collection: [Element],
+    delta: Int
+  ) -> Int? {
+    guard !collection.isEmpty else { return nil }
+    let currentIndex = currentID.flatMap { id in collection.firstIndex { $0.id == id } } ?? -1
+    return min(max(currentIndex + delta, 0), collection.count - 1)
+  }
+
+  /// T24 (amended for T41/T50): toggles the pinned flag on `item` via the
+  /// real `ClipStore`, then re-queries the current window so the pin badge
+  /// and `rows` reflect the store's truth. Pinning/unpinning always moves
+  /// `item` out of whichever tab is currently active (History and Pinned
+  /// are mutually exclusive), so `.softReconcile` correctly either keeps
+  /// the current selection (if something else is still visible) or falls
+  /// back to the tab's new first result.
+  public func togglePin(_ item: ClipItem) {
+    Task { [weak self] in
+      guard let self else { return }
+      do {
+        try await self.clipStore.setPinned(item.id, pinned: !item.pinned)
+      } catch {
+        // Metadata only — never previewText/content.
+        Self.logger.error(
+          "Failed to toggle pin for item \(item.id): \(String(describing: error))"
+        )
+        return
+      }
+      await self.refreshRowsWindow(policy: .softReconcile)
+    }
+  }
+
+  /// ⌘P (see `PickerView`'s key handler): toggles pin on whichever row is
+  /// currently highlighted. A no-op on the Snippets tab.
+  public func togglePinHighlighted() {
+    Task { [weak self] in
+      guard let self else { return }
+      await self.flushActiveTabPendingQuery()
+      guard self.activeTab != .snippets, let item = self.highlightedItem else { return }
+      self.togglePin(item)
+    }
+  }
+
+  /// T23 fix round, item 2: "Save as Snippet" — opens the snippet editor
+  /// prefilled with `item`'s content as the Body, creating a new `Snippet`
+  /// on save. Gated on `ClipItem.supportsSaveAsSnippet` (`.text`/`.link`
+  /// only — T-SET4: promoted out of this file into a shared `ClipItem`
+  /// extension, see that property's doc comment), matching every other
+  /// content-bearing action in this file.
+  public func presentSaveAsSnippetForm(from item: ClipItem) {
+    guard item.supportsSaveAsSnippet else { return }
+    presentSnippetEditor(.createFromClip(item.previewText))
+  }
+
+  /// ⌘S (see `PickerView`'s key handler): "Save as Snippet" for whichever
+  /// row is currently highlighted.
+  ///
+  /// T-SET4 (bug fix): used to guard only on `activeTab != .snippets`, with
+  /// no check on the highlighted row's *kind* — so ⌘S on a highlighted
+  /// `.image` (or `.richText`/`.file`) row presented the save-as-snippet
+  /// form even though `ItemRow`'s own UI never offers that action for those
+  /// kinds (its trailing button/context-menu item are both gated on
+  /// `ClipItem.supportsSaveAsSnippet`). Now `presentSaveAsSnippetForm(from:)`
+  /// re-checks the same predicate itself, so this is a true no-op — same
+  /// class of fix as `ItemRow`'s own gating, just reached via the keyboard
+  /// instead of a click.
+  public func saveHighlightedAsSnippet() {
+    Task { [weak self] in
+      guard let self else { return }
+      await self.flushActiveTabPendingQuery()
+      guard self.activeTab != .snippets, let item = self.highlightedItem else { return }
+      self.presentSaveAsSnippetForm(from: item)
+    }
+  }
+
+  /// T24: deletes `item` via the real `ClipStore` (removes its blob too),
+  /// then re-queries the window and selects whatever row now occupies
+  /// `item`'s old position (clamped to the new, shorter list).
+  public func delete(_ item: ClipItem) {
+    let previousIndex = rows.firstIndex(where: { $0.id == item.id })
+    Task { [weak self] in
+      guard let self else { return }
+      do {
+        try await self.clipStore.delete(item.id)
+      } catch {
+        Self.logger.error(
+          "Failed to delete item \(item.id): \(String(describing: error))")
+        return
+      }
+      await self.refreshRowsWindow(policy: .selectNear(previousIndex: previousIndex))
+    }
+  }
+
+  /// Delete (or ⌘⌫ — see `PickerView`'s key handler): deletes whichever row
+  /// is currently highlighted — a `ClipItem` on History/Pinned, a `Snippet`
+  /// on Snippets (T23).
+  public func deleteHighlighted() {
+    Task { [weak self] in
+      guard let self else { return }
+      await self.flushActiveTabPendingQuery()
+      switch self.activeTab {
+      case .history, .pinned:
+        guard let item = self.highlightedItem else { return }
+        self.delete(item)
+      case .snippets:
+        guard let snippet = self.highlightedSnippet else { return }
+        self.deleteSnippet(snippet)
+      }
+    }
+  }
+
+  // MARK: - Snippets CRUD (T23)
+
+  /// Shows the Snippets tab's create form (`SnippetEditorWindow`, empty
+  /// fields).
+  public func presentCreateSnippetForm() {
+    presentSnippetEditor(.create)
+  }
+
+  /// Shows the Snippets tab's edit form, pre-filled from `snippet`.
+  public func presentEditSnippetForm(_ snippet: Snippet) {
+    presentSnippetEditor(.edit(snippet))
+  }
+
+  /// Creates a new snippet via the real `SnippetStore`, then re-queries the
+  /// current window so the Snippets tab reflects it.
+  public func createSnippet(title: String, body: String, keyword: String?) {
+    let snippet = Snippet(title: title, body: body, keyword: keyword)
+    Task { [weak self] in
+      guard let self else { return }
+      do {
+        _ = try await self.snippetStore.create(snippet)
+      } catch {
+        // Metadata only — a snippet's title/body/keyword are user-authored
+        // content in the same sensitive category as clipboard content.
+        Self.logger.error(
+          "Failed to create snippet \(snippet.id): \(String(describing: error))"
+        )
+        return
+      }
+      await self.refreshSnippetsWindow(policy: .softReconcile)
+    }
+  }
+
+  /// Updates an existing snippet's title/body/keyword via the real
+  /// `SnippetStore`, then re-queries the current window.
+  public func updateSnippet(_ id: UUID, title: String, body: String, keyword: String?) {
+    Task { [weak self] in
+      guard let self else { return }
+      do {
+        _ = try await self.snippetStore.update(id, title: title, body: body, keyword: keyword)
+      } catch {
+        Self.logger.error(
+          "Failed to update snippet \(id): \(String(describing: error))")
+        return
+      }
+      await self.refreshSnippetsWindow(policy: .softReconcile)
+    }
+  }
+
+  /// Deletes a snippet via the real `SnippetStore`, then re-queries the
+  /// current window.
+  public func deleteSnippet(_ snippet: Snippet) {
+    Task { [weak self] in
+      guard let self else { return }
+      do {
+        try await self.snippetStore.delete(snippet.id)
+      } catch {
+        Self.logger.error(
+          "Failed to delete snippet \(snippet.id): \(String(describing: error))"
+        )
+        return
+      }
+      await self.refreshSnippetsWindow(policy: .softReconcile)
+    }
+  }
+}

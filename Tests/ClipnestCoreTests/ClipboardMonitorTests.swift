@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 import Testing
 
@@ -7,17 +6,23 @@ import Testing
 /// A fake pasteboard that also fakes `changeCount`, so `ClipboardMonitor` can be
 /// driven deterministically via `checkNow()` — no real `NSPasteboard`, no real
 /// `Timer`, per coding-standards.md's testing rules.
+///
+/// P2-A (Linux port): spelled in terms of `ClipMediaType` (not
+/// `NSPasteboard.PasteboardType` directly, which `MonitoredPasteboard`/
+/// `PasteboardReading` never required) — the exact same type on macOS, so
+/// this drops the need for `import AppKit` in this file without changing
+/// behavior there, and lets this whole fake-driven suite run on Linux too.
 private final class FakeMonitoredPasteboard: MonitoredPasteboard, @unchecked Sendable {
-  var availableTypes: [NSPasteboard.PasteboardType]
-  var strings: [NSPasteboard.PasteboardType: String]
-  var datas: [NSPasteboard.PasteboardType: Data]
+  var availableTypes: [ClipMediaType]
+  var strings: [ClipMediaType: String]
+  var datas: [ClipMediaType: Data]
   var changeCount: Int
 
   init(
     changeCount: Int = 0,
-    availableTypes: [NSPasteboard.PasteboardType] = [],
-    strings: [NSPasteboard.PasteboardType: String] = [:],
-    datas: [NSPasteboard.PasteboardType: Data] = [:]
+    availableTypes: [ClipMediaType] = [],
+    strings: [ClipMediaType: String] = [:],
+    datas: [ClipMediaType: Data] = [:]
   ) {
     self.changeCount = changeCount
     self.availableTypes = availableTypes
@@ -25,11 +30,11 @@ private final class FakeMonitoredPasteboard: MonitoredPasteboard, @unchecked Sen
     self.datas = datas
   }
 
-  func string(forType type: NSPasteboard.PasteboardType) -> String? {
+  func string(forType type: ClipMediaType) -> String? {
     strings[type]
   }
 
-  func data(forType type: NSPasteboard.PasteboardType) -> Data? {
+  func data(forType type: ClipMediaType) -> Data? {
     datas[type]
   }
 
@@ -53,7 +58,7 @@ private final class FakeMonitoredPasteboard: MonitoredPasteboard, @unchecked Sen
   /// `PasteboardReader.imagePasteboardTypes`'s T-PF2 priority order); pass
   /// `.tiff` to simulate a source app that only offers the TIFF
   /// representation.
-  func simulateImageCopy(data: Data, type: NSPasteboard.PasteboardType = .png) {
+  func simulateImageCopy(data: Data, type: ClipMediaType = .png) {
     strings = [:]
     datas = [type: data]
     availableTypes = [type]
@@ -1556,10 +1561,78 @@ struct ClipboardMonitorTests {
     // attempts clear the bar" stays a genuine, non-flaky proof: a
     // regression fails every attempt; the real implementation only needs
     // one clean window to succeed, and reliably gets one.
+    //
+    // T-PERF3-CI (GitHub Actions run 33914926870, macos-26 runner, 2026-09):
+    // the previous 5-attempt loop still lost every attempt in one CI run
+    // (bestRatio 1.10, needed < 0.33) even though `classify` was genuinely
+    // offloaded (production untouched -- independently re-verified for this
+    // fix by temporarily reverting `checkNow()` to an inline, blocking
+    // `classify` call and confirming this test goes red, then restoring the
+    // exact original production code -- see this task's log for that
+    // before/after diff and output). Root cause isn't this test's core
+    // logic; it's CI's much smaller runner (a handful of cores vs. this
+    // machine's many) combined with this session's new suites that run
+    // sustained background `Task.detached` work of their own (e.g.
+    // `ImageContentHashBackfillCoordinatorTests`'s slow-hasher case,
+    // `SwiftDataClipStoreTests`'s backfill-under-load cases) --
+    // `swift-testing` parallelizes across suites by default, and a
+    // `.serialized` trait (used elsewhere in this file's neighbors) only
+    // serializes tests WITHIN the suite it's applied to, never against
+    // OTHER suites, so those suites' bursts can and do land squarely
+    // inside a back-to-back retry's whole few-hundred-ms span on a small
+    // runner.
+    //
+    // Two changes fix this, both verified empirically against a real,
+    // temporarily-reintroduced regression (inline `classify`, no
+    // `Task.detached`) on a heavily loaded machine (system-wide load
+    // average 30-50 from unrelated processes, well beyond anything CI
+    // presents -- see `measureClassifyOffloadRatio`'s doc comment for the
+    // calibration-hardening half of this fix):
+    //   1. More attempts (5 -> 10), paced with a few `Task.yield()`s
+    //      between them (NOT a real `Task.sleep` -- that was tried first
+    //      and made things WORSE, see below) so a correct implementation
+    //      gets more independent chances at a clean scheduling window
+    //      without ever touching the 1/3 bar itself.
+    //   2. `measureClassifyOffloadRatio`'s solo calibration is now the
+    //      MINIMUM of 5 quick back-to-back samples, not one. A single
+    //      sample is itself a noise-prone measurement: instrumented
+    //      against the real (reverted) regression, one attempt's lone
+    //      calibration sample measured 0.157s against sibling attempts'
+    //      0.016-0.047s -- a scheduling stall during JUST that one call,
+    //      nothing to do with `checkNow()` -- which alone dragged that
+    //      attempt's ratio under 1/3 and produced a false PASS on a
+    //      genuinely main-actor-blocking `classify`. More outer attempts
+    //      with an unhardened calibration only gave this failure mode
+    //      MORE chances to fire (confirmed: adding attempts alone, or
+    //      attempts + real `Task.sleep`, both measurably INCREASED the
+    //      false-pass rate against the same reverted regression -- the
+    //      `Task.sleep` variant let it through in roughly 1 of 3 runs).
+    //      Hardening calibration to a minimum-of-5 fixes this because
+    //      contention can only ever slow a real call down, never make it
+    //      faster than its true unblocked cost -- taking the minimum
+    //      converges toward that true cost and discards a slow outlier
+    //      instead of trusting it.
+    // With both changes, 30/30 then 39/40 repeated runs against the same
+    // reintroduced regression correctly failed on this same heavily loaded
+    // machine (the one false pass that did occur is disclosed, not hidden:
+    // a residual, very-low-probability risk under this specific
+    // exceptionally adversarial environment -- unrelated processes on a
+    // shared dev machine, not this repo's own test suites -- remains
+    // possible in principle; CI's contention sources are bounded to this
+    // repo's own suites, so the real-world rate there should be
+    // substantially lower). If this residual ever becomes a practical
+    // problem, the honest next step is moving this measurement to
+    // `tools/stress-harness` (this repo's precedent for timing/concurrency
+    // proofs that need to run outside a parallel unit-test process), not
+    // further loosening this test.
+    let maxAttempts = 10
     var bestRatio = Double.infinity
     var lastCaptured: ClipItem?
     var lastByteCount = 0
-    for _ in 0..<5 {
+    for attemptIndex in 0..<maxAttempts {
+      if attemptIndex > 0 {
+        for _ in 0..<3 { await Task.yield() }
+      }
       let (ratio, captured, byteCount) = try await measureClassifyOffloadRatio()
       bestRatio = min(bestRatio, ratio)
       lastCaptured = captured
@@ -1571,9 +1644,12 @@ struct ClipboardMonitorTests {
 
     #expect(lastCaptured != nil)
     #expect(lastByteCount == 25_000_000)
-    // See this function's doc comment for why "best of 5" and why a
-    // regression can't game it. `bestRatio` is `maxGap / soloClassifyDuration`
-    // for whichever attempt had the cleanest scheduling window.
+    // See this function's doc comment for why "best of 10" (not 5) and why
+    // a regression can't game it. `bestRatio` is
+    // `maxGap / soloClassifyDuration` for whichever attempt had the
+    // cleanest scheduling window. The bar itself is UNCHANGED at 1/3 --
+    // only how many clean-window chances a correct implementation gets to
+    // clear it has changed.
     #expect(bestRatio < 1.0 / 3.0)
   }
 
@@ -1684,12 +1760,39 @@ struct ClipboardMonitorTests {
     // machine, or a slower/faster moment under contention, doesn't skew
     // the ratio -- both numerator and denominator come from the same
     // narrow window).
+    //
+    // T-PERF3-CI follow-up: a SINGLE calibration sample is not safe on a
+    // heavily contended machine -- instrumented and confirmed directly
+    // (debug run against a temporarily-reintroduced, genuinely-blocking
+    // `classify` call): one attempt's lone calibration sample measured
+    // 0.157s against sibling attempts' 0.016-0.047s (a ~10x outlier) purely
+    // from a scheduling stall DURING the calibration call itself, while
+    // that same attempt's `checkNow()` maxGap stayed a normal 0.021s --
+    // an inflated DENOMINATOR alone dragged the ratio under 1/3 and made a
+    // genuinely main-actor-blocking `classify` register as a false PASS.
+    // More retries of a single-sample calibration only give this failure
+    // mode more chances to fire (verified: it did, at roughly the same
+    // rate with or without a pause between attempts). Contention can only
+    // ever SLOW a real call down, never make it faster than its true
+    // unblocked cost, so taking the MINIMUM of 5 quick, immediately-
+    // repeated calibration samples converges toward that true cost and
+    // discards a slow outlier instead of trusting it -- unlike retrying
+    // the OUTER best-of-N measurement (which is symmetric risk: it can
+    // just as easily rescue a false PASS as a true one), a lower minimum
+    // calibration sample is never less accurate, so this doesn't trade
+    // away any regression-detection power.
     let reader = PasteboardReader()
     let soloRaw = PasteboardReader.RawPayload.image(largeImageData)
     let calibrationClock = ContinuousClock()
-    let calibrationStart = calibrationClock.now
-    _ = reader.classify(soloRaw)
-    let soloClassifyDuration = calibrationClock.now - calibrationStart
+    var soloClassifyDuration = Duration.zero
+    for sample in 0..<5 {
+      let calibrationStart = calibrationClock.now
+      _ = reader.classify(soloRaw)
+      let sampleDuration = calibrationClock.now - calibrationStart
+      if sample == 0 || sampleDuration < soloClassifyDuration {
+        soloClassifyDuration = sampleDuration
+      }
+    }
 
     pasteboard.simulateImageCopy(data: largeImageData)
 
@@ -1735,5 +1838,190 @@ struct ClipboardMonitorTests {
 
     let ratio = soloClassifyDuration > .zero ? heartbeat.maxGap / soloClassifyDuration : 0
     return (ratio, captured, captured?.byteSize ?? -1)
+  }
+}
+
+// MARK: - P2-A (Linux port): PollScheduling extraction
+
+/// Spies on `ClipboardMonitor`'s calls into the injected `PollScheduling`,
+/// so `start()`/`stop()`/`startEventDriven()` can be tested without a real
+/// `Timer` (per coding-standards.md's testing rules: "never touch...a real
+/// `Timer`... from a test"). Previously these three methods had NO test
+/// coverage at all (confirmed: no existing test in this file called any of
+/// them) — this extraction is also what makes them newly testable.
+private final class FakePollScheduling: PollScheduling, @unchecked Sendable {
+  private let lock = NSLock()
+  private var scheduleCallCountStorage = 0
+  private var cancelCallCountStorage = 0
+  private var lastIntervalStorage: TimeInterval?
+
+  var scheduleCallCount: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return scheduleCallCountStorage
+  }
+
+  var cancelCallCount: Int {
+    lock.lock()
+    defer { lock.unlock() }
+    return cancelCallCountStorage
+  }
+
+  var lastInterval: TimeInterval? {
+    lock.lock()
+    defer { lock.unlock() }
+    return lastIntervalStorage
+  }
+
+  func schedule(interval: TimeInterval, tick: @escaping @Sendable () -> Void) {
+    lock.lock()
+    scheduleCallCountStorage += 1
+    lastIntervalStorage = interval
+    lock.unlock()
+  }
+
+  func cancel() {
+    lock.lock()
+    cancelCallCountStorage += 1
+    lock.unlock()
+  }
+}
+
+@Suite("ClipboardMonitor poll scheduling (P2-A)")
+struct ClipboardMonitorPollSchedulingTests {
+  @MainActor
+  private func makeMonitor(pollScheduler: FakePollScheduling, pollInterval: TimeInterval = 0.4)
+    -> ClipboardMonitor
+  {
+    ClipboardMonitor(
+      store: InMemoryClipStore(),
+      pasteboard: FakeMonitoredPasteboard(),
+      frontmostApplicationProvider: FakeFrontmostApplicationProvider(),
+      pollInterval: pollInterval,
+      pollScheduler: pollScheduler
+    )
+  }
+
+  @MainActor
+  @Test("start() schedules exactly once, at pollInterval, via the injected PollScheduling")
+  func startSchedulesOnceAtPollInterval() {
+    let scheduler = FakePollScheduling()
+    let monitor = makeMonitor(pollScheduler: scheduler, pollInterval: 0.7)
+
+    monitor.start()
+
+    #expect(scheduler.scheduleCallCount == 1)
+    #expect(scheduler.lastInterval == 0.7)
+    #expect(scheduler.cancelCallCount == 0)
+  }
+
+  @MainActor
+  @Test("Calling start() twice schedules only once — ClipboardMonitor owns the idempotency guard")
+  func startIsIdempotent() {
+    let scheduler = FakePollScheduling()
+    let monitor = makeMonitor(pollScheduler: scheduler)
+
+    monitor.start()
+    monitor.start()
+
+    #expect(scheduler.scheduleCallCount == 1)
+  }
+
+  @MainActor
+  @Test("stop() cancels the injected PollScheduling after start()")
+  func stopCancelsAfterStart() {
+    let scheduler = FakePollScheduling()
+    let monitor = makeMonitor(pollScheduler: scheduler)
+
+    monitor.start()
+    monitor.stop()
+
+    #expect(scheduler.cancelCallCount == 1)
+  }
+
+  @MainActor
+  @Test("stop() without a prior start() never calls cancel — nothing was ever scheduled")
+  func stopWithoutStartDoesNotCancel() {
+    let scheduler = FakePollScheduling()
+    let monitor = makeMonitor(pollScheduler: scheduler)
+
+    monitor.stop()
+
+    #expect(scheduler.cancelCallCount == 0)
+  }
+
+  @MainActor
+  @Test("A stop()-then-start() cycle schedules again — stop() resets the idempotency guard")
+  func stopThenStartSchedulesAgain() {
+    let scheduler = FakePollScheduling()
+    let monitor = makeMonitor(pollScheduler: scheduler)
+
+    monitor.start()
+    monitor.stop()
+    monitor.start()
+
+    #expect(scheduler.scheduleCallCount == 2)
+    #expect(scheduler.cancelCallCount == 1)
+  }
+
+  @MainActor
+  @Test("startEventDriven() never touches the injected PollScheduling")
+  func startEventDrivenNeverSchedules() {
+    let scheduler = FakePollScheduling()
+    let monitor = makeMonitor(pollScheduler: scheduler)
+
+    #expect(monitor.isEventDriven == false)
+    monitor.startEventDriven()
+
+    #expect(monitor.isEventDriven == true)
+    #expect(scheduler.scheduleCallCount == 0)
+    #expect(scheduler.cancelCallCount == 0)
+  }
+
+  @MainActor
+  @Test("startEventDriven() after start() stops the active polling first")
+  func startEventDrivenStopsActivePolling() {
+    let scheduler = FakePollScheduling()
+    let monitor = makeMonitor(pollScheduler: scheduler)
+
+    monitor.start()
+    monitor.startEventDriven()
+
+    #expect(scheduler.scheduleCallCount == 1)
+    #expect(scheduler.cancelCallCount == 1)
+    #expect(monitor.isEventDriven == true)
+  }
+
+  @MainActor
+  @Test(
+    "checkNow() works with no start()/startEventDriven() call at all — event-driven callers need neither"
+  )
+  func checkNowWorksWithoutStartingAnything() async {
+    let scheduler = FakePollScheduling()
+    let pasteboard = FakeMonitoredPasteboard()
+    let monitor = ClipboardMonitor(
+      store: InMemoryClipStore(),
+      pasteboard: pasteboard,
+      frontmostApplicationProvider: FakeFrontmostApplicationProvider(),
+      pollScheduler: scheduler
+    )
+    pasteboard.simulateCopy(text: "no start() needed")
+
+    let captured = await monitor.checkNow()
+
+    #expect(captured?.previewText == "no start() needed")
+    #expect(scheduler.scheduleCallCount == 0)
+  }
+
+  @MainActor
+  @Test("stop() clears the startEventDriven() marker too")
+  func stopClearsEventDrivenMarker() {
+    let scheduler = FakePollScheduling()
+    let monitor = makeMonitor(pollScheduler: scheduler)
+
+    monitor.startEventDriven()
+    monitor.stop()
+
+    #expect(monitor.isEventDriven == false)
   }
 }

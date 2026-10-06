@@ -27,7 +27,7 @@ own `Error` enum — see [Error handling](#error-handling).
 - [Media](#media) — `ImagePixelHashing`, `CoreGraphicsImagePixelHasher`
 - [OCR](#ocr) — `TextRecognizing`, `VisionTextRecognizer`, `OCRBackfillCoordinator`
 - [Search](#search) — `SearchQuery`, `SearchHighlighter`
-- [Paste](#paste) — `Paster`, `PasteContent`, `FrontmostAppTracker`
+- [Paste](#paste) — `Paster`, `PasteContent`, `FrontmostAppTracker`, `SnippetExpander`, `SelectionReplacing`
 - [Error handling](#error-handling)
 - [Working example — capture → search → paste, end to end](#working-example--capture--search--paste-end-to-end)
 
@@ -598,7 +598,8 @@ public struct Paster: Sendable {
     pasteboard: any PasteboardWriting = NSPasteboard.general,
     eventSynthesizer: any EventSynthesizing = CGEventSynthesizer(),
     isAccessibilityGranted: @escaping @Sendable () -> Bool = { AXIsProcessTrusted() },
-    synthesisDelay: Duration = Paster.defaultSynthesisDelay
+    synthesisDelay: Duration = Paster.defaultSynthesisDelay,
+    synthesizesWithoutVerifiedTarget: Bool = false
   )
 
   public func paste(_ content: PasteContent, targetingFrontmostApp frontmostApp: FrontmostAppRef?) async throws
@@ -607,21 +608,43 @@ public struct Paster: Sendable {
 public enum PasteError: Error, Equatable, Sendable {
   case eventPostFailed     // synthesized ⌘V couldn't be created/posted
   case invalidImageData    // .image bytes couldn't be decoded — thrown before any pasteboard write
+  case targetNoLongerFrontmost   // a different app took focus during synthesisDelay — keystroke withheld
 }
 ```
 Writes `content` to the system pasteboard, then — **only if** Accessibility
-is granted (`AXIsProcessTrusted()` by default, injectable for tests) and a
-`frontmostApp` target is available — waits `synthesisDelay` and synthesizes
-a ⌘V into that app via `EventSynthesizing`. If Accessibility isn't granted,
-or no target was provided, `paste(_:targetingFrontmostApp:)` stops cleanly
-after the pasteboard write: **no error, no crash** — this is the documented
-fallback (see `.claude/coding-standards.md`: "Paster must degrade to
-'item on clipboard, no synthesized paste' rather than throw/crash when
-Accessibility is missing"). The pasteboard write itself is synchronous,
-before any suspension point — read `pasteboard.changeCount` right after
-calling `paste` (e.g. to feed `ClipboardMonitor.ignore(changeCount:)`) and
-you're guaranteed to observe the write's result even though the method is
-`async`.
+is granted (`AXIsProcessTrusted()` by default, injectable for tests) — waits
+`synthesisDelay` and synthesizes a ⌘V via `EventSynthesizing`. When a
+`frontmostApp` target is available, it re-verifies (H-1) that app is STILL
+frontmost immediately before posting and targets it specifically, throwing
+`.targetNoLongerFrontmost` (keystroke withheld, pasteboard write already
+stands) if focus moved during the delay. If Accessibility isn't granted, or
+no target was provided AND `synthesizesWithoutVerifiedTarget` is `false`
+(the default on **every** platform, including macOS — no macOS call site
+ever sets it), `paste(_:targetingFrontmostApp:)` stops cleanly after the
+pasteboard write: **no error, no crash** — this is the documented fallback
+(see `.claude/coding-standards.md`: "Paster must degrade to 'item on
+clipboard, no synthesized paste' rather than throw/crash when Accessibility
+is missing"). The pasteboard write itself is synchronous, before any
+suspension point — read `pasteboard.changeCount` right after calling
+`paste` (e.g. to feed `ClipboardMonitor.ignore(changeCount:)`) and you're
+guaranteed to observe the write's result even though the method is `async`.
+
+`synthesizesWithoutVerifiedTarget` (new) is the seam the Linux port uses to
+fix a real P0 (T-WLPASTE-NIL1): when `true` AND no `frontmostApp` target
+came back, `paste` synthesizes ⌘V targeting `nil` ("post globally, no
+specific process") instead of silently stopping — H-1's re-verification is
+skipped for this path only, since there's no captured target pid to
+re-check against. This exists because Linux's X11-based frontmost-app
+lookup always returns `nil` for a native-Wayland client (it isn't an X11
+window at all), which is indistinguishable from "nothing is focused" —
+without this flag, auto-paste silently did nothing for nearly every GNOME
+app on a default Ubuntu Wayland session even though a working paste
+backend (uinput) was available. Irrelevant on macOS: `WorkspaceFrontmostApplicationProvider`
+never has this ambiguity, so this always defaults to (and stays) `false`
+there. See `Sources/ClipnestCore/Paste/Paster.swift`'s
+`synthesizesWithoutVerifiedTarget` property doc comment for the full
+rationale, and `Sources/ClipnestLinuxAppKit/App/LinuxAppEnvironment.swift`
+for the one call site that sets it (`sessionType != .x11`).
 
 `.image` bytes are normalized to TIFF via `NSImage(data:)?.tiffRepresentation`
 before writing (captured bytes may be PNG or TIFF depending on the source
@@ -642,6 +665,95 @@ deliberately separate calls (not a lazy read at paste time) because the
 picker panel doesn't itself steal focus, but focus can still shift
 transiently before the user makes a selection.
 
+### `SnippetExpander` + `SelectionReplacing`
+
+```swift
+@MainActor
+public final class SnippetExpander {
+  public init(
+    snippetStore: any SnippetStore,
+    selectedText: any SelectedTextAccessing,
+    clipboardReplacer: any SelectionReplacing,
+    beep: @escaping () -> Void = PlatformDefaults.beep
+  )
+  public func expand() async
+}
+
+public enum SelectionReplaceResult: Sendable, Equatable {
+  case replaced             // selection was read, matched, and replaced
+  case noSelection          // nothing readable was selected
+  case noMatch              // a selection was read but matched no snippet
+  case writeUnconfirmed     // paste WAS attempted, but the body write could
+                            // never be confirmed before it was posted
+  case copyUnconfirmed      // content changed but neither wait strategy
+                            // could confirm it landed before the ceiling
+  case declinedTerminalTarget  // frontmost app is a known terminal — declined
+                                // BEFORE any clipboard I/O (see below)
+}
+
+@MainActor
+public protocol SelectionReplacing {
+  func replaceSelection(bodyForSelection: (String) async -> String?) async
+    -> SelectionReplaceResult
+}
+```
+Backs the global snippet-expansion hotkey (⌥⌘E). `expand()` tries two
+strategies in order:
+1. **Accessibility first** (`SelectedTextAccessing`) — reads/replaces the
+   selection directly, no clipboard side effect, on native/most Cocoa text.
+2. **Clipboard fallback** (`SelectionReplacing`) — reached when AX can't
+   read the selection, reads an untrusted role, or the AX write is refused/
+   unverifiable. The concrete `ClipboardSelectionReplacer` (macOS, App-only)
+   synthesizes ⌘C, matches the copied text against `SnippetStore
+   .findByKeyword(_:)`, writes the matched body, synthesizes ⌘V, and
+   restores the original clipboard byte-for-byte around the whole
+   transaction (capture is suppressed for its duration so the transient
+   copy/paste never lands in history).
+
+Every non-`.replaced` result beeps (`if result != .replaced { beep() }`) —
+`.replaced` is the only case that means "the user's text actually changed."
+
+**`.declinedTerminalTarget` (T-TERMPASTE1):** the clipboard-fallback
+transaction's only replace mechanism is Copy-then-Paste with **no explicit
+delete step** — it relies on "paste replaces the OS-level selection," which
+holds for AppKit/WebKit/Electron controls but is **false** for terminal
+emulators, where a mouse-drag highlight is a cosmetic, copy-only artifact
+disconnected from the shell's real cursor. Left unhandled, this always
+corrupts the line into `<keyword><body>` instead of replacing it (confirmed
+live, 2/2 trials, Terminal.app). `ClipboardSelectionReplacer.replaceSelection`
+checks the frontmost app against `MacTerminalAppRegistry.isTerminal(bundleIdentifier:)`
+**before any clipboard I/O** and returns `.declinedTerminalTarget`
+immediately on a match — no suppression, no snapshot, no synthesized
+keystroke, so the terminal is left byte-identical to before the hotkey was
+pressed. Sending backspaces first (to erase the highlighted text before
+pasting) was considered and rejected: verified against real prior art
+(espanso, AutoKey), both erase-then-inject only because they track the
+trigger being TYPED, keystroke by keystroke, so the backspace count is a
+known quantity tied to the real cursor; this app's "keyword" is whatever
+the user mouse-drag-highlighted, a quantity never observed being typed and
+whose position relative to the real cursor is unknowable in a terminal —
+backspacing would delete the WRONG characters at the actual cursor, turning
+a visible corruption into silent, invisible data loss elsewhere on the
+line.
+
+```swift
+public enum MacTerminalAppRegistry {
+  public static let terminalBundleIdentifiers: Set<String>  // Terminal.app,
+    // iTerm2, Warp, kitty, Alacritty (+ its pre-0.11 id), WezTerm, Ghostty —
+    // each verified against that project's own build metadata, not guessed
+  public static func isTerminal(bundleIdentifier: String?) -> Bool
+}
+```
+The macOS terminal registry the decline check above consults — `nil` or an
+unrecognized identifier is never assumed to be a terminal (guessing wrong
+would decline an ordinary app's snippet expansion). The Linux analogue,
+`TerminalAppRegistry` (`ClipnestPlatformLinux`), exists for a *different*
+reason (picking Ctrl+Shift+C/V over plain Ctrl+C/V, since a terminal
+reassigns plain Ctrl+C to SIGINT) — `LinuxClipboardSelectionReplacer` reuses
+that same registry for an *additional*, decline-first check ahead of running
+its own copy/paste transaction, for the identical T-TERMPASTE1 reason as
+macOS; see `docs/API-ClipnestLinuxAppKit.md` for the Linux-side detail.
+
 ---
 
 ## Error handling
@@ -656,7 +768,7 @@ doesn't have — everything is `async throws`):
 | `ClipStore` | `ClipStoreError` | `.notFound`, `.ioFailure(underlying: String)` |
 | `SnippetStore` | `SnippetStoreError` | `.notFound`, `.ioFailure(underlying: String)` |
 | `BlobStore` | `BlobStoreError` | `.notFound`, `.ioFailure(underlying: String)` |
-| `Paster` | `PasteError` | `.eventPostFailed`, `.invalidImageData` |
+| `Paster` | `PasteError` | `.eventPostFailed`, `.invalidImageData`, `.targetNoLongerFrontmost` |
 
 No force-unwraps (`!`), force-try (`try!`), or force-cast (`as!`) anywhere
 in this package's production code — every recoverable failure is a typed

@@ -31,6 +31,7 @@
 
 import AppKit
 import ClipnestCore
+import ClipnestViewModels
 import SwiftUI
 
 @MainActor
@@ -90,9 +91,16 @@ final class ItemPreviewController {
     // `WindowPlacement.previewSide`), so every item in a session gets the
     // same side — and the image is then capped to THAT side's room rather
     // than the roomier one, which is what keeps it fitting there.
-    let side = WindowPlacement.previewSide(
+    //
+    // P5 (Phase 3, Linux port): `ClipnestViewModels.` fully qualifies every
+    // `WindowPlacement` reference in this file — this SDK's `SwiftUI` module
+    // now also declares its own public `WindowPlacement` struct, and with
+    // both `ClipnestCore`/`ClipnestViewModels` and `SwiftUI` imported, the
+    // bare name is genuinely ambiguous (a real build error, not a style
+    // choice).
+    let side = ClipnestViewModels.WindowPlacement.previewSide(
       anchorRect: anchorRect, screenVisibleFrame: visible, gap: gap)
-    let sideSpace = WindowPlacement.previewAvailableWidth(
+    let sideSpace = ClipnestViewModels.WindowPlacement.previewAvailableWidth(
       on: side, anchorRect: anchorRect, screenVisibleFrame: visible, gap: gap)
     // Reserve the popover's own horizontal padding + drop shadow + slack, so
     // the whole panel (image + chrome + shadow) fits the side with clear air
@@ -202,7 +210,7 @@ final class ItemPreviewController {
   private func positionPanel(
     _ panel: NSPanel,
     besideAnchor anchorRect: NSRect,
-    on side: WindowPlacement.PreviewSide,
+    on side: ClipnestViewModels.WindowPlacement.PreviewSide,
     atVerticalCenter cursorY: CGFloat
   ) {
     let width = panel.frame.width
@@ -210,7 +218,7 @@ final class ItemPreviewController {
     let visible =
       (NSScreen.screens.first { $0.frame.intersects(anchorRect) } ?? NSScreen.main)?
       .visibleFrame ?? anchorRect
-    let originX = WindowPlacement.previewOriginX(
+    let originX = ClipnestViewModels.WindowPlacement.previewOriginX(
       on: side,
       anchorRect: anchorRect,
       panelWidth: width,

@@ -206,6 +206,47 @@ struct BlobStoreTests {
     #expect(withEmptyOverride == withNoOverride)
   }
 
+  // MARK: - P1-T8 (Linux port): xdgDataHomeDirectory resolution
+  //
+  // `xdgDataHomeDirectory(fileManager:environment:)` is a plain,
+  // platform-agnostic function (not `#if os(macOS)`-gated) precisely so
+  // these can run on any host — including this repo's actual `swift test`
+  // loop, which is macOS-only today — via the injectable `fileManager`/
+  // `environment` parameters, never a real Linux filesystem or a mutated
+  // real process environment. Production only calls it from
+  // `defaultBaseDirectory`'s non-macOS branch; see that method's doc
+  // comment.
+
+  @Test("xdgDataHomeDirectory honors a non-empty XDG_DATA_HOME override")
+  func xdgDataHomeDirectoryHonorsOverride() {
+    let resolved = BlobStore.xdgDataHomeDirectory(
+      fileManager: .default,
+      environment: [BlobStore.xdgDataHomeEnvironmentVariableName: "/custom/data/home"])
+
+    #expect(resolved == URL(fileURLWithPath: "/custom/data/home", isDirectory: true))
+  }
+
+  @Test("xdgDataHomeDirectory with XDG_DATA_HOME unset falls back to ~/.local/share")
+  func xdgDataHomeDirectoryWithNoOverrideFallsBackToLocalShare() {
+    let resolved = BlobStore.xdgDataHomeDirectory(fileManager: .default, environment: [:])
+
+    let expected = FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent(".local/share", isDirectory: true)
+    #expect(resolved == expected)
+  }
+
+  @Test(
+    "xdgDataHomeDirectory treats an empty-string XDG_DATA_HOME the same as unset (falls back to ~/.local/share)"
+  )
+  func xdgDataHomeDirectoryTreatsEmptyOverrideAsAbsent() {
+    let withEmptyOverride = BlobStore.xdgDataHomeDirectory(
+      fileManager: .default,
+      environment: [BlobStore.xdgDataHomeEnvironmentVariableName: ""])
+    let withNoOverride = BlobStore.xdgDataHomeDirectory(fileManager: .default, environment: [:])
+
+    #expect(withEmptyOverride == withNoOverride)
+  }
+
   // MARK: - T-SEC1: the override is compiled out entirely in Release builds
 
   #if !DEBUG

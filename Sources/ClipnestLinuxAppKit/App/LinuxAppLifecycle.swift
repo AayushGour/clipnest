@@ -1,0 +1,848 @@
+import ClipnestCore
+import ClipnestGTK
+import ClipnestPlatformLinux
+import ClipnestViewModels
+import Foundation
+
+/// Owns process startup end-to-end, in the order this task's build steps
+/// require:
+/// 1. GTK init + the `@MainActor`/GLib bridge (`GTKMainActorBridge`) —
+///    BEFORE anything else, since every step after this makes `@MainActor`
+///    hops that silently never resume without it (see that type's doc
+///    comment).
+/// 2. Single-instance acquisition (`SingleInstance.acquire`) — before any
+///    expensive work, so a second launch forwards its argv and exits
+///    almost immediately rather than paying for a full composition-root
+///    build it's about to throw away.
+/// 3. The composition root (`LinuxAppEnvironment`), D-Bus control service,
+///    Shell-extension client, tray, and hotkey backend — in that order,
+///    since the control service and tray need `environment`'s methods to
+///    route into, and the hotkey backend's choice depends on what the
+///    Shell-extension client just negotiated.
+///
+/// `@MainActor`, matching `LinuxAppEnvironment` — everything here either
+/// touches `@MainActor` state directly or hands work to a background
+/// `Thread` (the various D-Bus receive loops) that reports back through a
+/// `Task { @MainActor in ... }` hop, same discipline the rest of this
+/// module follows throughout.
+@MainActor
+public enum LinuxAppLifecycle {
+  private static let logger = ClipnestLogger(
+    subsystem: ClipnestLog.subsystem, category: "LinuxAppLifecycle")
+
+  private static let sessionBusAddressEnvironmentVariableName = "DBUS_SESSION_BUS_ADDRESS"
+  private static let sessionBusConnectTimeout: Duration = .seconds(2)
+
+  /// This app's own `app.clipnest.Control.Capabilities` — see
+  /// `ClipnestControlCapability`'s doc comment. All three are always true
+  /// today (nothing in `LinuxAppEnvironment`'s wiring is conditional), but
+  /// kept as an explicit list (not a hardcoded literal at the one call
+  /// site) so a future capability that IS conditional has an obvious place
+  /// to compute itself.
+  private static let controlCapabilities: [String] = [
+    ClipnestControlCapability.picker, ClipnestControlCapability.snippetExpansion,
+    ClipnestControlCapability.settings,
+  ]
+
+  /// The two named GSettings-floor keybinding segments this app installs
+  /// (see `GSettingsKeybindingPath`'s doc comment on why each must be
+  /// named, never `customN`) live on `ToggleHotkeyFloorBinding.segment`/
+  /// `ExpandSnippetHotkeyFloorBinding.segment` themselves — not duplicated
+  /// here as a second, separately-literal copy (T-HOTKEY1: that used to be
+  /// exactly the drift risk `ToggleHotkeyFloorBinding.swift`'s own doc
+  /// comment flagged as a "recommended follow-up"). Only each binding's
+  /// DEFAULT accelerator is this file's own decision, so only that lives
+  /// here.
+  private static let defaultToggleAccelerator = "<Super><Shift>v"
+  /// Pairs with `defaultToggleAccelerator` above the same way macOS pairs
+  /// `⌥⌘V`/`⌥⌘E` (`ClipnestApp/Sources/System/HotkeyManager.swift`).
+  /// Verified free on a real GNOME Shell 42.9 session (T-HOTKEY1;
+  /// `packaging/linux/gnome-shell-test/`), not assumed: enumerated every
+  /// key bound in `org.gnome.desktop.wm.keybindings`,
+  /// `org.gnome.shell.keybindings`, and
+  /// `org.gnome.settings-daemon.plugins.media-keys` — none use
+  /// `<Super><Shift>e` (or `<Super><Shift>v`, confirming the existing
+  /// toggle default was already collision-free too) — then installed a
+  /// real custom keybinding at this exact accelerator and confirmed via a
+  /// real `xdotool key --clearmodifiers super+shift+e` press that it fires
+  /// through `gsd-media-keys` with no collision, alongside the toggle
+  /// binding's own `<Super><Shift>v` continuing to fire correctly too. See
+  /// `ExpandSnippetHotkeyFloorBinding`'s own doc comment for the full
+  /// writeup.
+  private static let defaultExpandSnippetAccelerator = "<Super><Shift>e"
+
+  // MARK: - Process-lifetime ownership (T-LX1 fix, then generalized)
+  //
+  // `ClipnestControlService.start()`/`StatusNotifierTray.start()`/
+  // `ATSPIFocusTracker.start()` all spawn a background receive-loop
+  // `Thread { [weak self] in self?.receiveLoop() }`. That shape only works
+  // if something ELSE holds a strong reference until the freshly spawned
+  // thread's first access to `self` (after which `receiveLoop()`'s own
+  // `while true` body keeps itself alive strongly for as long as it runs,
+  // via the `self?.foo()` optional-chain's implicit strong temporary).
+  //
+  // T-LX1 found `startControlService` handing `ClipnestControlService` off
+  // as a purely local `let` with no such owner: the instant that function
+  // returned, ARC dropped its only strong reference — deterministically,
+  // and almost always BEFORE the new OS thread was actually scheduled
+  // (`Thread.start()`'s underlying `pthread_create` has real scheduling
+  // latency; a function return does not). So `self` resolved to `nil`
+  // inside the thread and `receiveLoop()` never ran a single iteration:
+  // the service claimed `app.clipnest.Clipnest` (that happens earlier and
+  // synchronously, via `SingleInstance.acquire` on the calling thread,
+  // before this is even reached) but could never read, let alone answer,
+  // one method call — exactly the observed symptom (`Ping`/`Introspect`
+  // time out with zero reply, `clipnest-ctl toggle-picker` hangs forever
+  // forwarding into the void).
+  //
+  // Independent review (post-fix) found the IDENTICAL shape, still
+  // unowned, in two more places built the same session: `StatusNotifierTray`
+  // (`startTray`'s `let tray = ...`) and `ShellHelperClient`
+  // (`makeShellHelperClient`'s returned value, previously surviving only
+  // by an ACCIDENTAL mutual-retain cycle through the closures
+  // `wireShellHelper`/`installHotkeys` hand it — no deliberate owner of
+  // its own). All four — plus `LinuxAppEnvironment` itself, whose
+  // lifetime used to be purely incidental on whichever of these four
+  // happened to still be retained — get one explicit, deliberate owner
+  // here: this enum's own static state, which lives for the process's
+  // whole life (same duration `installGSettingsFloor`'s one-shot side
+  // effect already assumes). This is the same "retain via a real owner"
+  // pattern the one case that already worked, `ATSPIFocusTracker`, relies
+  // on (there, the `focusedObject: { focusTracker.currentFocusedObject() }`
+  // closure captured by the long-lived `ATSPITextAccessor` is that owner).
+  private static var environment: LinuxAppEnvironment?
+  private static var controlService: ClipnestControlService?
+  private static var shellHelperClient: ShellHelperClient?
+  private static var tray: StatusNotifierTray?
+
+  // MARK: - T-P10I: live, retried hotkey-backend resolution
+  //
+  // `org.freedesktop.portal.GlobalShortcuts` availability barely ever
+  // changes at runtime (tied to the GNOME Shell version, not anything this
+  // app or the extension does) — probed once at startup in `installHotkeys`
+  // and cached here so `reconcileHotkeyBackend` (which can now run many
+  // times over a session, live, off `onCapabilitiesChanged`) never re-pays
+  // that round trip.
+  private static var cachedGlobalShortcutsPortalAvailable = false
+
+  /// The backend `reconcileHotkeyBackend` last resolved and logged — kept
+  /// only so a live change (the extension appearing, disappearing, or a
+  /// delayed probe finally succeeding) is logged as a visible TRANSITION,
+  /// not a repeat of the same steady-state line on every capability
+  /// refresh.
+  private static var lastResolvedHotkeyBackend: HotkeyBackend?
+
+  /// The bounded retry schedule for `ShellHelperClient.probeLiveDispatch()`
+  /// — see `retryLiveDispatchProbeIfNeeded`'s doc comment for the exact
+  /// race this closes. Cumulative ~2s, comfortably above the ~1.5s
+  /// worst-case propagation delay confirmed live against a real GNOME
+  /// Shell (`packaging/linux/gnome-shell-test/README.md`'s "Findings"
+  /// section). A bounded, backed-off RETRY — never a single fixed sleep
+  /// before the first attempt — so the common case (no extension installed
+  /// at all) pays nothing beyond the `NameHasOwner` check
+  /// `probeLiveDispatch()` already short-circuits on.
+  private static let liveDispatchRetryDelays: [Duration] = [
+    .milliseconds(100), .milliseconds(300), .milliseconds(600), .milliseconds(1000),
+  ]
+
+  /// Entry point called from `main.swift`. Never returns until the GTK
+  /// main loop exits (`ClipnestGTKApplication.quitMainLoop()`, wired to
+  /// the tray's Quit item) — matches every other GTK application's
+  /// `main()`.
+  public static func run(arguments: [String]) {
+    let commandArguments = Array(arguments.dropFirst())
+    let earlyCommand = LinuxAppCLI.parse(commandArguments)
+
+    // T-BB2 fix (black-box test, Ubuntu 22.04): `--version`/`--help` MUST
+    // be handled before any single-instance/bus logic and before GTK even
+    // initializes — print to stdout and exit(0), never launch a window,
+    // never forward to a running instance. Previously neither flag was
+    // recognized at all: with no instance running they fell through to a
+    // full resident GUI launch (the tester had to `timeout`-kill it, exit
+    // 124); with one running they silently forwarded and printed nothing.
+    switch earlyCommand {
+    case .version:
+      print(LinuxAppEnvironment.installedVersion)
+      exit(0)
+    case .help:
+      print(LinuxAppCLI.usageText)
+      exit(0)
+    case .togglePicker, .expandSnippet, .none:
+      break
+    }
+
+    ClipnestGTKApplication.initializeGTK(
+      programName: ClipnestControlName.programName,
+      displayName: ClipnestControlName.displayName)
+    GTKMainActorBridge.install()
+
+    // T-IBUS-CRASHWIRE: installed as early as this process's own startup
+    // allows — a live `GMainContext` (from `initializeGTK()` above) is the
+    // only real precondition, matching `GTKMainActorBridge.install()`'s
+    // identical requirement one line up. `restoreIBusEngineBeforeQuit()` is
+    // the SAME routine the tray's "Quit" item calls (`startTray` below) and
+    // `IBusCrashSafetyReconciler.restoreIfMarkerPresent` (this function's
+    // startup counterpart, called from `launch()`) both funnel through —
+    // see `ProcessSignalShutdown.swift`'s top doc comment for the full
+    // design and what SIGTERM/SIGINT catching does and does not cover.
+    ProcessSignalShutdown.install(onShutdownSignal: {
+      restoreIBusEngineBeforeQuit()
+      ClipnestGTKApplication.quitMainLoop()
+    })
+
+    let sessionBusAddress = ProcessInfo.processInfo.environment[
+      sessionBusAddressEnvironmentVariableName]
+    let instanceConnection = sessionBusAddress.flatMap {
+      DBusConnection.connect(address: $0, timeout: sessionBusConnectTimeout)
+    }
+
+    let decision: SingleInstanceDecision =
+      instanceConnection.map { SingleInstance.acquire(on: $0, timeout: .milliseconds(500)) }
+      ?? .busUnavailable
+
+    if decision == .forwardToRunningInstance {
+      if let instanceConnection {
+        SingleInstance.forwardArguments(commandArguments, on: instanceConnection)
+      }
+      logger.info("another Clipnest instance owns the bus name — forwarded argv and exiting")
+      exit(0)
+    }
+
+    let controlConnection = decision == .becomePrimary ? instanceConnection : nil
+
+    Task {
+      await launch(
+        sessionBusAddress: sessionBusAddress, controlConnection: controlConnection,
+        initialCommand: earlyCommand)
+    }
+
+    ClipnestGTKApplication.runMainLoop()
+  }
+
+  private static func launch(
+    sessionBusAddress: String?, controlConnection: DBusConnection?,
+    initialCommand: LinuxAppCLICommand
+  ) async {
+    // T-IBUS-CRASHWIRE (D-IBUS-3): must run before any other subsystem —
+    // if the persisted crash-safety marker is non-empty, a previous run
+    // died (or was SIGKILLed) mid-transaction, leaving the global IBus
+    // engine switched away from the user's real one; force-restoring here,
+    // before `LinuxAppEnvironment` (which owns the REAL, long-lived
+    // `IBusCommitClient` — T-IBUS-REPLACER) or anything else stands up,
+    // closes that window as early as this process's own startup allows.
+    // Deliberately triggered off OUR OWN persisted marker, never
+    // `GetGlobalEngine`'s live value — see `IBusCrashSafetyStateMachine`'s
+    // own doc comment for why that value is unreliable after a crash.
+    // Cheap in the overwhelmingly common case: `IBusCrashSafetyReconciler
+    // .restoreIfMarkerPresent` reads the marker FIRST and never touches
+    // the network at all when nothing is pending.
+    //
+    // T-HANG-SELECT1 hygiene fix: the marker-check itself is cheap and
+    // stays inline, but when a marker IS genuinely present, resolving it
+    // means a real D-Bus connect + call (up to ~2.25s worst case) — this
+    // MUST be `await`ed to completion here (nothing after this line, in
+    // particular `LinuxAppEnvironment()` below, may start until it's done —
+    // see this function's own ordering contract above), but the actual
+    // blocking syscalls run on a background thread via
+    // `Task.detached(priority: .userInitiated)`, matching
+    // `LinuxAppEnvironment.init`'s own existing pattern for its
+    // blocking/expensive startup steps, so the GTK main thread keeps
+    // pumping (redrawing, answering `clipnest-ctl ping`) instead of
+    // freezing and triggering the compositor's force-quit dialog.
+    // `IBusCrashSafetyReconciliationGate.runBlocking` (not a bare call)
+    // guards against a shutdown signal's self-pipe callback reaching the
+    // SAME marker concurrently during this now-unblocked window — see that
+    // type's own doc comment for the exact race this closes.
+    await Task.detached(priority: .userInitiated) {
+      IBusCrashSafetyReconciliationGate.runBlocking {
+        IBusCrashSafetyReconciler.restoreIfMarkerPresent(store: PlatformDefaults.keyValueStore)
+      }
+    }.value
+
+    let environment: LinuxAppEnvironment
+    do {
+      environment = try await LinuxAppEnvironment()
+    } catch {
+      logger.error("failed to initialize LinuxAppEnvironment: \(String(describing: error))")
+      ClipnestGTKApplication.quitMainLoop()
+      return
+    }
+    // Deliberate owner for the composition root's whole process lifetime —
+    // see the "Process-lifetime ownership" doc comment above `environment`.
+    Self.environment = environment
+
+    environment.startCapture()
+    environment.startUpdateChecking()
+    environment.enforceRetentionNow()
+
+    // Routed follow-up: proactively prompt for the auto-paste (uinput)
+    // permission at first run, the way macOS's `requestAccessibilityOnceIfNeeded()`
+    // shows its Accessibility prompt — rather than only ever explaining the
+    // gap passively in Settings > Permissions after a user has already hit
+    // it. `AutoPasteStartupPrompt.showIfNeeded` (`ClipnestGTK`) is the ONE
+    // place that decides whether to show it (gated on the resolved paste
+    // backend, not the raw uinput capability — see that type's own doc
+    // comment) and persists "shown" through `environment.settingsStore`, so
+    // this call is unconditional here; called before the initial-command
+    // switch below so a fresh install invoked as `clipnest --toggle-picker`
+    // still gets the one-time nudge (the prompt is modal, so it simply
+    // takes focus first).
+    AutoPasteStartupPrompt.showIfNeeded(
+      isAutoPasteAvailable: environment.eventSynthesizerKind != .clipboardOnly,
+      settings: environment.settingsStore,
+      requestUInputGrant: { completion in
+        GrantInputHelperClient.requestGrant(completion: completion)
+      }
+    )
+
+    switch initialCommand {
+    case .togglePicker: environment.togglePicker()
+    case .expandSnippet: environment.expandSnippet()
+    // Unreachable in practice: `run(arguments:)`'s early-exit guard above
+    // handles `.version`/`.help` and `exit(0)`s before this async `launch`
+    // is ever scheduled (see T-BB2's doc comment there). Kept here only
+    // because `LinuxAppCLICommand`'s switch must stay exhaustive.
+    case .version, .help, .none: break
+    }
+
+    guard let controlConnection, let sessionBusAddress else {
+      logger.info(
+        "no session bus reachable — running standalone with no D-Bus control surface, tray, or Shell-extension integration"
+      )
+      return
+    }
+
+    let controlService = startControlService(on: controlConnection, environment: environment)
+
+    // T-P10I: `callConnection` below is `controlService` itself (which
+    // owns `app.clipnest.Clipnest` via `SingleInstance.acquire` and
+    // conforms to `DBusCalling` — see `ClipnestControlService`'s own
+    // "demuxed outgoing calls" doc comment), never a second, separate
+    // `DBusConnection` — a real GNOME Shell traced with `dbus-monitor`
+    // showed the extension's `_checkSender` permanently (not racily)
+    // denying every call sent from any OTHER connection.
+    let shellHelperClient = makeShellHelperClient(
+      sessionBusAddress: sessionBusAddress, callConnection: controlService)
+    // See the "Process-lifetime ownership" doc comment above — this used
+    // to survive only via an accidental retain cycle through the closures
+    // wired below.
+    Self.shellHelperClient = shellHelperClient
+    wireShellHelper(shellHelperClient, environment: environment)
+
+    startTray(sessionBusAddress: sessionBusAddress, environment: environment)
+
+    installHotkeys(sessionBusAddress: sessionBusAddress, shellHelperClient: shellHelperClient)
+  }
+
+  @discardableResult
+  private static func startControlService(
+    on connection: DBusConnection, environment: LinuxAppEnvironment
+  ) -> ClipnestControlService {
+    let service = ClipnestControlService(connection: connection, capabilities: controlCapabilities)
+    service.onTogglePicker = { Task { @MainActor in environment.togglePicker() } }
+    service.onShowPicker = { options in
+      Task { @MainActor in
+        let point = options.pointer.map { (x: Int($0.x), y: Int($0.y)) }
+        environment.showPicker(at: point)
+      }
+    }
+    service.onHidePicker = { Task { @MainActor in environment.hidePicker() } }
+    service.onExpandSnippet = { Task { @MainActor in environment.expandSnippet() } }
+    service.onOpenSettings = { Task { @MainActor in environment.openSettings() } }
+    service.start()
+    // Must happen — see `controlService`'s doc comment: without this, the
+    // service (and its receive thread's only path to a live `self`) is
+    // gone before the thread it just started ever gets scheduled.
+    controlService = service
+    return service
+  }
+
+  /// `callConnection` is the app's `app.clipnest.Clipnest`-owning identity
+  /// (`ClipnestControlService`, conforming to `DBusCalling` — see its
+  /// "T-P10I: demuxed outgoing calls" doc comment) — NOT a fresh
+  /// `DBusConnection` of its own. `signalConnection` stays a separate,
+  /// dedicated connection: the extension's `_checkSender` only gates
+  /// METHOD CALLS it receives, never the broadcast signals it emits, so
+  /// this one never needed a trusted identity — only its own uncontested
+  /// reader thread (`ShellHelperClient.readLoop`).
+  private static func makeShellHelperClient(
+    sessionBusAddress: String, callConnection: any DBusCalling
+  ) -> ShellHelperClient? {
+    let signalConnection = DBusConnection.connect(
+      address: sessionBusAddress, timeout: sessionBusConnectTimeout)
+    let client = ShellHelperClient(
+      callConnection: callConnection, signalConnection: signalConnection)
+    client.startWatching()
+    client.refreshCapabilities()
+    return client
+  }
+
+  private static func wireShellHelper(
+    _ client: ShellHelperClient?, environment: LinuxAppEnvironment
+  ) {
+    guard let client else { return }
+    client.onShortcutActivated = { action, options in
+      Task { @MainActor in
+        switch action {
+        case ShellExtensionKeybindingSchema.expandSnippetKey: environment.expandSnippet()
+        default:
+          let point = options.pointer.map { (x: Int($0.x), y: Int($0.y)) }
+          environment.showPicker(at: point)
+        }
+      }
+    }
+    // T-P10I: re-resolve the hotkey backend live every time capabilities
+    // change — covers the extension being enabled well AFTER this app
+    // already finished `installHotkeys` (a one-shot resolution at launch
+    // would never see it), and covers it being disabled or crashing
+    // mid-session (falls back to the always-installed GSettings floor —
+    // see `resolveAndApplyHotkeyBackend`'s doc comment). This closure used
+    // to be left at its default no-op: declared, documented as the live
+    // "took effect with no restart" signal every other capability-gated
+    // caller here already uses, but never actually wired to anything for
+    // hotkeys specifically — exactly the "declared but nobody wires it"
+    // gap `coding-standards.md` warns a cross-platform seam against, even
+    // though this one is Linux-only rather than cross-platform.
+    client.onCapabilitiesChanged = { capabilities in
+      Task { @MainActor in
+        // T-HOTKEYGAP1 diagnostics: the extension going away is the START
+        // of the window in which both hotkeys were observed dead, so the
+        // moment this is logged is the zero point every other measurement
+        // in that investigation is relative to. Logged INSIDE the hop (not
+        // in the closure body) because `logger` is isolated to this
+        // `@MainActor` enum, like every other logging call site here.
+        logger.info(
+          "shell-helper capabilities changed: present=\(capabilities.isPresent) canDeliverShortcuts=\(capabilities.canDeliverShortcuts)"
+        )
+        reconcileHotkeyBackend(shellHelperClient: client)
+      }
+    }
+    // See `LinuxAppEnvironment.placeWindowHandler`'s doc comment /
+    // `PickerWindow.swift`'s own: only the compositor (via this D-Bus
+    // call) can actually move/raise/skip-taskbar a GTK4 window — flags
+    // above + skip-taskbar match a transient popup picker, never sticky
+    // (it should NOT survive a workspace switch).
+    environment.placeWindowHandler = { windowToken, x, y in
+      _ = client.placeWindow(
+        windowToken: windowToken, x: Int32(x), y: Int32(y),
+        flags: PlaceWindowFlag.above | PlaceWindowFlag.skipTaskbar)
+    }
+    // T-SNIPPET-FF1: see `LinuxClipboardSelectionReplacer
+    // .privilegedTextWriter`'s doc comment for why this exists and
+    // `ShellHelperClient.setClipboardText`'s for the mechanism. No live
+    // re-wiring needed on `onCapabilitiesChanged` (unlike hotkeys above):
+    // `setClipboardText` re-checks `currentCapabilities.supports(.clipboard)`
+    // on every call already, so this closure naturally starts returning
+    // `false` (falling back to `writer.writeString`) the moment the
+    // extension is disabled, with no separate signal to react to.
+    environment.clipboardReplacer.privilegedTextWriter = { [weak client] text in
+      client?.setClipboardText(text) ?? false
+    }
+    // T-COPYFLAKE1 diagnostics: see `LinuxClipboardSelectionReplacer
+    // .focusProbe`'s doc comment. Same no-re-wiring-needed reasoning as
+    // `privilegedTextWriter` above — `getFocusedApp()` re-checks
+    // `currentCapabilities.supports(.focus)` per call, so this degrades to
+    // `waylandFocus=unavailable` on its own the moment the extension goes
+    // away. This is also `GetFocusedApp`'s FIRST Swift reader: the method
+    // was implemented, tested and shipped in the extension with no caller
+    // at all (coding-standards.md names it as a live dead-path instance).
+    environment.clipboardReplacer.focusProbe = { [weak client] in
+      client?.getFocusedApp()
+    }
+  }
+
+  private static func startTray(sessionBusAddress: String, environment: LinuxAppEnvironment) {
+    guard
+      let ownConnection = DBusConnection.connect(
+        address: sessionBusAddress, timeout: sessionBusConnectTimeout)
+    else { return }
+    let watchConnection = DBusConnection.connect(
+      address: sessionBusAddress, timeout: sessionBusConnectTimeout)
+    let tray = StatusNotifierTray(ownConnection: ownConnection, watchConnection: watchConnection)
+    tray.onOpenClipnest = { Task { @MainActor in environment.togglePicker() } }
+    tray.onOpenSettings = { Task { @MainActor in environment.openSettings() } }
+    // Synchronous hops (the tray's receive thread blocks until the GTK
+    // thread's main-queue pump runs them) so the menu reads back the state
+    // the user just set — an async `Task` would let the next `GetLayout`
+    // race ahead of it and show the old checkmark.
+    tray.isCapturePaused = {
+      DispatchQueue.main.sync { MainActor.assumeIsolated { environment.isCapturePaused } }
+    }
+    tray.setCapturePaused = { isPaused in
+      DispatchQueue.main.sync {
+        MainActor.assumeIsolated { environment.isCapturePaused = isPaused }
+      }
+    }
+    // T-IBUS-CRASHWIRE: routes through the SAME shared restore
+    // (`restoreIBusEngineBeforeQuit()`) the SIGTERM/SIGINT path uses
+    // (`run(arguments:)`'s `ProcessSignalShutdown.install` call above), so
+    // graceful quit and signal-triggered quit can never drift apart — this
+    // task's own brief. The only behavior change versus before: one extra
+    // `KeyValueStore` read (cheap) ahead of the existing `quitMainLoop()`
+    // call; a healthy quit with no in-flight IBus transaction finds no
+    // marker and does nothing further, so ordinary "click Quit" behavior is
+    // otherwise unchanged.
+    tray.onQuit = {
+      Task { @MainActor in
+        restoreIBusEngineBeforeQuit()
+        ClipnestGTKApplication.quitMainLoop()
+      }
+    }
+    tray.start()
+    // See the "Process-lifetime ownership" doc comment above `environment`
+    // — without this, `tray`'s receive thread has the identical unowned-
+    // weak-self shape T-LX1 fixed for `ClipnestControlService`.
+    Self.tray = tray
+  }
+
+  /// Priority chain (this task's build step 5): Shell-extension keybinding
+  /// -> `XGrabKey` (blocked in this build — see `HotkeyBackend.xGrabKey`'s
+  /// doc comment) -> `GlobalShortcuts` portal (dead on 22.04/24.04, kept
+  /// for forward compatibility) -> the GSettings floor.
+  ///
+  /// Probes the portal once (its availability is a GNOME-Shell-version
+  /// fact, not something that changes live) and caches it, then hands off
+  /// to `reconcileHotkeyBackend` — the same entry point
+  /// `onCapabilitiesChanged` uses for every LIVE re-resolution over the
+  /// rest of the session (see that closure's doc comment in
+  /// `wireShellHelper`, and T-P10I's fix in `reconcileHotkeyBackend`'s own
+  /// doc comment).
+  private static func installHotkeys(
+    sessionBusAddress: String, shellHelperClient: ShellHelperClient?
+  ) {
+    if let probeConnection = DBusConnection.connect(
+      address: sessionBusAddress, timeout: sessionBusConnectTimeout)
+    {
+      cachedGlobalShortcutsPortalAvailable = GlobalShortcutsPortalClient.isAvailable(
+        on: probeConnection, timeout: .milliseconds(500))
+    }
+    reconcileHotkeyBackend(shellHelperClient: shellHelperClient)
+  }
+
+  /// The single entry point that (re-)resolves and applies the hotkey
+  /// backend — called once at startup (`installHotkeys`) and again, live,
+  /// every time `ShellHelperClient.onCapabilitiesChanged` fires
+  /// (`wireShellHelper`). Does the fast, synchronous resolution/apply pass
+  /// itself, then — only if the extension claims hotkeys but this pass's
+  /// probe didn't confirm live dispatch — hands off to
+  /// `retryLiveDispatchProbeIfNeeded` for a bounded, non-blocking retry.
+  @MainActor
+  private static func reconcileHotkeyBackend(shellHelperClient: ShellHelperClient?) {
+    let start = ProcessInfo.processInfo.systemUptime
+    let confirmed = resolveAndApplyHotkeyBackend(shellHelperClient: shellHelperClient)
+    // T-HOTKEYGAP1 diagnostics: logged on EVERY reconcile, not only when
+    // the backend changed (the existing "hotkey backend resolved" line
+    // below is change-gated on purpose, to keep steady-state quiet). A
+    // reconcile that decided nothing changed is exactly the case that
+    // needed to be visible: the reported failure had Clipnest reconciling
+    // correctly while both hotkeys stayed dead, so "we reconciled" and
+    // "the accelerator is grabbed" must be separately visible facts.
+    logger.info(
+      "hotkey reconcile: liveDispatchConfirmed=\(confirmed) elapsedMs=\(Int((ProcessInfo.processInfo.systemUptime - start) * 1000))"
+    )
+    if !confirmed {
+      retryLiveDispatchProbeIfNeeded(shellHelperClient: shellHelperClient)
+    }
+  }
+
+  /// Resolves `HotkeyBackendResolver`'s decision from fresh inputs, logs it
+  /// (only when it actually changed from last time, so a steady-state
+  /// re-resolution — e.g. a `CapabilitiesChanged` notice that changed
+  /// nothing — doesn't spam the log), and applies it. Returns whether the
+  /// live-dispatch probe was confirmed this pass, so `reconcileHotkeyBackend`
+  /// knows whether a retry is worth scheduling.
+  ///
+  /// **T-P10I.** This used to run exactly once, synchronously, at startup,
+  /// with no way to ever revisit the decision — so a probe that lost the
+  /// startup race (see `retryLiveDispatchProbeIfNeeded`'s doc comment) was
+  /// wrong for the rest of the process's life, and an extension enabled
+  /// AFTER that one run (or one that crashed/was disabled mid-session)
+  /// never changed anything either, despite `ShellHelperClient`'s whole
+  /// design being built around "capabilities changing takes effect live,
+  /// no restart" (see that class's own doc comment). This function is now
+  /// callable any number of times and always re-derives fresh inputs
+  /// rather than trusting stale ones — never trusting `Capabilities` alone
+  /// for the reason `HotkeyBackend.shellExtensionKeybinding`'s doc comment
+  /// gives, on every single call, not just the first.
+  ///
+  /// The GSettings floor is installed UNCONDITIONALLY, even when the
+  /// Shell-extension tier is selected — the fix for the other half of this
+  /// task's brief: "if the probe succeeds but signal delivery later
+  /// breaks, the user must not be left with a dead hotkey and no
+  /// fallback." Nothing here (or anywhere else) actively health-checks
+  /// `ShortcutActivated` delivery after the fact — the mechanisms that DO
+  /// notice a regression (`NameOwnerChanged`/`CapabilitiesChanged`) don't
+  /// fire for, say, a lost Mutter keybinding grab with the extension
+  /// otherwise healthy. Keeping the floor's OWN, independent accelerator
+  /// always bound means a global toggle keeps working through that failure
+  /// mode too, without needing an ongoing heartbeat/poll loop.
+  /// `ToggleHotkeyFloorBinding.reinstallFloor`'s doc comment already
+  /// established this exact "safe to have both bound at once" precedent
+  /// for its own call site (a user-initiated rebind, via a DIFFERENT
+  /// accelerator than the extension's own keybinding schema uses — Mutter
+  /// grants each its own grab); this generalizes it to every resolution.
+  /// **T-HOTKEYFLOOR-GAP1 correction:** `GSettingsCustomKeybinding.install`
+  /// used to be describable as "idempotent — safe to call repeatedly with
+  /// no observable effect when nothing changed", but that "no observable
+  /// effect" framing was the bug: a value-identical rewrite is exactly what
+  /// every steady-state reconcile call here makes, and gnome-settings-daemon
+  /// only re-grabs the accelerator with Mutter on a genuine GSettings value
+  /// change — so "nothing changed" meant "gsd never even tries", which
+  /// left the floor holding no live grab at all after the Shell extension
+  /// (which had been winning the single exclusive grab for that
+  /// accelerator) was disabled. `install` now forces a real transition on
+  /// the `binding` key on every call specifically so this is always safe to
+  /// call repeatedly, INCLUDING when nothing looks like it changed — see
+  /// that method's own doc comment for the live D-Bus evidence
+  /// (`org.gnome.Shell.GrabAccelerators` returning a failed `0` vs a real
+  /// action id).
+  @discardableResult
+  @MainActor
+  private static func resolveAndApplyHotkeyBackend(shellHelperClient: ShellHelperClient?) -> Bool {
+    let shellExtensionAvailable =
+      shellHelperClient?.currentCapabilities.canDeliverShortcuts ?? false
+    // See `HotkeyBackend.shellExtensionKeybinding`'s doc comment / this
+    // task's audit: a stub extension whose service exports no D-Bus
+    // methods at all still makes `Capabilities` advertise "hotkeys" —
+    // grabbing the mutter keybinding is a real, independent side effect —
+    // so that string is never trusted alone. Only skip the live probe
+    // entirely when hotkeys weren't even claimed, to avoid a pointless
+    // round trip.
+    let shellExtensionLiveDispatchConfirmed =
+      shellExtensionAvailable && (shellHelperClient?.probeLiveDispatch() ?? false)
+
+    let backend = HotkeyBackendResolver.resolve(
+      shellExtensionKeybindingAvailable: shellExtensionAvailable,
+      shellExtensionLiveDispatchConfirmed: shellExtensionLiveDispatchConfirmed,
+      // See `HotkeyBackend.xGrabKey`'s doc comment: no `CXlib` dependency
+      // is declared for this target, so this tier can never be attempted
+      // from here.
+      xGrabKeyAvailable: false,
+      globalShortcutsPortalAvailable: cachedGlobalShortcutsPortalAvailable)
+
+    logger.info(
+      "hotkey resolve inputs: shellExtensionAvailable=\(shellExtensionAvailable) liveDispatchConfirmed=\(shellExtensionLiveDispatchConfirmed) portalAvailable=\(cachedGlobalShortcutsPortalAvailable) resolved=\(String(describing: backend))"
+    )
+    if backend != lastResolvedHotkeyBackend {
+      let previous = lastResolvedHotkeyBackend
+      logger.info(
+        "hotkey backend resolved: \(String(describing: backend))"
+          + (previous.map { " (was \(String(describing: $0)))" } ?? ""))
+      lastResolvedHotkeyBackend = backend
+    }
+
+    // Always installed — see this method's doc comment on why the floor is
+    // never skipped, even for `.shellExtensionKeybinding`.
+    installGSettingsFloor()
+
+    return shellExtensionLiveDispatchConfirmed
+  }
+
+  /// **T-P10I.** `probeLiveDispatch()` can lose a real, confirmed
+  /// cross-process race the FIRST time it's called: the extension's own
+  /// `_checkSender` only allows a call from the CURRENT owner of
+  /// `app.clipnest.Clipnest`, which the extension learns asynchronously
+  /// via its own `Gio.bus_watch_name` — a second, independent D-Bus round
+  /// trip through a DIFFERENT process (`gnome-shell`) that has not
+  /// necessarily completed by the time this app's probe arrives a few
+  /// milliseconds after claiming that name. Confirmed live
+  /// (`packaging/linux/gnome-shell-test/README.md`'s "Findings" section):
+  /// the identical `GetPointer` call, made from a throwaway process that
+  /// claims `app.clipnest.Clipnest` and then simply waits before calling,
+  /// succeeds every time — the access-denied-vs-success split is purely a
+  /// function of how long the caller waited after claiming the name, not
+  /// anything else this app's own connect/probe ordering can eliminate
+  /// (there is no signal to watch for "the extension's internal bookkeeping
+  /// about MY name has caught up" — the ShellHelper name itself is
+  /// typically already owned and stable the whole time).
+  ///
+  /// So: bounded RETRY, not a single fixed sleep before the first attempt.
+  /// Runs entirely on a dedicated background `Thread` (matching this
+  /// module's own established pattern for blocking D-Bus work — see
+  /// `ShellHelperClient.readLoop`/`StatusNotifierTray`'s receive thread) —
+  /// NEVER the `@MainActor` this function itself, and the GTK main loop,
+  /// run on — so the common case (no extension installed at all, which
+  /// short-circuits via `probeLiveDispatch()`'s own `isPresent` check
+  /// before this is ever called at all — see `reconcileHotkeyBackend`)
+  /// pays nothing, and even the retried case never blocks startup or the
+  /// UI thread for any part of its ~2s bound.
+  private static func retryLiveDispatchProbeIfNeeded(shellHelperClient: ShellHelperClient?) {
+    guard let shellHelperClient, shellHelperClient.currentCapabilities.canDeliverShortcuts else {
+      return
+    }
+
+    // Read the actor-isolated schedule here, on the `@MainActor` this
+    // function itself runs on, and hand the background `Thread` below a
+    // plain, already-`Sendable` local copy — the closure it runs is
+    // inferred `@Sendable` and may not reference an actor-isolated STATIC
+    // property directly, even one whose VALUE type is `Sendable`.
+    let delays = liveDispatchRetryDelays
+    let thread = Thread {
+      for delay in delays {
+        Thread.sleep(forTimeInterval: DurationConversion.timeInterval(for: delay))
+        guard shellHelperClient.currentCapabilities.canDeliverShortcuts else {
+          // Lost the capability entirely mid-retry (extension disabled) —
+          // `onCapabilitiesChanged` (wired in `wireShellHelper`) already
+          // reconciles that transition live; nothing left for this
+          // schedule to confirm.
+          return
+        }
+        if shellHelperClient.probeLiveDispatch() {
+          Task { @MainActor in reconcileHotkeyBackend(shellHelperClient: shellHelperClient) }
+          return
+        }
+      }
+      Task { @MainActor in
+        logger.info(
+          "shell-extension live-dispatch probe still unconfirmed after \(delays.count) retries — keeping the resolved fallback backend"
+        )
+      }
+    }
+    thread.name = "ShellHelperClient.liveDispatchRetry"
+    thread.start()
+  }
+
+  /// Resolves the accelerator to (re)install a GSettings floor binding
+  /// with at launch: the user's own stored value from the shared
+  /// `app.clipnest.Clipnest.Keybindings` schema (read via
+  /// `GlobalHotkeyAccelerator.current(_:)`, `ClipnestGTK`) when one is set,
+  /// falling back to `defaultValue` only when nothing is stored (first
+  /// launch, or the schema was never written to). Extracted as a small
+  /// pure decision — the same "pure logic separated from the real
+  /// GSettings/display I/O" shape `LinuxEventSynthesizerSelection.choose`
+  /// already uses — so the "stored wins, default is a fallback only"
+  /// contract is unit-testable without a real GSettings daemon (see
+  /// `AppLinuxAppLifecycleTests.swift`).
+  ///
+  /// **The bug this fixes:** `installGSettingsFloor()` used to call
+  /// `reinstallFloor(withAccelerator: defaultToggleAccelerator)`
+  /// unconditionally on EVERY launch, silently clobbering a rebind the user
+  /// had already made from Settings > Shortcuts (`GlobalHotkeyAccelerator
+  /// .write`, which persists to the exact same schema `current(_:)` reads
+  /// here) back to the hardcoded default the next time the app started.
+  /// Confirmed live on the VM: Clipnest's own schema held the user's
+  /// rebound `<Shift><Control>v` while GNOME's actual custom keybinding
+  /// still held the hardcoded default `<Super><Shift>v` — the rebind had
+  /// silently never taken effect past the first relaunch.
+  ///
+  /// `nonisolated`: pure `String?`/`String` logic with no actor-isolated
+  /// state to protect — same reasoning `LinuxAppEnvironment.installedVersion`
+  /// already documents for its own `nonisolated static let` on this
+  /// `@MainActor` type's sibling class. Lets `AppLinuxAppLifecycleTests`
+  /// call this from an ordinary synchronous (non-`@MainActor`) test
+  /// function instead of forcing every caller onto the main actor for a
+  /// computation that never touches it.
+  nonisolated static func resolvedAccelerator(storedValue: String?, defaultValue: String)
+    -> String
+  {
+    storedValue ?? defaultValue
+  }
+
+  /// Installs BOTH global-hotkey GSettings-floor bindings — toggle-picker
+  /// (unchanged) and, as of T-HOTKEY1, expand-snippet (new: previously the
+  /// only way to reach `SnippetExpander` without the GNOME Shell extension
+  /// was `clipnest --expand-snippet`/`clipnest-ctl expand-snippet` typed in
+  /// a terminal, which defeats the point of a global hotkey). Each delegates
+  /// to its own binding type's `reinstallFloor(withAccelerator:)`
+  /// (`ToggleHotkeyFloorBinding`/`ExpandSnippetHotkeyFloorBinding`, this
+  /// directory) — the SAME function a Settings > Shortcuts rebind calls —
+  /// rather than a second, separately-literal `GSettingsCustomKeybinding
+  /// .install` call per binding here, so `segment`/`bindingLabel`/the
+  /// `OwnExecutablePath.resolve()`-based command-building logic each have
+  /// exactly one owner.
+  ///
+  /// `OwnExecutablePath.resolve()` (used inside both `reinstallFloor`
+  /// implementations) exists because the command gnome-settings-daemon
+  /// executes later inherits neither this process's `$PATH` resolution nor
+  /// its working directory — see that type's own doc comment for why
+  /// `CommandLine.arguments.first` (used here previously) silently produced
+  /// a non-existent `//clipnest` for the packaged bare-command launch this
+  /// app actually ships as, disabling the universal hotkey floor.
+  ///
+  /// T-WLKEY-CLOBBER: now resolves each accelerator via
+  /// `resolvedAccelerator(storedValue:defaultValue:)` above instead of
+  /// passing the hardcoded default straight through — see that function's
+  /// doc comment for the bug this fixes.
+  private static func installGSettingsFloor() {
+    ToggleHotkeyFloorBinding.reinstallFloor(
+      withAccelerator: resolvedAccelerator(
+        storedValue: GlobalHotkeyAccelerator.current(.togglePicker),
+        defaultValue: defaultToggleAccelerator))
+    ExpandSnippetHotkeyFloorBinding.reinstallFloor(
+      withAccelerator: resolvedAccelerator(
+        storedValue: GlobalHotkeyAccelerator.current(.expandSnippet),
+        defaultValue: defaultExpandSnippetAccelerator))
+  }
+
+  // MARK: - T-IBUS-CRASHWIRE: shared quit-time restore
+
+  /// The ONE routine both a caught SIGTERM/SIGINT
+  /// (`ProcessSignalShutdown.install`'s closure, `run(arguments:)`) and the
+  /// tray's "Quit" item (`startTray`) call immediately before
+  /// `ClipnestGTKApplication.quitMainLoop()` — see this task's own brief
+  /// ("graceful quit and signal quit share one path rather than drifting
+  /// apart"). Still true after the reviewer fix below: this remains the
+  /// single implementation of "is there a dangling IBus crash-safety
+  /// marker, and if so restore it," checked at both ends of this process's
+  /// life (startup AND every quit path) — only WHICH `KeyValueStore`
+  /// backs that check changed, not the fact that there is exactly one
+  /// routine.
+  ///
+  /// **Reviewer fix (data-loss bug, not a theoretical race):** once
+  /// `environment` exists, route through `LinuxAppEnvironment
+  /// .restoreIBusEngineIfNeeded()` — its own single, `SynchronizedKeyValueStore`-
+  /// wrapped instance — rather than constructing a second, unsynchronized
+  /// `PlatformDefaults.keyValueStore()` here. `JSONFileKeyValueStore
+  /// .persist()` rewrites the WHOLE settings file per write; a write
+  /// through a fresh, independently-snapshotted second instance can
+  /// silently revert a concurrent settings write made through
+  /// `environment`'s shared one — the user loses a setting they just
+  /// changed, no error. The ORIGINAL author's "provably sequential"
+  /// argument holds for `launch()`'s own startup call (below `environment`
+  /// doesn't exist yet, so nothing else could be writing concurrently
+  /// either) but not here: by the time either quit path fires, `environment`
+  /// has been live for the whole session, `SettingsWindow` writes through
+  /// its `keyValueStore` on ordinary use, and `IBusCommitClient`'s own
+  /// crash-safety marker writes run off-`@MainActor` — a real, not
+  /// theoretical, overlap window. See `LinuxAppEnvironment
+  /// .restoreIBusEngineIfNeeded()`'s own doc comment for the mirror image
+  /// of this note (why that startup call is correct to keep its own
+  /// instance) — the two are DELIBERATELY asymmetric; do not "fix" them
+  /// to match.
+  ///
+  /// Before `environment` exists (a shutdown signal arriving in the narrow
+  /// startup window before `launch()` finishes constructing it), there is
+  /// no shared synchronized instance to route through yet — and, by the
+  /// same "provably sequential" reasoning, nothing else could be writing
+  /// settings concurrently at that point either — so a fresh
+  /// `PlatformDefaults.keyValueStore()` there is still safe, not a
+  /// reintroduction of this bug.
+  ///
+  /// Cheap on the overwhelmingly common path either way: a healthy quit
+  /// with no in-flight IBus commit transaction finds an empty marker and
+  /// this call does nothing beyond one `KeyValueStore` read — see
+  /// `IBusCrashSafetyReconciler.restoreIfMarkerPresent`'s own doc comment.
+  ///
+  /// **T-HANG-SELECT1 hygiene fix:** the pre-`environment` branch now
+  /// routes through `IBusCrashSafetyReconciliationGate.runBlocking` rather
+  /// than calling `restoreIfMarkerPresent` bare. Deliberately still
+  /// BLOCKING here, unlike `launch()`'s own startup call — this function
+  /// only ever runs as part of an already-in-progress shutdown (a caught
+  /// SIGTERM/SIGINT, or the tray's "Quit"), so there is no "user is trying
+  /// to use the app right now" cost to protect against, only "how long
+  /// until this process actually exits" — and blocking here is what lets
+  /// this call wait for the mutex `runBlocking` shares with `launch()`'s
+  /// own (now backgrounded) startup reconciliation, so the two can never
+  /// interleave against the same on-disk marker if a shutdown signal
+  /// happens to land during that narrow startup window. Bounded by the
+  /// same NOW-ACTUALLY-ENFORCED D-Bus timeouts (T-DBUSTIMEO1) either way.
+  private static func restoreIBusEngineBeforeQuit() {
+    if let environment {
+      environment.restoreIBusEngineIfNeeded()
+    } else {
+      IBusCrashSafetyReconciliationGate.runBlocking {
+        IBusCrashSafetyReconciler.restoreIfMarkerPresent(store: PlatformDefaults.keyValueStore)
+      }
+    }
+  }
+}

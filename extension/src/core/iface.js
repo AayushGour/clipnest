@@ -1,0 +1,103 @@
+'use strict';
+// The interface XML, kept beside the code that implements it so the
+// contract and its implementation cannot drift apart.
+var IFACE_XML = `<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+ "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!--
+  The contract between the Clipnest app and its optional GNOME Shell extension.
+
+  Every bulk transfer is a UNIX fd, never an \`ay\` byte array: marshalling a
+  20 MB image through GJS blocks the compositor's main loop, which is the
+  documented cause of GNOME clipboard-manager stutter.
+
+  Hotkey ACCELERATORS are deliberately absent from this interface. They live in
+  the shared GSettings schema app.clipnest.Clipnest.Keybindings, which both the
+  app and the extension read, so rebinding is a single set_strv() with no IPC
+  and no way for the two to disagree.
+-->
+<node>
+  <interface name="app.clipnest.ShellHelper1">
+    <property name="ProtocolVersion" type="u" access="read"/>
+    <property name="ShellVersion" type="s" access="read"/>
+    <!-- "clipboard" "hotkeys" "paste" "pointer" "placement" "focus" -->
+    <property name="Capabilities" type="as" access="read"/>
+    <signal name="CapabilitiesChanged">
+      <arg name="capabilities" type="as"/>
+    </signal>
+
+    <method name="SetClipboardWatch">
+      <arg direction="in" name="enable" type="b"/>
+      <arg direction="in" name="include_primary" type="b"/>
+    </method>
+    <method name="GetClipboardMimeTypes">
+      <arg direction="in" name="selection" type="u"/>
+      <arg direction="out" name="mimetypes" type="as"/>
+      <arg direction="out" name="serial" type="t"/>
+    </method>
+    <method name="ReadClipboard">
+      <arg direction="in" name="selection" type="u"/>
+      <arg direction="in" name="mimetype" type="s"/>
+      <arg direction="out" name="fd" type="h"/>
+    </method>
+    <method name="SetClipboard">
+      <arg direction="in" name="mimetype" type="s"/>
+      <arg direction="in" name="fd" type="h"/>
+      <arg direction="out" name="serial" type="t"/>
+    </method>
+    <signal name="ClipboardChanged">
+      <arg name="selection" type="u"/>
+      <arg name="serial" type="t"/>
+      <arg name="mimetypes" type="as"/>
+      <arg name="owner_is_us" type="b"/>
+      <arg name="source" type="a{sv}"/>
+    </signal>
+
+    <signal name="ShortcutActivated">
+      <arg name="action" type="s"/>
+      <arg name="timestamp" type="u"/>
+      <arg name="pointer_x" type="i"/>
+      <arg name="pointer_y" type="i"/>
+      <arg name="monitor" type="i"/>
+      <arg name="focus" type="a{sv}"/>
+    </signal>
+
+    <method name="SendKeyChord">
+      <arg direction="in" name="keyval" type="u"/>
+      <arg direction="in" name="modifiers" type="u"/>
+      <arg direction="out" name="ok" type="b"/>
+    </method>
+    <method name="FocusAndSendKeyChord">
+      <arg direction="in" name="window_serial" type="t"/>
+      <arg direction="in" name="keyval" type="u"/>
+      <arg direction="in" name="modifiers" type="u"/>
+      <!-- "ok" | "target-lost" | "modifiers-held" | "unsupported" -->
+      <arg direction="out" name="result" type="s"/>
+    </method>
+
+    <method name="GetFocusedApp">
+      <arg direction="out" name="info" type="a{sv}"/>
+    </method>
+    <method name="GetPointer">
+      <arg direction="out" name="x" type="i"/>
+      <arg direction="out" name="y" type="i"/>
+      <arg direction="out" name="monitor" type="i"/>
+    </method>
+    <method name="GetMonitorWorkArea">
+      <arg direction="in" name="monitor" type="i"/>
+      <arg direction="out" name="rect" type="(iiii)"/>
+    </method>
+
+    <method name="PlaceWindow">
+      <arg direction="in" name="window_token" type="s"/>
+      <arg direction="in" name="x" type="i"/>
+      <arg direction="in" name="y" type="i"/>
+      <!-- 1 above, 2 sticky, 4 skip-taskbar -->
+      <arg direction="in" name="flags" type="u"/>
+      <arg direction="out" name="ok" type="b"/>
+    </method>
+    <method name="UnplaceWindow">
+      <arg direction="in" name="window_token" type="s"/>
+    </method>
+  </interface>
+</node>
+`;

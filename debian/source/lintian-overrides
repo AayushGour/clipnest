@@ -1,0 +1,15 @@
+# Real, expected lintian finding (reproduced via this task's own container
+# verification), not silenced blindly: source-is-missing fires on
+# packaging/linux/vendor/onnxruntime/{amd64,arm64}/lib/libonnxruntime.so.1.28.1
+# because this source package deliberately vendors prebuilt ONNX Runtime
+# binaries rather than building them from source in-tree — see
+# packaging/linux/vendor/onnxruntime/SOURCE.md for exact upstream
+# provenance, license (MIT), and verified checksums. Building ONNX Runtime
+# itself from source is a multi-hour C++/CUDA-toolchain build completely
+# out of scope for this Swift package's own build, and Ubuntu's archives
+# don't carry it as an apt build-dependency either (see
+# debian/README.source's "Known gap #1" for the same class of constraint).
+source-is-missing packaging/linux/vendor/onnxruntime/amd64/lib/libonnxruntime.so.1.28.1
+source-is-missing packaging/linux/vendor/onnxruntime/arm64/lib/libonnxruntime.so.1.28.1
+source-is-missing packaging/linux/vendor/onnxruntime/amd64/lib/libonnxruntime_providers_shared.so
+source-is-missing packaging/linux/vendor/onnxruntime/arm64/lib/libonnxruntime_providers_shared.so

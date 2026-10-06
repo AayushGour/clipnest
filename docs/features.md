@@ -256,6 +256,13 @@ ID` (`:82`), `Rejects a caller-supplied custom excluded bundle ID` (`:95`).
   privacy-filtered app is ever even briefly held in memory as a `ClipItem`.
 - Bundle-ID list is verified/hardcoded, not user-visible/editable yet beyond
   the `customExcludedBundleIDs` injection point.
+- **Linux (1.0.0): GNOME re-publishes a released copy without its privacy
+  marker.** mutter saves clipboard text and, when the owner lets go (KeePassXC's
+  clear-after-N-seconds included), re-publishes it as a single-MIME owner
+  without `x-kde-passwordManagerHint`. `ClipboardManagerRestoreGuard`
+  (`ClipnestPlatformLinux`) treats that restore as the concealed copy it
+  came from, and fails closed. Measured on Ubuntu 24.04 before the fix: the
+  password was captured.
 
 ---
 
@@ -807,6 +814,11 @@ ClipnestAppTests/PickerViewModelTests.swift` — see
   `ItemPreviewController`) must follow the same never-`makeKey()` /
   `orderFrontRegardless()` pattern, or it will steal focus from the search
   field.
+- **Linux (1.0.0): never trust `notify::is-active` to fire on re-show.** GTK4
+  on Wayland keeps `is-active` TRUE across a hide. `PickerWindow.show(at:)`
+  waits for an activation only when the window isn't already reporting
+  active. Otherwise the picker never dismissed on focus loss, and the next
+  hotkey press closed it.
 
 ---
 
@@ -820,7 +832,7 @@ to "it's on the clipboard" otherwise.
 **Key files**
 - `Sources/ClipnestCore/Paste/Paster.swift:136-210`
 - `Sources/ClipnestCore/Paste/FrontmostAppTracker.swift:55-79`
-- `Sources/ClipnestCore/Paste/EventSynthesizing.swift:12-17`
+- `Sources/ClipnestCore/Paste/EventSynthesizing.swift:12-30`
 - `ClipnestApp/Sources/UI/Picker/PickerViewModel.swift:875-978` (`select`/`pasteContent`/`pasteAndDismiss`)
 
 **How it works.**
@@ -919,6 +931,14 @@ including the missing/legacy-blob fallback cases) — see
 - The 40ms `synthesisDelay` exists specifically because the event tap is
   global, not pid-targeted — don't remove it without re-verifying paste
   reliability against a real frontmost-app handoff.
+- **Linux (1.0.0): Clipnest must never read its own clipboard write.** On
+  GNOME the owner serving those bytes is Clipnest's own GTK thread, so the
+  read deadlocks (the item-select freeze, T-HANG-SELECT1). Every write
+  carries `application/x-clipnest-owned`; see `docs/architecture.md`.
+- **Linux (1.0.0): terminals paste with Ctrl+Shift+V.** The target app is
+  invisible to the X11 lookup on Wayland, so `showPicker` latches the AT-SPI
+  role of the focused widget (`ATSPIFocusedRoleReader`, role 60 = terminal)
+  before the picker takes focus.
 
 ---
 
@@ -1025,7 +1045,83 @@ write are independently verified rather than trusted on a bare `AXError`.
    refused or unverifiable): `ClipboardSelectionReplacer
    .replaceSelection(bodyForSelection:)`
    (`ClipboardSelectionReplacer.swift`) is the universal, works-in-any-
-   app path. It runs the entire transaction atomically from the clipboard's
+   app path — **except** when the frontmost app is a known terminal
+   emulator (**T-TERMPASTE1**, 2026-09-14): this whole strategy has no
+   explicit delete step and relies on "paste replaces the OS-level
+   selection," which is false in a terminal (a mouse-drag highlight there
+   is a cosmetic, copy-only artifact disconnected from the shell's real
+   cursor), so it would always corrupt the line into `<keyword><body>`
+   instead of replacing it (confirmed live, 2/2 trials, Terminal.app). For
+   that case `replaceSelection` checks `MacTerminalAppRegistry
+   .isTerminal(bundleIdentifier:)` FIRST, before touching the clipboard at
+   all, and returns `SelectionReplaceResult.declinedTerminalTarget`
+   immediately if it matches — no suppression, no snapshot, no synthesized
+   keystroke. Sending backspaces instead of declining was considered and
+   rejected: verified against real prior art (espanso, AutoKey), both
+   erase-then-inject only because they tracked the trigger being TYPED, a
+   quantity this app's mouse-drag-selected "keyword" never has, so guessing
+   a backspace count here would delete the wrong characters at the real
+   cursor instead of the highlighted ones — see `SelectionReplaceResult
+   .declinedTerminalTarget`'s doc comment for the full comparison.
+
+   **Linux has the same case (`LinuxClipboardSelectionReplacer`,
+   `TerminalAppRegistry.terminalIdentifiers`) but with a known gap on native
+   Wayland (T-TERMDECLINE-WAYLAND1, found 2026-09-14):** the frontmost-app
+   read it decides on is X11-only, and native-Wayland focus collapses to
+   `nil` rather than to a readable identity, which this check reads as "not
+   a terminal." So on Linux the decline is effective on X11 sessions and on
+   XWayland clients whose window properties are readable, but **does not
+   fire for a native-Wayland terminal** — the line still corrupts there.
+   See `docs/API-ClipnestLinuxAppKit.md`'s T-TERMPASTE1 section for the full
+   writeup and the board task. **This gap is narrowed, but do not read it as
+   closed** (T-IBUS-TEST1, 2026-09-14). What is measured: a VTE terminal
+   does answer `SetSurroundingText`, so the IBus tier reaches it as a
+   receptive widget rather than declining (`outcome=noSelection`, never
+   `.noLiveRecipient`), and a terminal therefore does not fall through to
+   this clipboard tier from IBus. What is NOT measured: the shipped Swift
+   build actually committing replacement text into a VTE terminal or into
+   Firefox. The tester could not get either app to report a selection IBus
+   recognises — AT-SPI `add_selection`, a real Shift+Left keyboard
+   selection, and a `uinput` virtual-mouse double-click were all tried, and
+   no pointer-precision tool (`xdotool` or equivalent) was available to
+   rule out a harness limitation. **Unconfirmed, explicitly not falsified**:
+   the throwaway Python POC did commit into a VTE terminal end-to-end, so
+   the mechanism works there; what is unproven is this code doing it. Treat
+   native-Wayland terminal expansion as unverified until a session with
+   real pointer tooling closes it.
+
+   **Linux-only third tier, inserted BELOW strategy 1 above and ABOVE this
+   clipboard strategy (T-IBUS-REPLACER, D-IBUS-1..6, 2026-09-14):**
+   `ClipnestCore.SnippetExpander` itself is unaware of this — its own
+   "two-strategy design" (this section's own opening line) is unchanged;
+   what Linux passes as strategy 2's `clipboardReplacer` is actually
+   `LinuxTieredSelectionReplacer`
+   (`Sources/ClipnestLinuxAppKit/Clipboard/LinuxTieredSelectionReplacer.swift`),
+   which tries an **IBus commit** (`LinuxIBusSelectionReplacer` ->
+   `IBusCommitClient`) before falling back to the copy/paste strategy
+   documented above. The motivating bug: GNOME Wayland tracks keyboard
+   modifiers PER ORIGINATING DEVICE, so a synthesized Ctrl+C/Ctrl+V posted
+   while the user still holds a modifier from a DIFFERENT input device
+   merges into the wrong chord and silently fails (`T-CROSSDEVICE-MODIFIER1`,
+   `.claude/project-context.md`) — an IBus commit is a D-Bus SIGNAL, never a
+   keystroke, so it is immune to that class of bug BY CONSTRUCTION, not by
+   timing, and (unlike the clipboard strategy) reaches VTE terminals
+   correctly via a real delete-at-cursor protocol rather than
+   copy-then-paste. The gate proving a receptive recipient exists is
+   `SetSurroundingText` (not `FocusIn` — see `docs/API-ClipnestLinuxAppKit.md`'s
+   `IBusCommitClient` section for the full correction), and that SAME
+   answer recovers the highlighted keyword with **zero synthesized
+   keystrokes** — the underlying selection-read mechanism this tier relies
+   on is therefore also immune to the modifier-merge bug, not just the
+   commit. A real IBus commit is fire-and-forget with no acknowledgement,
+   so the outcome is `SelectionReplaceResult.committedUnconfirmed`, never
+   `.replaced`, and is TERMINAL — the clipboard tier is never ALSO tried
+   after it, since retrying after a real commit reached a live recipient
+   risks a genuine double insert. Degrades to permanently skipping straight
+   to the clipboard tier, with zero I/O, whenever no `ibus-daemon` is
+   reachable this session.
+
+   Otherwise, it runs the entire transaction atomically from the clipboard's
    point of view: `beginSuppression()` (→ `ClipboardMonitor.pause()`),
    snapshot every pasteboard item/type verbatim (`snapshotClipboard()`),
    wait `modifierClearDelay` (60ms, so the user's still-held
@@ -1052,6 +1148,7 @@ write are independently verified rather than trusted on a bare `AXError`.
 - AX read succeeds but from a role outside the allowlist (e.g. `AXWebArea` from a Monaco-style editor without accessibility support enabled, or any other unrecognized/unreadable role — **T-ELEC1**/**T-AXTRUST1**) → treated as unreadable, falls through to the clipboard path instead of trusting stale or out-of-scope data.
 - AX read succeeds with a trusted role but an EMPTY string (seen in some VS Code/Antigravity plain-text buffers, distinct from the `AXWebArea` case above) → `SnippetExpander.expand()`'s own blank-check treats it exactly like a `nil` read, falling through to the clipboard path without beeping or attempting an empty-keyword lookup.
 - AX can't read at all (Electron/etc.) → clipboard fallback runs; if that also finds nothing selected → beep.
+- **Frontmost app is a known terminal emulator (T-TERMPASTE1)** → the clipboard tier declines outright, before any clipboard I/O, rather than corrupting the line into `<keyword><body>`; beeps like every other non-replaced outcome. Requires a PRE-EXISTING drag selection to reach at all — typing the keyword and pressing ⌥⌘E with nothing selected already returned `.noSelection` and beeped, unaffected.
 - Multiple snippets share the same keyword → the newest (`createdAt`) wins.
 - Keyword lookup is trimmed + case-folded on both sides (stored keyword and typed selection).
 - The clipboard-fallback transaction always restores the original clipboard, even on failure (via `defer`).
@@ -1062,7 +1159,9 @@ never uses the clipboard, never beeps` (`:57`), `AX reads but no match:
 beeps, does NOT fall back to the clipboard` (`:74`), `AX can't read
 (Electron): falls back to the clipboard, which matches + replaces` (`:91`),
 `AX can't read and the clipboard reads nothing: beeps` (`:109`), `AX reads +
-matches but the AX WRITE is refused: falls back to the clipboard` (`:126`).
+matches but the AX WRITE is refused: falls back to the clipboard` (`:126`),
+and (**T-TERMPASTE1**) `AX can't read and the clipboard tier declines a
+terminal-class target: beeps, does NOT report a false success`.
 `Tests/ClipnestCoreTests/SnippetStoreTests.swift`/
 `SwiftDataSnippetStoreTests.swift` — `findByKeyword` matching/trimming/
 newest-wins (`:211`/`swiftDataFindByKeyword`).
@@ -1075,15 +1174,27 @@ from trusted to rejected, closing the one gap T-ELEC1 deliberately left
 open) and `rangeChanged(before:after:)` (a before/after selection-range pair
 that's readable both times and actually different is the only case that
 counts as a verified write — **T-SAFARI1**).
-`ClipboardSelectionReplacer`/`AXSelectedTextAccessor` (the real AppKit
-implementations that drive actual AX/CGEvent calls) otherwise have no
-automated test — see [Testing strategy](#testing-strategy) — verified
-manually instead: T-ELEC1's 11 clipboard-fallback trials against VS Code and
-the `AXWebArea` guard confirmed live against Antigravity IDE; T-SAFARI1's
-write-verification fix confirmed live against Safari `<input>`, `<textarea>`,
-and `contenteditable` (the exact three surfaces the phantom-write bug was
-found on) plus a TextEdit regression check confirming the native AX fast
-path is unaffected.
+`Tests/ClipnestCoreTests/MacTerminalAppRegistryTests.swift`
+(**T-TERMPASTE1**) covers the pure "is this bundle identifier a terminal"
+decision the decline check reuses. `ClipboardSelectionReplacer`/
+`AXSelectedTextAccessor` themselves (the real AppKit implementations that
+drive actual AX/CGEvent calls, including the terminal-decline gate's own
+`NSWorkspace`-backed frontmost-app read) otherwise have no automated test —
+see [Testing strategy](#testing-strategy) — verified manually/against
+primary sources instead: T-ELEC1's 11 clipboard-fallback trials against VS
+Code and the `AXWebArea` guard confirmed live against Antigravity IDE;
+T-SAFARI1's write-verification fix confirmed live against Safari `<input>`,
+`<textarea>`, and `contenteditable` (the exact three surfaces the
+phantom-write bug was found on) plus a TextEdit regression check confirming
+the native AX fast path is unaffected; T-TERMPASTE1's terminal bundle
+identifiers were each verified against that project's own build metadata
+(Info.plist/Cargo.toml/Xcode project, via DeepWiki against the real source —
+see `MacTerminalAppRegistry.swift`'s doc comment for the citation list) and
+`com.apple.Terminal` specifically confirmed live on the dev host
+(`osascript -e 'id of app "Terminal"'` → `com.apple.Terminal`); the actual
+end-to-end decline (drag-select in a live Terminal.app window, press ⌥⌘E,
+observe the beep and untouched text) was NOT re-verified live for this task
+— see `.claude/logs/senior-dev.md` for why.
 
 **Gotchas / constraints**
 - `Snippet.keyword` is set to the same value as `title` by the current UI —
@@ -1298,7 +1409,7 @@ dependency — the pasteboard (`PasteboardReading`/`MonitoredPasteboard`,
 `ClipboardMonitor.swift:7-37`), persistence (`ClipStore`/`SnippetStore`,
 `ClipStore.swift:35-86`/`SnippetStore.swift:16-45`), pasteboard writes
 (`PasteboardWriting`, `Paster.swift:37-59`), key-event synthesis
-(`EventSynthesizing`, `EventSynthesizing.swift:12-17`), frontmost-app
+(`EventSynthesizing`, `EventSynthesizing.swift:12-30`), frontmost-app
 lookup (`FrontmostApplicationProviding`/`FrontmostAppReferenceProviding`,
 `ClipboardMonitor.swift:12-15`/`FrontmostAppTracker.swift:32-34`), and
 Accessibility-based selection access (`SelectedTextAccessing`/

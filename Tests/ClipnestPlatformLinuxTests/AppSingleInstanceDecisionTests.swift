@@ -1,0 +1,111 @@
+import ClipnestPlatformLinux
+import Foundation
+import Testing
+
+@testable import ClipnestLinuxAppKit
+
+@Suite("SingleInstanceDecision")
+struct AppSingleInstanceDecisionTests {
+  @Test("primaryOwner becomes primary")
+  func primaryOwnerBecomesPrimary() {
+    #expect(SingleInstanceDecision.decide(requestNameReply: .primaryOwner) == .becomePrimary)
+  }
+
+  @Test("alreadyOwner (re-requesting a name this exact connection already owns) becomes primary")
+  func alreadyOwnerBecomesPrimary() {
+    #expect(SingleInstanceDecision.decide(requestNameReply: .alreadyOwner) == .becomePrimary)
+  }
+
+  @Test("inQueue forwards to the running instance")
+  func inQueueForwards() {
+    #expect(
+      SingleInstanceDecision.decide(requestNameReply: .inQueue) == .forwardToRunningInstance)
+  }
+
+  @Test("exists forwards to the running instance")
+  func existsForwards() {
+    #expect(SingleInstanceDecision.decide(requestNameReply: .exists) == .forwardToRunningInstance)
+  }
+
+  @Test("a nil reply (timeout/error) is treated as bus-unavailable, not a crash")
+  func nilReplyIsBusUnavailable() {
+    #expect(SingleInstanceDecision.decide(requestNameReply: nil) == .busUnavailable)
+  }
+}
+
+@Suite("SingleInstance.acquire / forwardArguments")
+struct AppSingleInstanceTests {
+  @Test("acquire sends RequestName with DO_NOT_QUEUE and decodes primaryOwner")
+  func acquireSendsRequestNameWithDoNotQueue() {
+    let fake = FakeDBusCalling(scriptedReplies: [fakeMethodReturn(body: [.uint32(1)])])
+    let decision = SingleInstance.acquire(on: fake, timeout: .milliseconds(50))
+
+    #expect(decision == .becomePrimary)
+    #expect(fake.sentMessages.count == 1)
+    #expect(fake.sentMessages[0].member == "RequestName")
+    guard case .string(let name) = fake.sentMessages[0].body[0] else {
+      Issue.record("expected the bus name as the first RequestName argument")
+      return
+    }
+    #expect(name == "app.clipnest.Clipnest")
+    guard case .uint32(let flags) = fake.sentMessages[0].body[1] else {
+      Issue.record("expected flags as the second RequestName argument")
+      return
+    }
+    #expect(flags == 0x4, "DO_NOT_QUEUE must always be set — see SingleInstance's doc comment")
+  }
+
+  @Test(
+    "acquire never sends Hello itself — DBusConnection.connect already did before this ever sees the connection"
+  )
+  func acquireNeverResendsHello() {
+    let fake = FakeDBusCalling(scriptedReplies: [fakeMethodReturn(body: [.uint32(1)])])
+    _ = SingleInstance.acquire(on: fake, timeout: .milliseconds(50))
+    #expect(fake.sentMessages.allSatisfy { $0.member != "Hello" })
+  }
+
+  @Test("acquire is bus-unavailable when RequestName itself fails/times out")
+  func acquireIsBusUnavailableWhenRequestNameFails() {
+    let fake = FakeDBusCalling(scriptedReplies: [])
+    let decision = SingleInstance.acquire(on: fake, timeout: .milliseconds(50))
+    #expect(decision == .busUnavailable)
+    #expect(fake.sentMessages.count == 1)
+  }
+
+  @Test("forwardArguments sends Open with the given argv when non-empty")
+  func forwardArgumentsSendsOpen() {
+    let fake = FakeDBusCalling(scriptedReplies: [fakeMethodReturn()])
+    SingleInstance.forwardArguments(["--toggle-picker"], on: fake)
+
+    #expect(fake.sentMessages.count == 1)
+    #expect(fake.sentMessages[0].member == "Open")
+    guard case .array(let uris) = fake.sentMessages[0].body[0] else {
+      Issue.record("expected the argv array as Open's first argument")
+      return
+    }
+    #expect(uris == [.string("--toggle-picker")])
+    // Regression guard: `Open`'s trailing `platform_data: a{sv}` is
+    // always empty and MUST be typed as such, not degrade to `ay` — the
+    // same wire-marshalling bug class `DBusValue.emptyArray`'s doc
+    // comment fixes for `GetLayout`.
+    #expect(
+      fake.sentMessages[0].body[1]
+        == .emptyArray(elementSignature: DBusElementSignature.stringVariantDictEntry))
+    #expect(fake.sentMessages[0].body[1].signatureCode == "a{sv}")
+  }
+
+  @Test("forwardArguments sends bare Activate when there is no argv to forward")
+  func forwardArgumentsSendsActivateWhenEmpty() {
+    let fake = FakeDBusCalling(scriptedReplies: [fakeMethodReturn()])
+    SingleInstance.forwardArguments([], on: fake)
+
+    #expect(fake.sentMessages.count == 1)
+    #expect(fake.sentMessages[0].member == "Activate")
+    // Regression guard: `Activate`'s sole `platform_data: a{sv}` argument
+    // is always empty and MUST be typed as such, not degrade to `ay`.
+    #expect(
+      fake.sentMessages[0].body[0]
+        == .emptyArray(elementSignature: DBusElementSignature.stringVariantDictEntry))
+    #expect(fake.sentMessages[0].body[0].signatureCode == "a{sv}")
+  }
+}

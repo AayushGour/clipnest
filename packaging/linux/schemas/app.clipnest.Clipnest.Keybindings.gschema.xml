@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  app.clipnest.Clipnest.Keybindings — the ONE schema both the app and the
+  GNOME Shell extension read for Clipnest's two global shortcuts, so
+  rebinding in the app's Settings needs no IPC: the app calls
+  Gio.Settings.set_strv(), the extension's Main.wm.addKeybinding() is
+  already watching the same key via its own Gio.Settings 'changed' signal
+  (see extension/src/core/keybindings.js) and re-grabs immediately.
+
+  Type "as" (array of strings), not "s": this is GNOME's own convention for
+  an accelerator-holding key handed to Meta.Display.add_keybinding()/
+  Main.wm.addKeybinding() — each key holds a LIST of candidate
+  accelerators (usually zero or one entry in practice; an empty array
+  means "unbound"), matching every other GNOME keybinding schema
+  (org.gnome.desktop.wm.keybindings, org.gnome.shell.extensions.*, etc.).
+  A plain "s" would reject Gio.Settings.bind()-style consumers and is not
+  what Main.wm.addKeybinding() accepts.
+
+  Action names ('toggle-picker', 'expand-snippet') match
+  Keybindings.ACTIONS in extension/src/core/keybindings.js exactly — the
+  D-Bus contract deliberately does NOT carry these (see that file's own
+  header comment), this schema is the single shared source of truth
+  instead.
+
+  Defaults translate the macOS KeyboardShortcuts defaults (see
+  ClipnestApp/Sources/System/HotkeyManager.swift: Option+Command+V and
+  Option+Command+E) to GNOME's accelerator syntax, mapping macOS Option ->
+  Alt and macOS Command -> Super — the closest cross-platform analogue on
+  a standard PC keyboard, not a verified UX decision; users can rebind
+  freely from Clipnest's Settings regardless.
+-->
+<schemalist gettext-domain="clipnest">
+  <schema id="app.clipnest.Clipnest.Keybindings"
+          path="/app/clipnest/Clipnest/keybindings/">
+    <key name="toggle-picker" type="as">
+      <default>['&lt;Alt&gt;&lt;Super&gt;v']</default>
+      <summary>Toggle the Clipnest picker</summary>
+      <description>
+        Opens or closes Clipnest's clipboard-history picker at the pointer.
+        An empty list means unbound. Read by both the Clipnest app and the
+        optional GNOME Shell extension (see Main.wm.addKeybinding in
+        extension/src/core/keybindings.js) — the two never disagree about
+        the current chord because they read the same key.
+      </description>
+    </key>
+    <key name="expand-snippet" type="as">
+      <default>['&lt;Alt&gt;&lt;Super&gt;e']</default>
+      <summary>Expand the selected text as a snippet keyword</summary>
+      <description>
+        Replaces the current selection with the matching saved snippet's
+        expansion. An empty list means unbound.
+      </description>
+    </key>
+  </schema>
+</schemalist>

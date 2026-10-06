@@ -7,6 +7,7 @@
 **Never lose a copy again.** Clipnest is a lightweight, native **macOS clipboard manager** that quietly remembers everything you copy — text, links, images, and files — and hands it back the instant you need it. Hit a hotkey, search, paste. Plus reusable **snippets** you can expand by keyword in any app, and a full **Settings window** to make it yours.
 
 [![Platform](https://img.shields.io/badge/platform-macOS%2014%2B-blue)](#requirements)
+[![Linux](https://img.shields.io/badge/linux-Ubuntu%2022.04%2B%20(GNOME)-E95420)](#linux-ubuntu)
 [![Built with SwiftUI](https://img.shields.io/badge/built%20with-Swift%20%26%20SwiftUI-orange)](#how-its-built)
 [![Local only](https://img.shields.io/badge/privacy-100%25%20local-brightgreen)](#privacy-first)
 [![License: MIT](https://img.shields.io/badge/license-MIT-black)](LICENSE)
@@ -15,7 +16,7 @@
 
 ---
 
-<!-- TODO(T78): add site link once Pages is live -->
+**Website & docs → [aayushgour.github.io/clipnest](https://aayushgour.github.io/clipnest/)** · Clipnest by Aayush Gour — not affiliated with other apps named ClipNest.
 
 ## Why Clipnest?
 
@@ -24,6 +25,8 @@ macOS 26 Tahoe added a basic clipboard history to Spotlight (⌘4) — but it's 
 **Update Clipnest and you don't have to re-grant Accessibility — your permission survives, because every release is signed with the same certificate.** Most apps that rebuild or re-sign between versions quietly invalidate that grant, so a routine update leaves you back in System Settings, re-adding the app by hand. Clipnest doesn't do that to you, by design — see [Signing, honestly](#release) for exactly how.
 
 It's free and open source, built in pure SwiftUI/AppKit — no Electron, no web view, no account, no cloud, no telemetry. And its **snippets** expand by keyword in any app, so a reusable signature, boilerplate, or command replaces your text expander too, not just your clipboard history — see [Snippets & keyword expansion](#snippets--keyword-expansion).
+
+**Also on Linux.** Since 1.0, Clipnest runs on Ubuntu with GNOME (X11 or Wayland) with the same history, search, pinning, snippets and on-device OCR — see [Linux (Ubuntu)](#linux-ubuntu).
 
 > Looking for a **free, open-source clipboard manager for Mac** — a lightweight alternative to Paste, Maccy, or Pastebot? Clipnest is a fresh, from-scratch take built in pure SwiftUI.
 
@@ -146,6 +149,57 @@ rm -rf ~/Library/Application\ Support/Clipnest \
 
 Everything Clipnest stores is local, so removing those two paths leaves nothing behind.
 
+## Linux (Ubuntu)
+
+Clipnest runs on **Ubuntu 22.04 and 24.04 with GNOME**, on X11 or Wayland, for amd64 and arm64. It is a native GTK 4 app built from the same Swift core as the Mac version: the same history, search, pinned items, snippets and keyword expansion, image previews, on-device OCR and Settings.
+
+### Install
+
+Download `clipnest-<version>-linux-amd64.tar.gz` (or `-arm64`; run `uname -m` if unsure: `x86_64` is amd64, `aarch64` is arm64) from the [latest release](https://github.com/AayushGour/clipnest/releases/latest), then:
+
+```bash
+tar xzf clipnest-*-linux-amd64.tar.gz
+cd clipnest-*-linux-amd64
+sha256sum -c SHA256SUMS
+./install.sh          # as your normal user, not with sudo
+```
+
+`install.sh` checks the architecture and installs three packages with `apt`: `clipnest`, plus `clipnest-ocr` and `clipnest-ocr-data` for text recognition in images. To skip OCR (about 26 MB), install only the app: `sudo apt-get install --no-install-recommends ./clipnest_*.deb`.
+
+To uninstall: `sudo apt remove clipnest clipnest-ocr clipnest-ocr-data`. Your history in `~/.local/share/Clipnest` is left in place.
+
+### First run
+
+- **Open the picker with `Alt+Super+V`**; expand a snippet with `Alt+Super+E`. Both are rebindable in Settings → Shortcuts.
+- **Tray icon:** Open Clipnest, Pause Capture, Settings…, Quit.
+- **Auto-paste** needs a one-time permission. Clipnest offers it on first launch, or use Settings → Permissions. It adds you to a dedicated `clipnest-input` group that can create a virtual keyboard and nothing else (not the `input` group, which could read your keystrokes). Log out and back in afterwards. Until then Clipnest copies your choice and you press Ctrl+V yourself.
+- **Start at login** is off by default, as on the Mac. Until Clipnest is running nothing is captured, so turn on Settings → General → *Launch Clipnest at login*.
+- **OCR** is off by default. Turn it on in Settings → History.
+
+### How it differs from the Mac version
+
+- **Picker position.** GNOME doesn't let apps place their own windows on Wayland, so the picker opens where GNOME puts it rather than at your cursor. The optional GNOME Shell extension restores cursor placement and showing above full-screen windows (GNOME 45+; use `legacy` instead of `esm` on 42–44), then log out and back in:
+  ```bash
+  gnome-extensions install --force /usr/share/clipnest/gnome-shell-extension/esm
+  ```
+- **Terminals.** Pasting into GNOME Terminal and other VTE terminals uses Ctrl+Shift+V automatically.
+- **Password managers.** Copies marked as secret (`x-kde-passwordManagerHint`, used by KeePassXC and others) are never stored, including the copy GNOME re-publishes after the password manager clears the clipboard. On Wayland, Clipnest can't tell which app made a copy, so Settings → Apps exclusions only apply to X11/XWayland apps; the secret marker works everywhere.
+- **Ubuntu 22.04** ships GTK 4.6, which has an upstream clipboard bug that can, rarely, make Clipnest quit. It is fixed in GTK 4.10+ (Ubuntu 24.04). Your history is never affected; see `packaging/linux/dist/README.md`.
+
+### Build from source (Linux)
+
+Swift isn't packaged for Ubuntu, so build inside the official Swift image:
+
+```bash
+docker run --rm -it -v "$PWD":/src -w /src swift:6.0-noble bash -c '
+  apt-get update -qq &&
+  apt-get install -y -qq pkg-config libgtk-4-dev libx11-dev libxfixes-dev libxtst-dev libsqlite3-dev &&
+  swift test &&
+  swift build -c release -Xswiftc -static-stdlib'
+```
+
+The `.deb` packages come from `dpkg-buildpackage -us -uc -b -d` in the same image (plus `debhelper devscripts`). That is the recipe CI uses ([`release-linux.yml`](.github/workflows/release-linux.yml)).
+
 ## Usage
 
 1. Clipnest lives in your **menu bar** — no Dock clutter day-to-day (opening Settings is the one exception; see [Settings](#settings)).
@@ -181,6 +235,7 @@ Clipnest is intentionally boring in the best way — a small, well-tested native
 
 - **Swift 6 + SwiftUI/AppKit**, minimum macOS 14. Menu-bar app (`LSUIElement`, no Dock icon).
 - **`ClipnestCore`** — a dependency-light Swift package holding *all* the logic (capture, privacy filtering, storage, search, paste, snippet expansion, OCR). Fully unit-tested with Swift Testing — runnable on its own with `swift test`, no Xcode project required.
+- **Linux:** the same core under a native GTK 4 frontend (`ClipnestGTK`, `ClipnestLinuxAppKit`), with an X11/XWayland clipboard watcher, uinput or XTEST for auto-paste, AT-SPI and IBus for snippet expansion, a StatusNotifier tray icon, SQLite storage and ONNX Runtime OCR (`ClipnestPlatformLinux`, `ClipnestLinuxOCR`). Architecture notes: [`docs/architecture.md`](docs/architecture.md).
 - **`ClipnestApp`** — the SwiftUI/AppKit frontend (menu bar, the non-activating floating picker panel, hover-preview popover, snippet editor window, Settings window). Generated with [XcodeGen](https://github.com/yonaskolb/XcodeGen) from `ClipnestApp/project.yml`.
 - **Persistence:** **SwiftData** for metadata; a content-addressed **blob store** on disk for image/rich-text bytes (deduped by SHA-256), so the database stays small.
 - **Capture:** macOS has no "pasteboard changed" event, so a lightweight `changeCount` poll detects new copies; a live hook pushes them straight into the picker.
@@ -259,6 +314,7 @@ None of this requires an Apple Developer account to build, run, or even distribu
 - [x] Settings window: pause capture, clear-all history, custom hotkey rebinding, launch-at-login, excluded apps
 - [x] Configurable retention (keep N days / N items)
 - [x] Background check for new releases
+- [x] Linux (Ubuntu + GNOME, X11 and Wayland) — native GTK 4 port, see [Linux (Ubuntu)](#linux-ubuntu)
 - [ ] Fully automatic, in-app updates (today: a background check nudges you, but installing still runs `scripts/update.sh` in Terminal — see [Update](#update))
 - [ ] Notarized, Gatekeeper-clean `.dmg` by default (works today via the curl install path + a stable self-signed certificate; real Developer ID signing/notarization are opt-in for maintainers — see [Release](#release))
 - [ ] macOS Shortcuts (App Intents) actions
@@ -266,6 +322,8 @@ None of this requires an Apple Developer account to build, run, or even distribu
 ## Contributing
 
 Issues, ideas, and pull requests are welcome. Clipnest is a small, readable codebase built to be hacked on — clone it, run `swift test`, and dive in. The core logic has no Xcode dependency, so most contributions can be developed and tested from the command line.
+
+Before opening a PR, run `scripts/lint.sh` (needs Docker on most machines — see the script's header for why: it runs the exact swift-format build CI trusts, not whatever version happens to be on your PATH, since those two can and do disagree).
 
 ## License
 

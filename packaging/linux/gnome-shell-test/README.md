@@ -1,0 +1,463 @@
+# Real GNOME Shell test environment (systemd + logind + Xvfb in Docker)
+
+**This works.** A privileged container with `systemd` as PID 1 gets you a
+real `systemd-logind`, and — with a properly *typed* logind session (see
+below) — a real `gnome-shell`/Mutter you can install the Clipnest GNOME
+Shell extension into and drive over D-Bus exactly like a real desktop
+would. This corrects an earlier conclusion ("GNOME Shell cannot run in
+Docker") that was reached with a bare `docker run` (no systemd/logind at
+all) and never re-tried with one.
+
+`packaging/linux/vnc/Dockerfile` (the existing X11+VNC smoke-test image)
+deliberately does NOT do this — it uses a plain `docker run`, so it cannot
+load the Shell extension by construction. This directory is the
+extension-capable counterpart: same `clipnest` `.deb`, plus a real
+`gnome-shell` 42.9 (Ubuntu 22.04 jammy, matching the `legacy` extension
+bundle) under `systemd`.
+
+## Why a plain `docker run` fails, and what fixes it
+
+1. **No `systemd`, no `logind` at all.** `gnome-shell` calls into
+   `org.freedesktop.login1` during `ScreenShield` init
+   (`loginManager.js`'s `getCurrentSessionProxy()`). With no `logind`
+   service on the bus at all, this is where the earlier attempt died.
+   Fix: run `/lib/systemd/systemd` as PID 1 in a `--privileged
+   --cgroupns=host` container with `/sys/fs/cgroup` bind-mounted `rw`.
+   `systemd-logind.service` then starts for real (socket/D-Bus activated),
+   `org.freedesktop.login1` appears on the system bus, `loginctl list-seats`
+   reports a real `seat0` — all with zero manual configuration.
+
+2. **A `docker exec` shell has no registered logind *session* for its
+   user**, even once `logind` itself is running. `gnome-shell` still
+   crashes (`this._userProxy.Display is null` — a genuine reproduction of
+   "needs a real seat", TypeError in `loginManager.js`) unless the
+   user launching it has an actual, *graphical-typed* session. Fix: use
+   `systemd-run --uid=<uid> -p PAMName=login -p
+   'Environment=XDG_SESSION_TYPE=x11' -p 'Environment=XDG_SESSION_CLASS=user'
+   -p 'Environment=XDG_SESSION_DESKTOP=gnome' --unit=<name> --collect
+   <script>` — `PAMName=login` makes `systemd` run the payload through
+   `pam_systemd`, which registers a real logind session; the three
+   `Environment=` overrides make it `type x11; class user` (not the
+   default `background`), which is what makes logind promote it to the
+   user's *active/display* session (`loginctl user-status` shows `Display:`
+   populated) — the exact thing `loginManager.js` was reading as `null`.
+
+See `Dockerfile` in this directory for the full package list (`systemd
+systemd-sysv dbus dbus-x11 gnome-shell gnome-session-bin mutter ...`) and
+`session-script.sh` below for the exact boot sequence.
+
+## Rebuilding
+
+```bash
+# 1. Build the .deb (reuses the existing build stage)
+docker build --target build -t clipnest-build:gnome-test \
+  -f packaging/linux/vnc/Dockerfile .
+docker create --name extract-deb clipnest-build:gnome-test true
+docker cp extract-deb:/out ./deb-out
+docker rm -f extract-deb
+
+# 2. Build this image (needs clipnest_*.deb next to this Dockerfile)
+cp deb-out/out/clipnest_*.deb packaging/linux/gnome-shell-test/
+docker build -f packaging/linux/gnome-shell-test/Dockerfile \
+  -t clipnest-gnome-shell-test:1 packaging/linux/gnome-shell-test/
+```
+
+## Running
+
+```bash
+docker run -d --name clipnest-gnome-shell-test \
+  --privileged --cgroupns=host \
+  -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+  --tmpfs /tmp --tmpfs /run --tmpfs /run/lock \
+  clipnest-gnome-shell-test:1
+
+# create a non-root test user (gnome-shell refuses to run as root)
+docker exec clipnest-gnome-shell-test bash -c '
+  useradd -m -s /bin/bash gtester
+  mkdir -p /run/user/1000 && chown gtester:gtester /run/user/1000 && chmod 700 /run/user/1000
+'
+
+# put the boot script (Xvfb + gnome-shell) in place -- see session-script.sh
+docker cp session-script.sh clipnest-gnome-shell-test:/usr/local/bin/gnome-test-session.sh
+docker exec clipnest-gnome-shell-test chmod +x /usr/local/bin/gnome-test-session.sh
+
+# launch it as a REAL, typed logind session (the part that actually matters)
+docker exec clipnest-gnome-shell-test bash -c '
+  systemd-run --uid=1000 --gid=1000 \
+    -p PAMName=login \
+    -p "Environment=XDG_SESSION_TYPE=x11" \
+    -p "Environment=XDG_SESSION_CLASS=user" \
+    -p "Environment=XDG_SESSION_DESKTOP=gnome" \
+    --unit=gtester-gnome --collect \
+    /usr/local/bin/gnome-test-session.sh
+'
+sleep 8
+docker exec clipnest-gnome-shell-test loginctl session-status 5   # "type x11; class user"
+
+# install the extension (gnome-extensions install --force <dir> FAILS on a
+# real CLI -- it wants a .shell-extension.zip, not a raw directory; see
+# Findings below. Manual copy is what actually works):
+docker exec -u gtester -e HOME=/home/gtester clipnest-gnome-shell-test bash -c '
+  mkdir -p ~/.local/share/gnome-shell/extensions
+  cp -r /usr/share/clipnest/gnome-shell-extension/legacy \
+        ~/.local/share/gnome-shell/extensions/clipnest@clipnest.app
+'
+docker exec -u gtester -e HOME=/home/gtester -e XDG_RUNTIME_DIR=/run/user/1000 \
+  clipnest-gnome-shell-test gnome-extensions enable clipnest@clipnest.app
+# gnome-shell only picks up a BRAND NEW (never-seen) extension directory on
+# its own startup scan, not via the live directory-watch path -- restart it:
+docker exec clipnest-gnome-shell-test systemctl restart gtester-gnome.service
+```
+
+`session-script.sh`:
+```bash
+#!/bin/bash
+set -x
+export HOME=/home/gtester
+Xvfb :99 -screen 0 1440x900x24 -nolisten tcp &
+for i in $(seq 1 50); do DISPLAY=:99 xdpyinfo >/dev/null 2>&1 && break; sleep 0.2; done
+export DISPLAY=:99
+exec gnome-shell --x11 --display=:99
+```
+
+## Troubleshooting: extension enabled but never appears to the Shell
+
+**Symptom** (hit exactly this way once already — read this before re-deriving
+it): after `cp -r` + `gnome-extensions enable`, `gsettings get org.gnome.shell
+enabled-extensions` correctly shows `['clipnest@clipnest.app']`, both GSettings
+schemas are registered, `metadata.json`'s `shell-version` matches the running
+Shell — and yet `gnome-extensions list --enabled` prints nothing,
+`org.gnome.Shell.Extensions.GetExtensionInfo` returns an empty `{}`,
+`app.clipnest.ShellHelper` never appears on the session bus, and
+`journalctl -u <session>.service` shows no extension/JS error at all (because
+there IS no error — the Shell simply never tried to load it).
+
+**Cause:** GNOME Shell only discovers a *brand-new* (never-before-seen)
+extension UUID while its own process is starting up. The live
+`Gio.FileMonitor`-based watch path that reacts to `enabled-extensions`
+changing only covers ENABLING/DISABLING an extension the Shell already knows
+about (i.e. already scanned once) — it does not retroactively notice a
+directory that did not exist the last time the Shell itself started.
+`gnome-extensions enable` only ever writes the GSettings key; it does not,
+and cannot, make an already-running Shell process rescan
+`~/.local/share/gnome-shell/extensions/` for new UUIDs.
+
+**Fix:** the FIRST time a given extension UUID is installed, restart the
+gnome-shell process itself (not just `enable` it) — e.g. restart the
+`systemd-run` unit from the "Running" section above:
+```bash
+docker exec clipnest-gnome-shell-test systemctl restart gtester-gnome.service
+```
+After the restart, re-check with the same `GetExtensionInfo`/`ListNames`
+calls shown in "Running" above — `state` should read `1` (ENABLED) and
+`app.clipnest.ShellHelper` should be on the bus. Only the FIRST install of a
+given UUID needs this; subsequent `enable`/`disable` cycles of an
+already-known extension take effect live, no restart needed (confirmed:
+`gnome-extensions disable clipnest@clipnest.app` immediately drops
+`app.clipnest.ShellHelper` off the bus with no restart, and re-`enable`
+brings it back — see the T-P10I/T-P10J re-verification in the Findings
+section below).
+
+`probe_shell_helper.py` / `probe_shell_helper2.py` / `probe_readclipboard.py`
+/ `probe_setclipboard.py` in this directory are ad-hoc PyGObject scripts
+(python3-gi ships with the desktop package set already) that claim
+`app.clipnest.Clipnest` themselves — the extension's `_checkSender` only
+allows the current owner of that name to call it — so every one of the 11
+`app.clipnest.ShellHelper1` methods can be exercised for real without
+needing the actual `clipnest` binary running. Copy into the container with
+`docker exec -i ... bash -c "cat > /tmp/x.py" < probe_x.py` (plain `docker
+cp` intermittently fails to find files under this image's `--tmpfs /tmp`
+on Docker Desktop for Mac — pipe the content in instead) and run with
+`python3 /tmp/x.py`.
+
+## Findings (2026-09-08 devops investigation)
+
+**GNOME Shell runs for real in Docker Desktop for Mac** given the systemd
+session bootstrap above — screenshotted (`Activities`/top-bar/dash all
+rendering), `gnome-shell --version` reports real `42.9`, journal shows
+"GNOME Shell started" with no crash.
+
+**The extension installs, enables, and exports its D-Bus service with zero
+errors** against real Mutter (`GetExtensionInfo` → `state: 1` (ENABLED),
+`GetExtensionErrors` → `[]`, `app.clipnest.ShellHelper` owned on the
+session bus, `Capabilities` correctly lists all 6: `clipboard, paste,
+pointer, placement, focus, hotkeys`).
+
+**All 11 D-Bus methods work and return real, correct data** (verified with
+the probe scripts above, waiting out the race noted below first):
+`GetPointer` → exact live cursor position; `GetMonitorWorkArea` → correct
+`(0, 32, 1440, 868)` for a 1440x900 screen with GNOME's 32px top panel;
+`GetClipboardMimeTypes`/`ReadClipboard` → real content set via `xclip`,
+round-tripped through the real UNIX fd exactly as the interface doc
+specifies; `SetClipboard` → verified with `xclip -o` afterward, matches;
+`SendKeyChord` → real XTEST synthesis, returns `true`; `PlaceWindow` /
+`FocusAndSendKeyChord` with a bogus token/serial degrade gracefully
+(`false` / `"target-lost"`), no crash; `SetClipboardWatch`/
+`UnplaceWindow` (void replies) succeed. `GetFocusedApp` returned `{}` in
+this minimal session (plausible — no window ever had real WM focus here,
+not confirmed as a bug).
+
+**The real hotkey chain fires end-to-end at the Mutter/extension level**:
+pressing the default `<Alt><Super>v` (via `xdotool`) makes
+`Main.wm.addKeybinding`'s grab fire and the extension emit
+`ShortcutActivated('toggle-picker', ts, 700, 400, 0, {})` with the EXACT
+live pointer coordinates — confirmed independently with `gdbus monitor`.
+
+**Two real, reproducible bugs found in the app's own D-Bus client code**
+(neither is in the extension; both in `Sources/ClipnestLinuxAppKit/`, not
+touched by this investigation per its constraints):
+
+1. **`HotkeyBackendResolver` never selects `.shellExtensionKeybinding` on
+   a real first launch (5/5 runs, 100% reproducible)** — it falls through
+   to `.gsettingsFloor` every time, even with the extension correctly
+   installed/enabled/error-free and advertising `hotkeys`. Root cause: a
+   real ownership-propagation race. `LinuxAppLifecycle.run` claims
+   `app.clipnest.Clipnest` (`startControlService`), then almost
+   immediately calls `ShellHelperClient.probeLiveDispatch()` (a live
+   `GetPointer` call) as part of `installHotkeys`. The extension's
+   `_checkSender` only allows calls from the CURRENT OWNER of
+   `app.clipnest.Clipnest`, which it learns asynchronously via
+   `Gio.bus_watch_name` — a second, independent D-Bus round trip through a
+   different process (`gnome-shell`) that has not necessarily completed
+   by the time the app's own probe arrives a few milliseconds later.
+   Confirmed directly: the identical `GetPointer` call made from a
+   throwaway process that claims `app.clipnest.Clipnest` and then waits
+   1.5s before calling succeeds every time (`probe_shell_helper.py`) — the
+   access-denied-vs-success is purely a function of how long the caller
+   waits after `RequestName`, not anything else. `installHotkeys` has no
+   retry/backoff, so this decision is made once, permanently, at startup.
+2. **`ShellHelperClient.startWatching()` never subscribes to
+   `ShortcutActivated` (or `ClipboardChanged`/`CapabilitiesChanged`)
+   at all** — its only `AddMatch` call
+   (`DBusStandardRequests.addNameOwnerChangedMatch`) is scoped to
+   `type='signal',sender='org.freedesktop.DBus',interface='org.freedesktop.DBus',member='NameOwnerChanged',arg0='app.clipnest.ShellHelper'`,
+   which only observes the *ownership* of the ShellHelper name, never a
+   signal emitted *by* the ShellHelper object itself. `readLoop` DOES have
+   live parsing code for `ShortcutActivated`/`ClipboardChanged`
+   (`ShellHelperResponses.parseShortcutActivated`/`parseClipboardChanged`)
+   — it is simply never invoked, because the session bus never delivers
+   those signals to a connection with no matching rule for them. Confirmed
+   live: an independent `gdbus monitor --dest app.clipnest.ShellHelper`
+   DID see the real `ShortcutActivated` signal from the real `<Alt><Super>v`
+   press; the actual running `clipnest` process's own log showed zero
+   evidence of receiving it, and its picker window (`xwininfo`) stayed
+   `IsUnMapped` the whole time. This means **even with bug (1) fixed, the
+   Shell-extension hotkey path still cannot deliver a hotkey to the app at
+   all** — a second, independent, and more fundamental defect. Likely fix
+   shape (not applied — out of this investigation's scope): add an
+   `AddMatch` rule scoped to
+   `type='signal',interface='app.clipnest.ShellHelper1',path='/app/clipnest/ShellHelper'`
+   (optionally `,sender=<owner>`) in `startWatching()`, mirroring what
+   `StatusNotifierTray.swift` already does correctly for its own signals.
+
+**Not exercised** (environment gap, not a code finding): the
+`.gsettingsFloor` custom-keybinding path itself was not verified end-to-end
+in this session — that path's actual key grab is normally performed by
+`gnome-settings-daemon`'s media-keys plugin, which this minimal test image
+does not install/run.
+
+**Also confirmed**: `gnome-extensions install --force <directory>` — the
+literal command form referenced elsewhere — fails against the real CLI
+(`Error opening file ...: Is a directory`, exit 2). The real
+`gnome-extensions install` only accepts a `.shell-extension.zip` bundle
+(`gnome-extensions pack` output). Nothing in this repo currently packages
+one; the manual `cp -r` into
+`~/.local/share/gnome-shell/extensions/<uuid>/` above is what actually
+works and is the shape any future install helper should follow.
+
+## Update 2026-09-08: T-P10I and T-P10J are fixed and verified (commit 700c38b)
+
+Both bugs above were fixed in the app (`ShellHelperClient.startWatching()`
+now adds a second `AddMatch` for the ShellHelper object's own signals;
+`probeLiveDispatch()` is retried on a bounded schedule via
+`LinuxAppLifecycle.retryLiveDispatchProbeIfNeeded`). Re-verified against
+this same harness — **for the first time in this port's history, a real
+`<Alt><Super>v` key press through a real Mutter opens the picker**:
+
+- `HotkeyBackendResolver` now resolves `.shellExtensionKeybinding` on a real
+  launch: **15/15 trials** (10 via log-grep, 5 timed: 0.121-0.266s from
+  process start to the resolved log line — a small bounded retry window,
+  not a hang).
+- With the extension disabled (confirmed off the bus first): **5/5 trials**
+  still resolve `.gsettingsFloor` cleanly, at 0.122-0.203s — the same order
+  of magnitude as the extension-present case, so the retry logic does not
+  meaningfully slow the common "no extension" path.
+- Clean single-action repro of the real hotkey opening the picker: killed
+  `clipnest`, moved the pointer to `(300,600)`, relaunched (resolved
+  `shellExtensionKeybinding`), screenshotted the plain desktop (picker
+  confirmed `IsUnMapped` via `xwininfo`), sent ONE real `<Alt><Super>v` via
+  `xdotool keydown/key/keyup`, re-checked: the picker window was now
+  `IsViewable` at exactly `560x420+300+600` (the cursor position), and a
+  second screenshot showed the actual rendered picker UI (search bar, type
+  filter icons, History/Pinned/Snippets tabs, "No clipboard history yet")
+  sitting there.
+
+Two things noticed but deliberately not chased further here (not confirmed
+as regressions from either fix — flagged for whoever owns picker UX next):
+`PlaceWindow` does not clamp to the monitor's work area (the picker's 420px
+height extended past the bottom edge when placed at y=600 on a 900px-tall
+screen); a second hotkey press while the picker was already open (during an
+earlier, Activities-Overview-obscured test, not the clean repro above) did
+not toggle it closed. Full trial data: `.claude/logs/devops.md`; decision
+record: `.claude/project-context.md` D91.
+
+## Update 2026-09-08 (senior-dev, picker-placement follow-up): clamp bug FIXED and verified; toggle bug CONFIRMED REAL (not the Overview artifact it looked like)
+
+**Clamp bug — fixed.** `extension/src/core/placement.js`'s `_place()` now
+clamps `(x, y)` into the target point's own monitor work area (via the
+already-exposed `getMonitorWorkArea`) using the window's real
+`get_frame_rect()` size, before ever calling `move_frame` — same min/max
+formula as the shared `WindowPlacement.clampedOrigin` (macOS/Linux shared
+math, `Sources/ClipnestViewModels/UI/Picker/WindowPlacement.swift`), ported
+to JS since a Wayland client can't run that Swift code itself. Verified
+against this exact real GNOME Shell 42.9 harness, both via a throwaway
+probe (`Placement`'s own identity contract, WM_CLASS `clipnest` + title
+`Clipnest`) and — more importantly — via the REAL `clipnest` binary's
+`ShowPicker` D-Bus call end-to-end: placed at the exact devops repro
+(300,600 on this container's 1440x900/work-area-868-tall screen), the
+picker now lands at `(300, 480)` (`xwininfo`-confirmed), fully on-screen,
+still anchored to the cursor's X. Same clean result at all 4 edges
+(top/bottom/left/right) and for a genuinely negative X. 21/21 gjs unit
+tests in `extension/test/placement.test.js` (16 new, 5 pre-existing,
+1 pre-existing case's expectation updated to reflect the new clamp).
+`docs/API-ClipnestGTK.md`'s "Window placement" section updated to document
+the guarantee. Full screenshots + trial log: `.claude/logs/senior-dev.md`.
+
+**Toggle bug — CONFIRMED REAL, root-caused, NOT fixed here (root cause is
+outside this task's owned files).** Re-tested from a genuinely clean
+desktop (no Activities Overview) by driving the real running `clipnest`
+binary's own `app.clipnest.Control.TogglePicker` D-Bus method directly —
+the same call a real hotkey press ultimately triggers, with the
+extension's own hotkey-resolution race (see `HotkeyBackendResolver`
+above) sidestepped entirely. Two `TogglePicker` calls sent back-to-back
+with **zero** explicit delay left the picker **stuck open** in 3 of 6
+trials (should always net back to closed); inserting *any* explicit delay
+between the two calls (10ms, 50ms, 100ms, 200ms) reproduced it **0 times
+in 4 trials**. That delay-dependence is the signature of a genuine race in
+how each D-Bus/hotkey action is dispatched onto `@MainActor`, not a GTK-
+level re-entrancy bug: `PickerWindow.dismiss()`'s `isDismissing` guard and
+`LinuxAppEnvironment`'s `isPickerVisibleBox`/`onDismiss` wiring were read
+in full and are internally consistent (a plain, order-independent
+show/hide toggle on a boxed `Bool`) — read-only, not touched, per this
+task's file-ownership constraints. The actual suspect: `LinuxAppLifecycle
+.swift`'s `startControlService`/`wireShellHelper` dispatch EVERY D-Bus
+control call and EVERY real `ShortcutActivated` hotkey signal via a
+fire-and-forget, unstructured `Task { @MainActor in environment
+.togglePicker() } }` from a background thread, with no ordering guarantee
+enforced end-to-end, into a `@MainActor` whose executor on this platform
+is itself an emulation (`GTKMainActorBridge`/`DispatchMainQueuePump`'s 8ms
+`RunLoop.main.run(mode:before:)` pump, already flagged as a real latency
+risk by an earlier, unrelated task on this same board — see T-BB5). Two
+toggles racing past each other in that pump (rather than draining strictly
+FIFO) is consistent with everything observed: order-independent-looking
+logic, yet a result that depends on inter-arrival timing. **Not fixed
+here**: the fix belongs in `LinuxAppLifecycle.swift` (replace the
+fire-and-forget `Task {}` with an ordering-safe hand-off — e.g. the same
+`g_idle_add_full` deferral-with-ordering pattern `PickerWindow
+.refocusAfterEditorClose()` already uses for an analogous need — or a
+single serialized dispatch point), a file three other agents were working
+in concurrently with this task; reported for the owner of that file /
+architect to pick up, not patched piecemeal. Decision + full trial log:
+`.claude/project-context.md` (new decision) and `.claude/logs/senior-dev.md`.
+
+## Update 2026-09-13 (senior-dev): Shell 45+ leg added (noble / GNOME 46) — T-EXT-ESM-BROKEN1
+
+**The gap this leg closes.** Every container above is `ubuntu:22.04` (GNOME
+Shell 42.9), which only ever installs and exercises `extension/dist/legacy`.
+It has NEVER exercised `extension/dist/esm` — the variant every Shell 45+
+install actually loads (all current Ubuntu, including 24.04). That variant
+had zero ESM exports in its core modules and failed to load on every real
+Shell 45+ (`gnome-extensions enable` → `State: ERROR`, `SyntaxError:
+ambiguous indirect export: ClipboardWatcher @ .../extension.js:3:9`) for the
+extension's entire history, entirely unnoticed by this directory's own
+harness. Root cause and fix are in `extension/build.sh`'s header comment
+(short version: `src/core/*.js` is legacy-style with no `export` statements;
+`build.sh` now appends a generated `export { ... };` block to the copy it
+places under `dist/esm/core/` only — `dist/legacy` and `src/core/*.js`
+itself are untouched).
+
+**New files, mirroring this directory's existing systemd+Xvfb approach but
+targeting Shell 46:**
+- `Dockerfile.noble` — `ubuntu:24.04` + a real `gnome-shell`/mutter, same
+  systemd-as-PID-1 approach as the jammy `Dockerfile` above. Does **not**
+  install the `clipnest` .deb (building the Swift app is orthogonal to a
+  JS-parse-level defect in the extension itself); instead it bakes in
+  `extension/dist` and the compiled GSettings schemas directly, matching
+  what `debian/clipnest.install`/`debian/rules` place at
+  `/usr/share/clipnest/gnome-shell-extension/` and
+  `/usr/share/glib-2.0/schemas/` respectively. **Needed `gjs` added
+  explicitly to the package list** — noble's `gnome-shell` package does not
+  pull it in strongly enough to actually install it, and its absence breaks
+  the separate `org.gnome.Shell.Extensions` D-Bus-activatable app with a
+  confusingly generic "Failed to execute program ...: No such file or
+  directory" (really: `gjs` itself isn't installed) — found the hard way
+  bringing this leg up, not assumed.
+- `run-noble-esm-test.sh` — a real, scriptable, exit-code-driven gate (not
+  just documented manual steps like the jammy leg's "Running" section
+  above): builds the image, boots the container, creates the test user,
+  launches the typed logind session, installs+enables the `esm` variant,
+  restarts the session once (first-UUID-scan requirement, same as this
+  file's own Troubleshooting section below), then asserts the result. Exit
+  0 = pass, 1 = the extension failed to load correctly, 2 = an infra problem
+  before the assertion could even run.
+
+**Two real rough edges found and worked around, both documented in the
+script's own header comment:**
+1. `ubuntu:24.04`'s cloud image ships a pre-existing `ubuntu` user already
+   on uid 1000 — unlike jammy, so `useradd`'s new test user lands on
+   whatever uid is actually free (1001 observed). Hardcoding `1000`
+   throughout, as the jammy README's manual steps do, silently targets the
+   WRONG user's `/run/user/<uid>` for the rest of the script (surfaced as
+   `dconf-CRITICAL: unable to create directory '/run/user/1000/dconf':
+   Permission denied`). Fixed by reading the real uid back with `id -u`
+   instead of assuming it.
+2. On Shell 45+, `gnome-extensions enable`/`list`/`info` are no longer
+   answered directly by `gnome-shell` for CLI purposes — the CLI D-Bus-
+   activates a separate, GTK-based `org.gnome.Shell.Extensions` app, which
+   needs `DISPLAY`/`HOME` threaded all the way into `dbus-daemon`'s own
+   activation environment (`dbus-update-activation-environment`, not just
+   the `docker exec` environment) to even start, and — even once started —
+   still failed to see a just-installed extension in this minimal harness
+   (a real but separate rough edge in that standalone app's own extension
+   scan, unrelated to the ESM defect this leg exists to catch). Worked
+   around entirely: the script enables via `gsettings set org.gnome.shell
+   enabled-extensions` directly (confirmed to be literally what the CLI's
+   own `enable` subcommand does — see this file's Troubleshooting section
+   above) and asserts via a **direct `gdbus call` to the real, already-
+   running `org.gnome.Shell` process's own `/org/gnome/Shell` object**
+   (`org.gnome.Shell.Extensions.GetExtensionInfo`), mirroring how
+   `probe_shell_helper.py` etc. already talk to the shell for the jammy leg
+   above: call the real object directly, don't go through a wrapper that
+   adds its own failure modes.
+
+**Verified as a real gate, both directions, live in this Docker harness —
+not assumed:**
+- With the ORIGINAL (pre-fix), zero-export `src/core/*.js` copied verbatim
+  into the esm bundle (i.e. exactly what shipped before this task):
+  `GetExtensionInfo` returns `state: <3.0>` (ERROR) with
+  `error: <'SyntaxError: ambiguous indirect export: ClipboardWatcher @
+  file:///home/gtester/.local/share/gnome-shell/extensions/
+  clipnest@clipnest.app/extension.js:3:9'>` — the **exact** error reported
+  live on the real Ubuntu 24.04 / GNOME Shell 46 VM that opened this task.
+- With `build.sh`'s generated `export { ... };` block restored:
+  `GetExtensionInfo` returns `state: <1.0>` (ENABLED — "ACTIVE" in
+  `gnome-extensions info`'s own wording) and `error: <''>`.
+- `run-noble-esm-test.sh` run end-to-end, clean, twice in a row: `PASS:
+  clipnest@clipnest.app (esm variant) is state ENABLED/ACTIVE on GNOME
+  Shell 46 / Ubuntu 24.04, no error, no JS ERROR`, exit code 0.
+
+A second, faster, no-Docker-needed check for the same class of defect —
+`extension/test/build.esm-exports.test.sh` (mechanically confirms every
+`src/core/*.js` top-level `var` gets a matching `dist/esm` export and that
+every `entry-esm.js` import from `./core/` resolves to one) — lives next to
+the existing `test/*.test.js` gjs tests; see `extension/README.md`'s Tests
+section.
+
+**Not covered by this leg** (same limitation the jammy leg already has,
+unrelated to the ESM fix): the actual `clipnest` binary / real hotkey and
+D-Bus-method dispatch against the `esm` variant specifically — this leg
+only proves the extension *loads and stays error-free*, matching Task 2's
+"at minimum" bar. Full app-level parity re-verification of every
+`ShellHelper1` method against a real Shell-46 Mutter, the way the jammy
+container's Findings section above did for Shell 42, was out of this task's
+scope.

@@ -1,0 +1,7 @@
+packaging/linux/desktop/applications/app.clipnest.Clipnest.desktop usr/share/applications
+packaging/linux/dbus/app.clipnest.Clipnest.service usr/share/dbus-1/services
+packaging/linux/schemas/app.clipnest.Clipnest.gschema.xml usr/share/glib-2.0/schemas
+packaging/linux/schemas/app.clipnest.Clipnest.Keybindings.gschema.xml usr/share/glib-2.0/schemas
+packaging/linux/polkit/app.clipnest.grant-input.policy usr/share/polkit-1/actions
+extension/dist/legacy usr/share/clipnest/gnome-shell-extension
+extension/dist/esm usr/share/clipnest/gnome-shell-extension

@@ -1,0 +1,57 @@
+#!/bin/sh
+# clipnest-grant-input — installed to /usr/libexec/clipnest/clipnest-grant-input.
+#
+# Invoked ONLY via `pkexec clipnest-grant-input`, gated by the
+# app.clipnest.grant-input polkit action (see
+# packaging/linux/polkit/app.clipnest.grant-input.policy's
+# org.freedesktop.policykit.exec.path annotation, which is what binds this
+# exact path to that action's auth requirements instead of the generic,
+# always-full-admin org.freedesktop.policykit.exec). Called from Clipnest's
+# own Settings when the user explicitly opts in to auto-paste's uinput
+# requirement.
+#
+# Adds the CALLING user (never an argv-supplied username — see below) to
+# the `clipnest-input` system group created by clipnest.postinst. Does
+# NOT add anyone to `input`: that group also grants read access to
+# /dev/input/event*, i.e. every real keystroke and mouse movement on the
+# machine — see packaging/linux/udev/clipnest-uinput.rules's own comment
+# for why this package never uses it.
+#
+# Security note (mandatory security-pass trigger — this script runs as
+# root under pkexec): the identity of "who to add" comes ONLY from
+# $PKEXEC_UID, which pkexec itself sets to the *authenticating* user's
+# real UID and which this script cannot be tricked into overriding via a
+# command-line argument — argv is intentionally never consulted for a
+# username, so a compromised/buggy Clipnest process asking pkexec to run
+# this with an attacker-chosen argument still only ever grants membership
+# to whichever account actually passed the polkit `auth_admin` prompt.
+#
+# Idempotent: re-running against a user already in the group is a no-op
+# (usermod -aG doesn't duplicate group entries), and it never fails the
+# surrounding install/session if the group already has the user.
+set -eu
+
+if [ -z "${PKEXEC_UID:-}" ]; then
+  echo "clipnest-grant-input: must be run via pkexec (PKEXEC_UID not set); refusing to guess a target user." >&2
+  exit 1
+fi
+
+case "$PKEXEC_UID" in
+  '' | *[!0-9]*)
+    echo "clipnest-grant-input: PKEXEC_UID (\`$PKEXEC_UID\`) is not a plain integer UID; refusing." >&2
+    exit 1
+    ;;
+esac
+
+target_user="$(id -un "$PKEXEC_UID" 2>/dev/null)" || {
+  echo "clipnest-grant-input: no user found for UID $PKEXEC_UID." >&2
+  exit 1
+}
+
+if ! getent group clipnest-input >/dev/null 2>&1; then
+  echo "clipnest-grant-input: the clipnest-input group does not exist (is the clipnest package installed and configured?)." >&2
+  exit 1
+fi
+
+usermod -aG clipnest-input "$target_user"
+echo "Added '$target_user' to the clipnest-input group. Log out and back in for it to take effect."

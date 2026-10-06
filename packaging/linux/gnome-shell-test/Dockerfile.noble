@@ -1,0 +1,51 @@
+# Real GNOME Shell 46 (Ubuntu 24.04 noble, current LTS) under systemd-as-PID1
+# + Xvfb -- the Shell 45+ counterpart to this directory's jammy/Shell-42
+# `Dockerfile`, added for T-EXT-ESM-BROKEN1: the jammy leg only ever
+# exercises `extension/dist/legacy` (GJS's pre-45 `imports.gi` world), so a
+# real ESM parse failure in `extension/dist/esm` (Shell 45+, i.e. all current
+# Ubuntu including 24.04) shipped for the extension's entire history without
+# ever failing a test. This image + `run-noble-esm-test.sh` closes that gap.
+#
+# Unlike the jammy leg, this image does NOT install the `clipnest` .deb --
+# building the Swift app is orthogonal to the defect class this leg guards
+# against (a JS-parse-level break in the shell extension itself), and
+# skipping it keeps this leg fast enough to run on every change to
+# `extension/`. It installs the extension bundle and the GSettings schemas
+# `Keybindings.start()` needs directly, matching exactly what
+# `debian/clipnest.install`/`debian/rules` place at
+# `/usr/share/clipnest/gnome-shell-extension/{esm,legacy}` and
+# `/usr/share/glib-2.0/schemas/` respectively -- see `run-noble-esm-test.sh`
+# for why the `esm/` bundle is baked in at BUILD time rather than copied in
+# at container-run time (Docker layer caching + a single rebuild-from-source
+# step keeps this reproducible without a bind mount).
+FROM ubuntu:24.04
+ENV DEBIAN_FRONTEND=noninteractive
+#
+# `gjs` is listed explicitly (unlike the jammy leg's package list): on noble,
+# `gnome-shell` no longer pulls it in transitively strongly enough to
+# actually install it, and its absence breaks `org.gnome.Shell.Extensions`'s
+# D-Bus activation (`Exec=/usr/bin/gjs -m ...`) with a confusingly generic
+# "Failed to execute program ...: No such file or directory" that is really
+# "gjs itself isn't installed" -- verified directly (`which gjs` -> nothing)
+# while bringing this leg up, not assumed.
+RUN apt-get update -qq && apt-get install -y -qq \
+      systemd systemd-sysv dbus dbus-x11 \
+      gnome-shell gnome-session-bin gnome-session-common mutter gjs \
+      gsettings-desktop-schemas at-spi2-core \
+      xvfb x11-xserver-utils x11-utils xterm \
+      libglib2.0-bin libsqlite3-0 libx11-6 libxfixes3 libxtst6 \
+      xclip xdotool wmctrl curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# The extension bundle (both variants, for parity with the real .deb path --
+# only `esm/` is actually installed/enabled by run-noble-esm-test.sh) and the
+# schemas `Keybindings.start()`'s `new Gio.Settings({schema_id: ...})` needs
+# to resolve `app.clipnest.Clipnest.Keybindings` without throwing (a real
+# .deb install compiles these via dpkg's gsettings trigger; a raw file copy
+# needs the explicit `glib-compile-schemas` below).
+COPY extension/dist /usr/share/clipnest/gnome-shell-extension
+COPY packaging/linux/schemas/*.gschema.xml /usr/share/glib-2.0/schemas/
+RUN glib-compile-schemas /usr/share/glib-2.0/schemas
+
+STOPSIGNAL SIGRTMIN+3
+CMD ["/lib/systemd/systemd"]
