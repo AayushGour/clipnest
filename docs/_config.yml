@@ -3,9 +3,9 @@
 
 title: Clipnest
 description: >-
-  Free, open-source clipboard manager for macOS (SwiftUI). History, search,
-  pins, and snippets with keyword expansion in any app — plus optional
-  on-device OCR.
+  Free, open-source clipboard manager for macOS and Linux (Ubuntu/GNOME).
+  History, search, pins, and snippets with keyword expansion in any app —
+  plus optional on-device OCR.
 
 url: "https://aayushgour.github.io"
 baseurl: "/clipnest"
@@ -48,6 +48,12 @@ plugins:
 # be published).
 exclude:
   - API.md
+  # Linux-port developer API references (added with 1.0) — same dev-only
+  # rule as API.md; they were being published and listed in sitemap.xml.
+  - API-ClipnestGTK.md
+  - API-ClipnestLinuxAppKit.md
+  - API-ClipnestPlatformLinux.md
+  - API-ClipnestPlatformLinux-IBus.md
   - architecture.md
   - features.md
   - competitive-analysis.md
@@ -90,7 +96,7 @@ defaults:
         path: /assets/og-image.png
         width: 1200
         height: 630
-        alt: "Clipnest — free, open-source clipboard manager for macOS"
+        alt: "Clipnest — free, open-source clipboard manager for macOS and Linux"
 
 # T88 (review follow-up): jekyll-seo-tag's own auto-emitted JSON-LD
 # (Jekyll::SeoTag::JSONLDDrop#author, template.html's `{{ seo_tag.json_ld |
