@@ -1,7 +1,7 @@
 ---
 layout: article
 title: Getting Started with Clipnest — Usage Guide
-description: Learn Clipnest's hotkeys, search, pinning, and snippet expansion — get productive with your Mac clipboard manager in minutes.
+description: Learn Clipnest's hotkeys, search, pinning, and snippet expansion — get productive with your clipboard manager for Mac or Linux in minutes.
 permalink: /usage/
 ---
 
@@ -27,6 +27,7 @@ A guide for everyday use — install, permissions, clipboard history, snippets, 
 - [9. Keyboard shortcuts reference](#9-keyboard-shortcuts-reference)
 - [10. Troubleshooting](#10-troubleshooting)
 - [11. Uninstall](#11-uninstall)
+- [12. Using Clipnest on Linux](#12-using-clipnest-on-linux)
 
 </nav>
 
@@ -36,10 +37,13 @@ Clipnest is a small, native menu-bar app for Mac that quietly remembers everythi
 
 Clipnest lives only in the menu bar (there's no Dock icon day-to-day, no window that stays open) and is entirely private: **nothing you copy or type into Clipnest ever leaves your Mac.** There's no account, no cloud sync, and no analytics — everything is stored in a local database in your user Library folder. The one narrow exception to "no network access" is an optional, once-a-day background check against GitHub's public Releases API to see whether a newer version exists (on by default, and it never downloads or installs anything on its own — see [Settings window](#8-settings-window)); it sends nothing about you or your clipboard, just an anonymous request for the latest release tag.
 
+This guide is written for the Mac. Since 1.0 Clipnest also runs on Linux (Ubuntu with GNOME); the [shortcuts reference](#9-keyboard-shortcuts-reference) lists the Linux keys, and [Using Clipnest on Linux](#12-using-clipnest-on-linux) covers what's different.
+
 ## 2. Requirements
 
 - **macOS 14 (Sonoma) or later**
 - **Apple Silicon or Intel** — either Mac works
+- **Or Linux:** Ubuntu 22.04 or 24.04 with GNOME, X11 or Wayland, amd64 or arm64 — see [Using Clipnest on Linux](#12-using-clipnest-on-linux)
 - **Accessibility permission** (optional) — only needed so Clipnest can type your paste directly into the app you were using, and so snippet keyword-expansion can work. Everything else (capturing, browsing, and searching your history) works without it.
 {: .detail-list}
 
@@ -241,7 +245,7 @@ Everything Clipnest stores lives under one folder in your user Library:
 └── blobs/              # image & rich-text content, deduplicated by content hash
 ```
 
-Nothing here is synced or backed up anywhere outside your normal Mac backups (e.g. Time Machine, if you use it).
+Nothing here is synced or backed up anywhere outside your normal Mac backups (e.g. Time Machine, if you use it). On Linux the same data lives in `~/.local/share/Clipnest` (or `$XDG_DATA_HOME/Clipnest`).
 
 ## 8. Settings window
 
@@ -261,28 +265,28 @@ Opening Settings briefly shows a Dock icon while that window is focused — Clip
 
 ### Global (work from any app)
 
-| Action | Shortcut |
-| --- | --- |
-| Open/toggle the picker | `⌥⌘V` |
-| Expand a snippet by Tag | `⌥⌘E` |
+| Action | Mac | Linux |
+| --- | --- | --- |
+| Open/toggle the picker | `⌥⌘V` | `Alt+Super+V` |
+| Expand a snippet by Tag | `⌥⌘E` | `Alt+Super+E` |
 
 ### Inside the picker
 
-| Action | Shortcut |
-| --- | --- |
-| Move selection up / down | `↑` / `↓` |
-| Paste selected item / snippet | `Return` |
-| Paste without formatting | `⌥Return` |
-| Focus the search field | `⌘F` |
-| Pin / unpin highlighted item | `⌘P` |
-| Save highlighted item as a snippet | `⌘S` |
-| New snippet *(Snippets tab)* | `⌘N` |
-| Delete highlighted item / snippet | `⌘⌫` (or `Delete`) |
-| Switch to History tab | `⌘1` |
-| Switch to Pinned tab | `⌘2` |
-| Switch to Snippets tab | `⌘3` |
-| Open Settings | `⌘,` |
-| Close the picker | `Esc` |
+| Action | Mac | Linux |
+| --- | --- | --- |
+| Move selection up / down | `↑` / `↓` | `↑` / `↓` |
+| Paste selected item / snippet | `Return` | `Return` |
+| Paste without formatting | `⌥Return` | `Alt+Return` |
+| Focus the search field | `⌘F` | `Ctrl+F` |
+| Pin / unpin highlighted item | `⌘P` | `Ctrl+P` |
+| Save highlighted item as a snippet | `⌘S` | `Ctrl+S` |
+| New snippet *(Snippets tab)* | `⌘N` | `Ctrl+N` |
+| Delete highlighted item / snippet | `⌘⌫` (or `Delete`) | `Delete` |
+| Switch to History tab | `⌘1` | `Ctrl+1` |
+| Switch to Pinned tab | `⌘2` | `Ctrl+2` |
+| Switch to Snippets tab | `⌘3` | `Ctrl+3` |
+| Open Settings | `⌘,` | `Ctrl+,` |
+| Close the picker | `Esc` | `Esc` |
 
 The two **global** shortcuts above — **Open/toggle the picker** and **Expand a snippet by Tag** — are rebindable from **Settings → Shortcuts** (**⌘,**): click a shortcut field and press your preferred key combination; it takes effect immediately (see [Settings window](#8-settings-window)). The shortcuts *inside* the picker (search, pin, delete, switch tabs, and so on, listed in the table above) are fixed and aren't currently customizable.
 
@@ -323,3 +327,17 @@ rm -rf ~/Library/Application\ Support/Clipnest \
 ```
 
 Everything Clipnest stores is local to those folders — removing them leaves nothing behind.
+
+## 12. Using Clipnest on Linux
+
+Since 1.0, Clipnest runs on **Ubuntu 22.04 and 24.04 with GNOME**, on X11 or Wayland, for amd64 and arm64 — a native GTK 4 app built from the same Swift core, so everything in sections 5–8 applies, with the Linux keys from the [shortcuts reference](#9-keyboard-shortcuts-reference).
+
+- **Install, update and uninstall:** see [Download → Linux]({{ '/download/#linux' | relative_url }}). In short: download the tarball for your architecture from the [latest release](https://github.com/AayushGour/clipnest/releases/latest), verify it with `sha256sum -c SHA256SUMS`, and run `./install.sh` as your normal user.
+- **Tray icon:** Open Clipnest, Pause Capture, Settings…, Quit.
+- **Auto-paste** needs a one-time permission, offered on first launch or from **Settings → Permissions**. It adds you to a dedicated `clipnest-input` group that can create a virtual keyboard and nothing else. Log out and back in afterwards; until then Clipnest copies your choice and you press Ctrl+V yourself.
+- **Start at login** is off by default, and nothing is captured while Clipnest isn't running — turn on **Settings → General → Launch Clipnest at login**.
+- **OCR** is off by default; turn it on in **Settings → History**. It needs the `clipnest-ocr` packages, which `install.sh` installs.
+- **Your data** lives in `~/.local/share/Clipnest` (or `$XDG_DATA_HOME/Clipnest`). Uninstalling the packages leaves it in place.
+{: .detail-list}
+
+How Linux behaves differently from the Mac — picker placement on Wayland and the optional GNOME Shell extension, terminals, password managers, and the Ubuntu 22.04 GTK note — is listed under [Linux differences]({{ '/features/#linux-differences' | relative_url }}).

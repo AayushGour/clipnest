@@ -1,7 +1,7 @@
 ---
 layout: home
-title: "Clipnest — Free, Open-Source Clipboard Manager for Mac"
-description: "Clipnest is a free, open-source, native macOS clipboard manager: full history, instant search, pins, and snippets that expand by keyword in any app — plus permissions that survive updates."
+title: "Clipnest — Free, Open-Source Clipboard Manager for Mac and Linux"
+description: "Clipnest is a free, open-source, native clipboard manager for macOS and Linux (Ubuntu with GNOME): full history, instant search, pins, and snippets that expand by keyword in any app."
 permalink: /
 ---
 
@@ -32,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/in
 
 </div>
 
-Requires macOS 14 (Sonoma) or later. Full install steps, requirements, and the honest signing story are on the [Download page]({{ "/download/" | relative_url }}).
+**Mac:** the command above, on macOS 14 (Sonoma) or later. **Linux:** Ubuntu 22.04 or 24.04 with GNOME (X11 or Wayland), amd64 or arm64 — download the tarball from the [latest release](https://github.com/AayushGour/clipnest/releases/latest) and run its `install.sh`. Full steps for both, and the honest Mac signing story, are on the [Download page]({{ "/download/" | relative_url }}).
 
 </div>
 </section>
@@ -46,13 +46,15 @@ Requires macOS 14 (Sonoma) or later. Full install steps, requirements, and the h
 
 macOS 26 Tahoe added a basic clipboard history to Spotlight (⌘4) — but it's opt-in, caps out at 7 days, and can't organize, pin, or expand anything. Clipnest is a free, open-source, native menu-bar app that picks up where that leaves off: history you control, instant search, pinned favorites, and reusable snippets that expand by keyword in any app.
 
+**Now on Linux too.** Since 1.0, the same Clipnest runs on Ubuntu with GNOME, on X11 or Wayland — a native GTK 4 app built from the same Swift core, with the same history, search, pins, snippets, OCR and Settings.
+
 </div>
 
 <div class="feature-grid">
 
 <div class="feature-card" markdown="1">
 
-### The permission that doesn't disappear on update
+### The permission that doesn't disappear on update (Mac)
 
 Update Clipnest and you don't have to re-grant Accessibility. Every release is signed with the same certificate, so the designated code identity macOS ties your permission grant to stays the same across versions — you're not sent back to System Settings after every update the way you are with apps that rebuild or re-sign between releases. Read the full, honest signing story on the [FAQ]({{ "/faq/" | relative_url }}).
 
@@ -60,9 +62,9 @@ Update Clipnest and you don't have to re-grant Accessibility. Every release is s
 
 <div class="feature-card" markdown="1">
 
-### Free, open source, built in pure SwiftUI
+### Free, open source, natively built
 
-No Electron, no web view. Clipnest is a small, native Swift/SwiftUI app released under the [MIT license](https://github.com/AayushGour/clipnest/blob/main/LICENSE), with the full source on [GitHub](https://github.com/AayushGour/clipnest). No account, no cloud, no telemetry. See exactly what stays on your Mac on the [Privacy page]({{ "/privacy/" | relative_url }}).
+No Electron, no web view. Clipnest is a small, native Swift app — SwiftUI on the Mac, GTK 4 on Linux — released under the [MIT license](https://github.com/AayushGour/clipnest/blob/main/LICENSE), with the full source on [GitHub](https://github.com/AayushGour/clipnest). No account, no cloud, no telemetry. See exactly what stays on your computer on the [Privacy page]({{ "/privacy/" | relative_url }}).
 
 </div>
 
@@ -70,7 +72,7 @@ No Electron, no web view. Clipnest is a small, native Swift/SwiftUI app released
 
 ### Snippets that expand anywhere you type
 
-Save a signature, a boilerplate reply, or a command as a **snippet**, give it a short **Tag**, then type that Tag in *any* app and press a hotkey — Clipnest replaces it with the snippet's full body. It works the same way in native Cocoa apps and in Electron/Chrome-based ones like VS Code or Slack. If you're running a separate text expander alongside your clipboard manager today, this replaces it too. More on the [Features page]({{ "/features/" | relative_url }}).
+Save a signature, a boilerplate reply, or a command as a **snippet**, give it a short **Tag**, then type that Tag in *any* app and press a hotkey — Clipnest replaces it with the snippet's full body. On the Mac it works the same way in native Cocoa apps and in Electron/Chrome-based ones like VS Code or Slack; on Linux it works on both X11 and Wayland. If you're running a separate text expander alongside your clipboard manager today, this replaces it too. More on the [Features page]({{ "/features/" | relative_url }}).
 
 </div>
 
@@ -125,7 +127,7 @@ Save a signature, a boilerplate reply, or a command as a **snippet**, give it a 
 </svg>
 </span>
 <h3>Snippets with keyword expansion</h3>
-<p>Save reusable text under a short Tag, then expand it by keyword in any app with ⌥⌘E.</p>
+<p>Save reusable text under a short Tag, then expand it by keyword in any app with ⌥⌘E on the Mac or Alt+Super+E on Linux.</p>
 </li>
 <li>
 <span class="box-grid-icon" aria-hidden="true">
@@ -135,7 +137,7 @@ Save a signature, a boilerplate reply, or a command as a **snippet**, give it a 
 </svg>
 </span>
 <h3>Optional on-device OCR</h3>
-<p>recognize the text in copied screenshots with Apple's Vision framework, off by default. See the trade-off on the <a href="{{ "/privacy/" | relative_url }}">Privacy page</a> before turning it on.</p>
+<p>recognize the text in copied screenshots — with Apple's Vision framework on the Mac, a bundled ONNX Runtime and PP-OCRv5 models on Linux — entirely on your computer, off by default. See the trade-off on the <a href="{{ "/privacy/" | relative_url }}">Privacy page</a> before turning it on.</p>
 </li>
 </ul>
 
@@ -149,7 +151,7 @@ Save a signature, a boilerplate reply, or a command as a **snippet**, give it a 
 
 ## How it compares
 
-A quick, honest look at Clipnest next to Maccy (the established free, open-source option) and Deck (a newer, feature-dense native competitor). A tick means the product has that feature as of September 2026; a blank cell means it doesn't.
+A quick, honest look at Clipnest next to Maccy (the established free, open-source option) and Deck (a newer, feature-dense native competitor). A tick means the product has that feature as of October 2026; a blank cell means it doesn't.
 
 </div>
 
@@ -162,6 +164,7 @@ A quick, honest look at Clipnest next to Maccy (the established free, open-sourc
 | Snippets / text expansion | ✓ | | ✓ |
 | On-device OCR | ✓ | | ✓ |
 | Fast, native Swift — no Electron | ✓ | ✓ | ✓ |
+| Runs on Linux | ✓ | | |
 
 </div>
 
@@ -177,7 +180,8 @@ Sources: [p0deje/Maccy](https://github.com/p0deje/Maccy) and its [README](https:
 
 - [Features]({{ "/features/" | relative_url }}) — everything Clipnest does, in detail.
 - [FAQ]({{ "/faq/" | relative_url }}) — pricing, privacy, permissions, and more.
-- [Privacy]({{ "/privacy/" | relative_url }}) — exactly what stays on your Mac.
+- [Privacy]({{ "/privacy/" | relative_url }}) — exactly what stays on your computer.
+- [Changelog](https://github.com/AayushGour/clipnest/blob/main/CHANGELOG.md) — what changed in every release.
 
 </div>
 </section>
