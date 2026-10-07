@@ -1,7 +1,7 @@
 ---
 layout: article
 title: Privacy — Clipnest is 100% Local, No Cloud, No Telemetry
-description: Clipnest never sends your clipboard data anywhere. No servers, no sync, no telemetry, no account — see exactly what stays on your Mac and the OCR trade-off, honestly.
+description: Clipnest never sends your clipboard data anywhere. No servers, no sync, no telemetry, no account — see exactly what stays on your Mac or Linux PC and the OCR trade-off, honestly.
 permalink: /privacy/
 ---
 
@@ -28,7 +28,9 @@ Your clipboard is some of the most sensitive data on your machine — passwords,
 
 Nothing you copy, paste, or save as a snippet is ever sent anywhere — no servers, no sync, no analytics, no telemetry, no account.
 
-The *only* network traffic Clipnest ever makes is a background check against GitHub's public Releases API, once a day, to see whether a newer version exists. You can turn it off in **Settings → General**. That check sends nothing about you or your clipboard — just an anonymous request for the latest release tag — and nothing downloads or installs automatically because of it; updating stays a separate, manual step you choose to run yourself. See [Update]({{ '/download/#update' | relative_url }}) for that flow.
+The *only* network traffic Clipnest ever makes is a background check against GitHub's public Releases API, once a day, to see whether a newer version exists. You can turn it off in **Settings → General**. That check sends nothing about you or your clipboard — just an anonymous request for the latest release tag — and nothing downloads or installs automatically because of it; updating stays a separate step you choose to run yourself (on Linux, after you confirm **Install Update…**). See [Update on Mac]({{ '/download/#update-on-mac' | relative_url }}) and [Update and uninstall on Linux]({{ '/download/#update-and-uninstall-on-linux' | relative_url }}) for those flows.
+
+Your history and snippets are stored only on your own disk: on the Mac in `~/Library/Application Support/Clipnest`, on Linux in `~/.local/share/Clipnest` (or `$XDG_DATA_HOME/Clipnest` if you set that).
 
 </div>
 
@@ -47,7 +49,7 @@ The *only* network traffic Clipnest ever makes is a background check against Git
 
 </div>
 
-Turn on **"Recognize text in copied images"** (Settings → History, **off by default**) and Clipnest reads the text in a screenshot right on your Mac using Apple's Vision framework — no upload, no model download, no network call of any kind.
+Turn on **"Recognize text in copied images"** (Settings → History, **off by default**) and Clipnest reads the text in a screenshot right on your computer — with Apple's Vision framework on the Mac, or on Linux with the ONNX Runtime and PP-OCRv5 models installed by the `clipnest-ocr` packages — no upload, no model download, no network call of any kind.
 
 <div class="notice" markdown="1">
 
@@ -55,7 +57,7 @@ But that recognized text becomes plain, searchable text stored alongside the ima
 
 </div>
 
-It never runs on anything the pasteboard-privacy checks below already rejected: concealed/transient (password-manager) copies and content from excluded apps are filtered out before an item is even captured, so on-device text recognition never sees them either. See [Features]({{ '/features/' | relative_url }}) for the Fast/Accurate quality setting.
+It never runs on anything the pasteboard-privacy checks below already rejected: concealed/transient (password-manager) copies and content from excluded apps are filtered out before an item is even captured, so on-device text recognition never sees them either. See [Features]({{ '/features/' | relative_url }}) for the Mac's Fast/Accurate quality setting.
 
 </div>
 
@@ -77,6 +79,20 @@ It never runs on anything the pasteboard-privacy checks below already rejected: 
 </div>
 
 Clipnest honors the standard "concealed" and "transient" clipboard markers that password managers set, so copies from 1Password, Bitwarden, and similar apps are never stored. No setting can override this.
+
+On Linux the equivalent marker is `x-kde-passwordManagerHint` (set by KeePassXC and others). Those copies are never stored either, including the copy GNOME re-publishes after the password manager clears the clipboard.
+
+</div>
+
+<div class="content-panel" markdown="1">
+
+<div class="content-panel-head" markdown="1">
+
+## Linux permissions, and what they can see
+
+</div>
+
+Auto-paste on Linux needs one permission: it adds you to a dedicated `clipnest-input` group that can create a virtual keyboard and nothing else. It is deliberately **not** the `input` group, which could read your keystrokes. Without it, Clipnest still works; it copies your choice and you press Ctrl+V yourself. The optional GNOME Shell extension only changes where the picker window opens.
 
 </div>
 

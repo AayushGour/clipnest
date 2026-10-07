@@ -1,14 +1,20 @@
 ---
 layout: article
 title: Features — Clipnest Clipboard Manager
-description: Full clipboard history, instant search, pinning, reusable snippets with keyword expansion, optional on-device OCR, and a global hotkey — all native to macOS.
+description: Full clipboard history, instant search, pinning, reusable snippets with keyword expansion, optional on-device OCR, and a global hotkey — native on macOS and Linux (Ubuntu with GNOME).
 permalink: /features/
 ---
 
 # Features
 
-Clipnest is a free, open-source, native menu-bar app for macOS. It quietly remembers everything you copy — text, links, images, and files — and hands it back the instant you need it. Here's everything it does.
+Clipnest is a free, open-source, native menu-bar app for macOS and, since 1.0, Linux (Ubuntu 22.04/24.04 with GNOME, X11 or Wayland). It quietly remembers everything you copy — text, links, images, and files — and hands it back the instant you need it. Here's everything it does.
 {: .lead}
+
+<div class="notice" markdown="1">
+
+**On Linux**, everything below works the same unless noted, with Linux keys: **Ctrl** takes the place of ⌘, **Alt** the place of ⌥, and **Delete** removes an item. The global hotkeys are **Alt+Super+V** (picker) and **Alt+Super+E** (expand a snippet). Platform differences are listed under [Linux differences](#linux-differences).
+
+</div>
 
 <div class="content-panel" markdown="1">
 
@@ -29,7 +35,7 @@ Clipnest is a free, open-source, native menu-bar app for macOS. It quietly remem
 
 - **Full clipboard history** — automatically captures everything you copy: plain text, rich text, URLs, images, and files.
 - **Smart de-duplication** — copy the same thing twice and it won't clutter your history.
-- **Accessibility permission survives updates** — update Clipnest and you don't have to re-grant Accessibility: your permission survives, because every release is signed with the same certificate. See [Signing, honestly]({{ '/download/#signing-honestly' | relative_url }}) for how.
+- **Accessibility permission survives updates (Mac)** — update Clipnest and you don't have to re-grant Accessibility: your permission survives, because every release is signed with the same certificate. See [Signing, honestly]({{ '/download/#signing-honestly' | relative_url }}) for how.
 {: .detail-list}
 
 </div>
@@ -104,7 +110,7 @@ Clipnest is a free, open-source, native menu-bar app for macOS. It quietly remem
 
 Save reusable text (a signature, boilerplate, a command) with a **Tag**, and paste it from the Snippets tab or expand it by keyword in any app — replaces your text expander too. Turn a text or link history item into a snippet with **⌘S**.
 
-**Expand anywhere:** type a snippet's Tag in *any* app, select it, and press **⌥⌘E** — Clipnest replaces the selection with the snippet's Body. It works in every application, using a two-tier approach: Accessibility first (reads and replaces the selection directly, without ever touching your clipboard), with a clipboard-based fallback (snapshotting and restoring your clipboard) for apps where the Accessibility API can't read the selection, such as Electron/Chrome-based apps.
+**Expand anywhere:** type a snippet's Tag in *any* app, select it, and press **⌥⌘E** — Clipnest replaces the selection with the snippet's Body. It works in every application, using a two-tier approach on the Mac: Accessibility first (reads and replaces the selection directly, without ever touching your clipboard), with a clipboard-based fallback (snapshotting and restoring your clipboard) for apps where the Accessibility API can't read the selection, such as Electron/Chrome-based apps. On Linux, expansion works on both X11 and Wayland (on Wayland it goes through IBus), and in terminals it declines rather than risk corrupting the command line.
 
 <div class="shot-frame" markdown="1">
 
@@ -129,7 +135,7 @@ Save reusable text (a signature, boilerplate, a command) with a **Tag**, and pas
 
 </div>
 
-Let Clipnest read the text in your screenshots so you can find them by what they say, not just when you copied them. Turned on in Settings → History, **"Recognize text in copied images"** is **off by default**, with a **Fast** / **Accurate** quality choice — **Accurate is the default**. It runs entirely on-device with Apple's Vision framework: no upload, no model download, no network call of any kind. See [Privacy]({{ '/privacy/' | relative_url }}) for the trade-off before you turn it on.
+Let Clipnest read the text in your screenshots so you can find them by what they say, not just when you copied them. Turned on in Settings → History, **"Recognize text in copied images"** is **off by default**, with a **Fast** / **Accurate** quality choice — **Accurate is the default**. It runs entirely on-device — Apple's Vision framework on the Mac; on Linux, a bundled ONNX Runtime with PP-OCRv5 models shipped in the `clipnest-ocr` packages: no upload, no model download, no network call of any kind. See [Privacy]({{ '/privacy/' | relative_url }}) for the trade-off before you turn it on.
 
 </div>
 
@@ -161,7 +167,7 @@ Everything about how Clipnest behaves lives in one Settings window (**⌘,**), a
 - **History** — controls how much history is kept. The default is the most recent **1,000** items; switch to a day-based cap (30 days by default) or *Everything* (no cap at all) instead. Pinned items are always kept regardless of the cap. **Clear All History…** wipes everything (including pinned items) after a confirmation. This tab also has the OCR toggle described above.
 - **Apps** — exclude specific apps from capture, on top of the built-in password-manager denylist (which can't be removed).
 - **Shortcuts** — rebind *both* global hotkeys (open the picker, expand a snippet) to whatever key combination you want.
-- **Permissions** — see whether Accessibility is granted and fix it in one click, including guidance for the one case System Settings can't diagnose on its own (a rebuilt/updated app whose old permission entry no longer matches).
+- **Permissions** — on the Mac, see whether Accessibility is granted and fix it in one click, including guidance for the one case System Settings can't diagnose on its own (a rebuilt/updated app whose old permission entry no longer matches). On Linux, see your setup status and grant the one-time auto-paste permission.
 {: .detail-list}
 
 </div>
@@ -207,7 +213,7 @@ Arrows to move, Return to paste, Esc to dismiss, ⌘F to search, ⌘P to pin, �
 
 </div>
 
-Pure Swift/SwiftUI, a few MB, sips almost no memory, feels like part of macOS. Lives in the menu bar with no Dock icon day-to-day (opening Settings briefly shows one).
+Pure Swift, sips almost no memory. On the Mac it's SwiftUI, a few MB, feels like part of macOS, and lives in the menu bar with no Dock icon day-to-day (opening Settings briefly shows one). On Linux it's a native GTK 4 app with a tray icon (Open Clipnest, Pause Capture, Settings…, Quit).
 
 </div>
 
@@ -226,7 +232,24 @@ Pure Swift/SwiftUI, a few MB, sips almost no memory, feels like part of macOS. L
 
 </div>
 
-Everything stays on your Mac — no servers, no sync, no telemetry, no account. See [Privacy]({{ '/privacy/' | relative_url }}) for the full picture, including the OCR trade-off.
+Everything stays on your computer — no servers, no sync, no telemetry, no account. See [Privacy]({{ '/privacy/' | relative_url }}) for the full picture, including the OCR trade-off.
+
+</div>
+
+<div class="content-panel" markdown="1">
+
+<div class="content-panel-head" markdown="1">
+
+## Linux differences
+
+</div>
+
+- **Picker position.** GNOME doesn't let apps place their own windows on Wayland, so the picker opens where GNOME puts it rather than at your cursor. The optional GNOME Shell extension restores cursor placement and showing above full-screen windows — see [Download]({{ '/download/#linux' | relative_url }}).
+- **Auto-paste permission.** Auto-paste needs a one-time grant that adds you to a dedicated `clipnest-input` group, which can create a virtual keyboard and nothing else. Until then Clipnest copies your choice and you press Ctrl+V yourself.
+- **Terminals.** Pasting into GNOME Terminal and other VTE terminals uses Ctrl+Shift+V automatically.
+- **Password managers.** Copies marked as secret (`x-kde-passwordManagerHint`, used by KeePassXC and others) are never stored. On Wayland, Clipnest can't tell which app made a copy, so Settings → Apps exclusions apply only to X11/XWayland apps; the secret marker works everywhere.
+- **Ubuntu 22.04** ships GTK 4.6, which has an upstream clipboard bug that can, rarely, make Clipnest quit. It's fixed in GTK 4.10+ (Ubuntu 24.04). Your history is never affected.
+{: .detail-list}
 
 </div>
 
