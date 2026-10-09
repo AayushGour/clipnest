@@ -121,3 +121,8 @@ This codebase has produced three instances, each of which cost hours and each of
 
 **A constraint on how to write these rules, not just which examples to pick:** argue from the case a reader can *see*. `presentSnippetEditor` works as the teaching example because the asymmetry sits two lines apart in one diff — macOS injects, Linux does not. Every other instance in this file needed a grep for readers to exist at all. A rule argued from the visible case gets followed; one argued from the invisible case gets nodded at.
 
+## Linux GTK UI: verify Wayland-specific behaviour on a real compositor (learned 2026-10-09)
+- **Popups beside a window must overlap it on Wayland.** mutter dismisses (`xdg_popup.popup_done`) a non-grabbing popup that does not overlap its parent; Xvfb/X11 never shows this. Keep the overlap in `PreviewAnchor.offset(isWayland:)` and check any new beside-the-window popover.
+- **Verify Wayland UI with headless mutter** (`mutter --headless --wayland`, watch `get_popup`/`configure`/`reposition`/`popup_done`), not only Xvfb. A test that cannot reach the Wayland path reads like a pass.
+- **Clipboard writes need keyboard focus on GNOME.** Write before hiding the window (`PasteDismissOrdering`), confirm via `changeCount`, bound the wait, never read the clipboard back from the GTK thread.
+- **GTK 4.6 `lines` is unreliable across newlines**; collapse text yourself before the label.

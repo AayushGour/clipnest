@@ -262,3 +262,4 @@ Verified: macOS `swift build` clean; `swift test` exactly 615 tests/52 suites (u
 - 2026-10-09 [T-PREVIEWJUMP1] preview placed once: popdown-before-update + shared min width (420); mutter trace 13 shows=13 configure, 0 reposition, 0 popup_done; 1561 tests, lint clean
 - 2026-10-09 [T-ROWLINES1/PREVIEWJUMP1] review follow-ups: O(n) RowDisplayText counter, remap only when target/anchor changes, hover flag reset on non-pointer popdown, doc rewording; 1566 tests, lint clean, mutter 12 shows=12 configure 0 reposition
 - 2026-10-09 [T-PREVIEWJUMP1] re-map path pops down directly (no previewHoverChanged reset); 1566 tests, lint clean
+- 2026-10-09 [T-DOCS1] docs pass for PR #11 (1.0.1): CHANGELOG dedupe+guard/Makefile, README/TESTING-LINUX/features/architecture/API.md fixes, D107-D114 in project-context, Wayland rules in coding-standards; make lint clean, make test-linux 1566 passed; no code changes
