@@ -126,14 +126,16 @@ extension PickerViewModel {
         return
       }
     }
+    if isHoveringPreview {
+      // Keep the current popover open while the pointer is over it. Checked
+      // BEFORE the selection fallback, or moving the pointer from a row onto
+      // the popover would swap it for the selection's preview underfoot.
+      return
+    }
     // A hovered row always wins over the keyboard selection, even a hovered
     // row that has no preview (hover then closes rather than falling back).
     if hoveredItemID == nil, let selectedID = keyboardSelectionPreviewID() {
       setPreviewTarget(selectedID, source: .selection)
-      return
-    }
-    if isHoveringPreview {
-      // Keep the current popover open while the pointer is over it.
       return
     }
     setPreviewTarget(nil)

@@ -106,6 +106,22 @@ struct PickerViewModelSelectionPreviewTests {
     #expect(viewModel.previewTargetID == rows[1].id)
   }
 
+  @Test("moving the pointer from a row onto the popover keeps the hover preview, not the selection")
+  func pointerOntoPopoverKeepsHoverPreview() async throws {
+    let (viewModel, rows, _) = try await makeLoaded(enabled: true)
+    viewModel.moveSelection(by: 1)
+    viewModel.selectionChangedForPreview()
+    viewModel.hoverItem(rows[0].id)
+    await waitUntil { viewModel.previewTargetID == rows[0].id }
+
+    // Row exit then popover enter, as the pointer crosses the gap.
+    viewModel.hoverItem(nil)
+    viewModel.previewHoverChanged(true)
+    try await Task.sleep(for: settleDelay)
+    #expect(viewModel.previewTargetID == rows[0].id)
+    #expect(viewModel.previewTargetSource == .hover)
+  }
+
   @Test("leaving hover closes the preview when OFF (unchanged hover-only behaviour)")
   func leavingHoverClosesWhenOff() async throws {
     let (viewModel, rows, _) = try await makeLoaded(enabled: false)

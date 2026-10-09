@@ -203,8 +203,8 @@ final class ItemPreviewController {
   }
 
   /// Places `panel` on the already-chosen `side` of `anchorRect` (the
-  /// picker), vertically centered on `cursorY` (the pointer's screen Y, i.e.
-  /// the hovered row) and clamped on-screen.
+  /// picker), vertically centered on `verticalCenter` (a screen Y: the pointer, i.e.
+  /// the hovered row, or the keyboard-selected row's centre) and clamped on-screen.
   ///
   /// The side is passed in rather than decided here: it is computed once in
   /// `update` from the picker's position alone, so it cannot vary with this
@@ -215,7 +215,7 @@ final class ItemPreviewController {
     _ panel: NSPanel,
     besideAnchor anchorRect: NSRect,
     on side: ClipnestViewModels.WindowPlacement.PreviewSide,
-    atVerticalCenter cursorY: CGFloat
+    atVerticalCenter verticalCenter: CGFloat
   ) {
     let width = panel.frame.width
     let height = panel.frame.height
@@ -229,7 +229,7 @@ final class ItemPreviewController {
       screenVisibleFrame: visible,
       gap: Self.gap)
 
-    var origin = NSPoint(x: originX, y: cursorY - height / 2)
+    var origin = NSPoint(x: originX, y: verticalCenter - height / 2)
     origin.y = min(max(origin.y, visible.minY), visible.maxY - height)
     panel.setFrameOrigin(origin)
   }

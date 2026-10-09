@@ -78,7 +78,10 @@
 // approach was dropped because it also fired for non-keyboard selection
 // changes — an async query settling on open — which must not preview).
 // `ScrollResettingList` reports the selected row's vertical centre into
-// `viewModel.selectedRowMidY` so the popover anchors beside it. Both feed `viewModel.previewTargetID`, which this view watches via its own
+// `viewModel.selectedRowMidY` so the popover anchors beside it. macOS manual
+// checks (never compiled/run off-Mac): row preferences may not propagate out
+// of a `List`, and the popover is not repositioned on mouse-wheel scrolling.
+// Both feed `viewModel.previewTargetID`, which this view watches via its own
 // `.onChange` — looking the target id up in `viewModel.rows` and forwarding
 // the resolved `ClipItem?` to `viewModel.updatePreview`, a closure the
 // composition root (`AppEnvironment`) wires to the real
@@ -675,7 +678,7 @@ where Data.Element: Identifiable, Data.Element.ID == ID {
   /// Reports the selected row's vertical centre (window coordinates, top-down)
   /// whenever it changes, `nil` when no selected row is laid out. Feeds
   /// `PickerViewModel.selectedRowMidY` (T-PREVIEWSEL1).
-  let onSelectedRowMidY: (CGFloat?) -> Void
+  let onSelectedRowMidY: @MainActor (CGFloat?) -> Void
   @ViewBuilder let rowContent: (Data.Element) -> RowContent
 
   var body: some View {
@@ -685,10 +688,10 @@ where Data.Element: Identifiable, Data.Element.ID == ID {
           rowContent(element)
             .tag(element.id)
             .background(
-              GeometryReader { proxy in
+              GeometryReader { geometry in
                 Color.clear.preference(
                   key: SelectedRowMidYKey.self,
-                  value: element.id == selection ? proxy.frame(in: .global).midY : nil)
+                  value: element.id == selection ? geometry.frame(in: .global).midY : nil)
               }
             )
             .onAppear {
@@ -699,7 +702,10 @@ where Data.Element: Identifiable, Data.Element.ID == ID {
         }
       }
       .listStyle(.plain)
-      .onPreferenceChange(SelectedRowMidYKey.self) { midY in onSelectedRowMidY(midY) }
+      .onPreferenceChange(SelectedRowMidYKey.self) { [onSelectedRowMidY] midY in
+        // The perform closure is Sendable under Swift 6; hop back explicitly.
+        MainActor.assumeIsolated { onSelectedRowMidY(midY) }
+      }
       .onChange(of: scrollToTopToken) { _, _ in
         // Dispatched to the next run-loop tick rather than called
         // synchronously from `.onChange`, since `scrollToTopToken` can
