@@ -71,12 +71,17 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       release_exists: ${{ steps.v.outputs.release_exists }}
     steps:
+      # Build exactly the commit the "Release" run built, not whatever main
+      # holds by the time this job starts.
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
 
-      - name: Read version + check the release actually exists
+      - name: Read version + check this commit is the release commit
         id: v
         env:
           GH_TOKEN: ${{ github.token }}
+          BUILT_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
         run: |
           set -euo pipefail
           VERSION="$(grep -E '^\s*MARKETING_VERSION:' ClipnestApp/project.yml \
@@ -86,13 +91,22 @@ jobs:
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          # Idempotent by construction: if release.yml made no new release
-          # this run (should_release=false there, e.g. a docs-only push),
-          # there's nothing new to attach Linux assets to — skip rather
-          # than inventing a release release.yml itself decided not to cut.
-          if gh release view "v${VERSION}" >/dev/null 2>&1; then
+          # Publish only when v$VERSION is the release of THIS commit.
+          # release.yml runs on every push to main but cuts a release only
+          # when the version's tag doesn't exist yet; on any other push the
+          # tag still points at an older commit. Checking "does the release
+          # exist" alone (the old check) re-built and --clobber'd the
+          # existing release's Linux assets with newer code still labelled
+          # as the old version (happened to v1.0.0 on 2026-10-09).
+          # gh exits non-zero (and prints the 404 body) when the tag doesn't exist.
+          TAG_SHA=""
+          if out="$(gh api "repos/${GITHUB_REPOSITORY}/commits/v${VERSION}" --jq .sha 2>/dev/null)"; then
+            TAG_SHA="$out"
+          fi
+          if [ -n "$TAG_SHA" ] && [ "$TAG_SHA" = "$BUILT_SHA" ]; then
             echo "release_exists=true" >> "$GITHUB_OUTPUT"
           else
+            echo "No release v${VERSION} for ${BUILT_SHA} (tag -> ${TAG_SHA:-none}); skipping Linux publish."
             echo "release_exists=false" >> "$GITHUB_OUTPUT"
           fi
 

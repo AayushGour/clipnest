@@ -10,6 +10,8 @@ at any time.
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-10
+
 ### Added
 
 - One install command for macOS and Linux:
@@ -356,7 +358,8 @@ release (0.5.0, above). None of them were ever installed by a user.
 
 - `Sendable` conformance for `NSPasteboard` access, required by Swift 6.
 
-[Unreleased]: https://github.com/AayushGour/clipnest/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/AayushGour/clipnest/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/AayushGour/clipnest/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/AayushGour/clipnest/compare/v0.9.2...v1.0.0
 [0.9.4]: https://github.com/AayushGour/clipnest/commit/a07182712457991e6437847812239e77e1c9ab89
 [0.9.3]: https://github.com/AayushGour/clipnest/commit/0e68a569bb68ff1e1aa210ddc57abfa4bc54120d
