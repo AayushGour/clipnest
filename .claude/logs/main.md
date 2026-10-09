@@ -10,3 +10,6 @@
 - 2026-10-09 [T-TERMCOPY1A] tester PASS → done; T-TERMCOPY1 blocked on user live repro; fix/linux-1.0.1 integrates T-PREVIEWSIDE1+T-TERMCOPY1A
 - 2026-10-09 [T-TERMCOPY1A/T-PREVIEWSIDE1] built clipnest 1.0.1~local1 (noble, from fix/linux-1.0.1 @5fad24e) and installed on user's machine; capture probe saved + new diagnostic log lines confirmed live
 - 2026-10-09 [T-KBSCROLL1/T-PASTEORDER1] installed 1.0.1~local3 (90ae2cb) on user's machine at user request, BEFORE review PASS
+- 2026-10-09 [PR] pushed linux-1.0.1-fixes (34a147a + board/log commits) and opened draft PR #11 to main
+- 2026-10-09 [PR#11] rewrote 18 PR commits' author/committer Debarun Pal → Aayush Gour <ag14906@gmail.com> at user request (tree identical), force-pushed; repo-local git identity set to Aayush Gour
+- 2026-10-09 [T-AUTHORFIX1] rewrote main (20b3ae6→3d15dcf author Aayush Gour), main 4e6b044→3562a9a, v1.0.0 cc2055b→52f3d32, PR#11 →def7470; Release (Linux) disabled 17:37:39Z→re-enabled 17:38:50Z, no Linux run, assets unchanged
