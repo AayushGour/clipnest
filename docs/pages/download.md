@@ -7,7 +7,7 @@ permalink: /download/
 
 # Download Clipnest
 
-Free, open source, no account, no cloud, no telemetry. On the Mac one command installs it; on Linux, one tarball. Jump to [Linux](#linux).
+Free, open source, no account, no cloud, no telemetry. One command installs it on both the Mac and Linux: it detects your system and installs the latest version. Jump to [Linux](#linux).
 {: .lead}
 
 ## Requirements
@@ -18,7 +18,7 @@ Free, open source, no account, no cloud, no telemetry. On the Mac one command in
 
 ## Install on Mac
 
-Run this in Terminal:
+Run this in Terminal (the same command works on Linux, see below):
 
 <div class="install-card" markdown="1">
 
@@ -50,9 +50,23 @@ curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/up
 
 Updates Clipnest to the latest version, if a newer one is available. Same checksum verification as Install. You can also trigger this from inside the app: click the version number in the picker's footer (it shows a small dot when an update is available) and confirm — Clipnest opens Terminal and runs this exact script for you, then relaunches itself.
 
-## Uninstall on Mac
+## Uninstall
 
-Drag **Clipnest** from Applications to the Trash. To also remove its local data:
+One command for Mac and Linux:
+
+<div class="install-card" markdown="1">
+
+<div class="terminal-bar"><span></span><span></span><span></span></div>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/uninstall.sh | bash
+```
+
+</div>
+
+It works on both macOS and Linux, removes the app and **keeps your history, snippets and settings**. Add `--purge` (`bash -s -- --purge`) to delete that data too; `CLIPNEST_DRY_RUN=1` shows what it would do without doing it. On Linux, `--purge` also removes the `clipnest-input` group, so log out and back in afterwards.
+
+**Manual alternative on the Mac:** drag **Clipnest** from Applications to the Trash. To also remove its local data:
 
 <div class="install-card" markdown="1">
 
@@ -60,12 +74,14 @@ Drag **Clipnest** from Applications to the Trash. To also remove its local data:
 
 ```bash
 rm -rf ~/Library/Application\ Support/Clipnest \
-       ~/Library/Preferences/com.clipnest.app.plist
+       ~/Library/Preferences/com.clipnest.app.plist \
+       ~/Library/Caches/com.clipnest.app \
+       ~/Library/HTTPStorages/com.clipnest.app
 ```
 
 </div>
 
-Everything Clipnest stores is local, so removing those two paths leaves nothing behind.
+Everything Clipnest stores is local, so removing those paths leaves nothing behind.
 
 ## Signing, honestly (Mac)
 {: #signing-honestly}
@@ -86,7 +102,21 @@ Clipnest runs on **Ubuntu 22.04 and 24.04 with GNOME**, on X11 or Wayland, for a
 
 ### Install on Linux
 
-Download `clipnest-<version>-linux-amd64.tar.gz` (or `-arm64`; run `uname -m` if unsure: `x86_64` is amd64, `aarch64` is arm64) from the [latest release](https://github.com/AayushGour/clipnest/releases/latest), then:
+Run the same command as on the Mac, as your normal user (not root):
+
+<div class="install-card" markdown="1">
+
+<div class="terminal-bar"><span></span><span></span><span></span></div>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash
+```
+
+</div>
+
+The script checks that you're on Ubuntu 22.04 or 24.04 with GNOME, picks the amd64 or arm64 tarball for your CPU, downloads the latest release, verifies it against the SHA-256 GitHub publishes for that file (it stops if that is missing or different), checks the files inside with the bundled `SHA256SUMS`, and runs the bundled installer, which asks for your `sudo` password. On any other system it stops with a message; set `CLIPNEST_FORCE=1` to try anyway (unsupported). It needs `curl`, `tar`, `sha256sum` (or `shasum`), `sudo` and `apt-get`. Set `CLIPNEST_DRY_RUN=1` to do everything except the install.
+
+**Prefer to do it by hand?** Download `clipnest-<version>-linux-amd64.tar.gz` (or `-arm64`; run `uname -m` if unsure: `x86_64` is amd64, `aarch64` is arm64) from the [latest release](https://github.com/AayushGour/clipnest/releases/latest), then:
 
 <div class="install-card" markdown="1">
 
@@ -101,7 +131,7 @@ sha256sum -c SHA256SUMS
 
 </div>
 
-`install.sh` checks the architecture and installs three packages with `apt`: `clipnest`, plus `clipnest-ocr` and `clipnest-ocr-data` for text recognition in images. To skip OCR (about 26 MB), install only the app: `sudo apt-get install --no-install-recommends ./clipnest_*.deb`.
+The bundled `install.sh` checks the architecture and installs three packages with `apt`: `clipnest`, plus `clipnest-ocr` and `clipnest-ocr-data` for text recognition in images. To skip OCR (about 26 MB), install only the app: `sudo apt-get install --no-install-recommends ./clipnest_*.deb`.
 
 ### First run on Linux
 
@@ -122,9 +152,9 @@ gnome-extensions install --force /usr/share/clipnest/gnome-shell-extension/esm
 
 ### Update and uninstall on Linux
 
-To update, download the newer tarball and run its `install.sh` again. Or use Settings → General → **Check for Updates Now**: for a tarball install, Clipnest can download, checksum-verify and install the update for you after you confirm with **Install Update…** — it never installs anything on its own.
+To update, run the install command again (it installs the latest release over the current one), or download the newer tarball and run its `install.sh`. Or use Settings → General → **Check for Updates Now**: for a tarball install, Clipnest can download, checksum-verify and install the update for you after you confirm with **Install Update…** — it never installs anything on its own.
 
-To uninstall:
+To uninstall, run the one-line command from [Uninstall](#uninstall) above. Or by hand:
 
 <div class="install-card" markdown="1">
 

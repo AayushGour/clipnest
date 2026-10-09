@@ -145,7 +145,7 @@ Clipnest can optionally read the text inside a copied screenshot, entirely on yo
 
 **Mac:** macOS 14 (Sonoma) or later, on both Apple Silicon and Intel Macs.
 
-**Linux:** Ubuntu 22.04 and 24.04 with GNOME, on X11 or Wayland, for amd64 and arm64. The Linux version is a native GTK 4 app built from the same Swift core, with the same history, search, pinned items, snippets with keyword expansion, on-device OCR and Settings. Install steps are in the [README](https://github.com/AayushGour/clipnest#linux-ubuntu).
+**Linux:** Ubuntu 22.04 and 24.04 with GNOME, on X11 or Wayland, for amd64 and arm64. The Linux version is a native GTK 4 app built from the same Swift core, with the same history, search, pinned items, snippets with keyword expansion, on-device OCR and Settings. The same one-line install command as on the Mac works; see the [Download page]({{ "/download/" | relative_url }}#linux).
 
 </div>
 

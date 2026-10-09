@@ -61,7 +61,7 @@ curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/in
 
 </div>
 
-Clipnest installs into your Applications folder and launches. To update later:
+This works on both macOS and Linux (Ubuntu; see [Using Clipnest on Linux](#12-using-clipnest-on-linux)). On the Mac, Clipnest installs into your Applications folder and launches. To update later on the Mac:
 
 <div class="install-card" markdown="1">
 
@@ -317,7 +317,21 @@ Yes. Clipnest is a menu-bar-only app by design; look for its icon in the menu ba
 
 ## 11. Uninstall
 
-Drag **Clipnest** from Applications to the Trash, then, if you also want to remove your data:
+The one-line uninstaller works on macOS and Linux:
+
+<div class="install-card" markdown="1">
+
+<div class="terminal-bar"><span></span><span></span><span></span></div>
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/uninstall.sh | bash
+```
+
+</div>
+
+It works on both macOS and Linux, removes the app and **keeps your history, snippets and settings**. Add `--purge` (`bash -s -- --purge`) to delete that data too; `CLIPNEST_DRY_RUN=1` shows what it would do without doing it. On Linux, `--purge` also removes the `clipnest-input` group, so log out and back in afterwards.
+
+**Manual alternative (Mac):** drag **Clipnest** from Applications to the Trash, then, if you also want to remove your data:
 
 ```bash
 rm -rf ~/Library/Application\ Support/Clipnest \
@@ -332,12 +346,12 @@ Everything Clipnest stores is local to those folders — removing them leaves no
 
 Since 1.0, Clipnest runs on **Ubuntu 22.04 and 24.04 with GNOME**, on X11 or Wayland, for amd64 and arm64 — a native GTK 4 app built from the same Swift core, so everything in sections 5–8 applies, with the Linux keys from the [shortcuts reference](#9-keyboard-shortcuts-reference).
 
-- **Install, update and uninstall:** see [Download → Linux]({{ '/download/#linux' | relative_url }}). In short: download the tarball for your architecture from the [latest release](https://github.com/AayushGour/clipnest/releases/latest), verify it with `sha256sum -c SHA256SUMS`, and run `./install.sh` as your normal user.
+- **Install, update and uninstall:** see [Download → Linux]({{ '/download/#linux' | relative_url }}). In short (to uninstall, run the same command with `uninstall.sh` instead of `install.sh`; see [Uninstall](#11-uninstall)): run the same one-line command as on the Mac (`curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash`) as your normal user; it detects Linux and your CPU, downloads and verifies the latest release, and installs it. Or download the tarball for your architecture from the [latest release](https://github.com/AayushGour/clipnest/releases/latest), verify it with `sha256sum -c SHA256SUMS`, and run `./install.sh`.
 - **Tray icon:** Open Clipnest, Pause Capture, Settings…, Quit.
 - **Auto-paste** needs a one-time permission, offered on first launch or from **Settings → Permissions**. It adds you to a dedicated `clipnest-input` group that can create a virtual keyboard and nothing else. Log out and back in afterwards; until then Clipnest copies your choice and you press Ctrl+V yourself.
 - **Start at login** is off by default, and nothing is captured while Clipnest isn't running — turn on **Settings → General → Launch Clipnest at login**.
 - **OCR** is off by default; turn it on in **Settings → History**. It needs the `clipnest-ocr` packages, which `install.sh` installs.
-- **Your data** lives in `~/.local/share/Clipnest` (or `$XDG_DATA_HOME/Clipnest`). Uninstalling the packages leaves it in place.
+- **Your data** lives in `~/.local/share/Clipnest` (or `$XDG_DATA_HOME/Clipnest`). The uninstaller (and `apt remove`) leaves it in place unless you pass `--purge`.
 {: .detail-list}
 
 How Linux behaves differently from the Mac — picker placement on Wayland and the optional GNOME Shell extension, terminals, password managers, and the Ubuntu 22.04 GTK note — is listed under [Linux differences]({{ '/features/#linux-differences' | relative_url }}).

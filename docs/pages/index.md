@@ -32,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/in
 
 </div>
 
-**Mac:** the command above, on macOS 14 (Sonoma) or later. **Linux:** Ubuntu 22.04 or 24.04 with GNOME (X11 or Wayland), amd64 or arm64 — download the tarball from the [latest release](https://github.com/AayushGour/clipnest/releases/latest) and run its `install.sh`. Full steps for both, and the honest Mac signing story, are on the [Download page]({{ "/download/" | relative_url }}).
+**Mac:** macOS 14 (Sonoma) or later. **Linux:** Ubuntu 22.04 or 24.04 with GNOME (X11 or Wayland), amd64 or arm64 — the same command works (run it as your normal user; it asks for `sudo` to install the packages). Full steps for both, and the honest Mac signing story, are on the [Download page]({{ "/download/" | relative_url }}).
 
 </div>
 </section>

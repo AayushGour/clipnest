@@ -12,6 +12,20 @@ at any time.
 
 ### Added
 
+- One install command for macOS and Linux:
+  `curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash`
+  now detects the OS (and, on Linux, the CPU architecture), fetches the latest
+  release and installs it. On Linux it checks for Ubuntu 22.04/24.04 with GNOME
+  (override with `CLIPNEST_FORCE=1`), verifies the tarball against the SHA-256
+  digest GitHub publishes for the release asset (fail closed) and the bundled
+  `SHA256SUMS`, then runs the bundled installer. `CLIPNEST_DRY_RUN=1` does
+  everything except the install. See [README](README.md#install).
+- `scripts/uninstall.sh`: one uninstall command for macOS and Linux
+  (`curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/uninstall.sh | bash`).
+  Removes the app and keeps your history, snippets and settings; `--purge` (or
+  `CLIPNEST_PURGE=1`) also deletes them (and, on Linux, runs `apt-get purge`,
+  the per-user GNOME Shell extension and autostart entry). `CLIPNEST_DRY_RUN=1`
+  prints the actions without doing them. See [README](README.md#uninstall).
 - New setting, **Settings -> General -> "Show preview when selecting with the
   keyboard"** (off by default): when on, moving through the picker list with the
   arrow keys also shows the item preview beside the highlighted row, not only
@@ -26,6 +40,13 @@ at any time.
   rejections). See [docs/features.md](docs/features.md#1-clipboard-capture).
 - A top-level `Makefile` wrapping the test, lint, build, `.deb`, install and
   dev flows (`make` lists the targets; see the README's "Make targets").
+
+### Changed
+
+- `scripts/install.sh` now runs everything inside a `main` function (a truncated
+  `curl | bash` download cannot run a partial script), and every `curl` is
+  restricted to HTTPS with TLS 1.2 or newer. The macOS install behaviour is
+  unchanged.
 
 ### Fixed
 

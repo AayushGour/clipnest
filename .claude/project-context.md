@@ -1298,3 +1298,12 @@ Every capture that ends without an item logs a metadata-only line (type names, s
 
 ### D114 — Repository identity and history
 This repo's local git identity is Aayush Gour <ag14906@gmail.com>. On 2026-10-09, with the user's authorization, the "release 1.0.0" commit was re-authored, `main` was force-rewritten and the `v1.0.0` tag moved. Commit hashes recorded before that date (in logs, board, older notes) may no longer exist on `main`; trust `git log`, not an old hash.
+
+### 2026-10-10 — One install/uninstall command for macOS + Linux (T102)
+- `scripts/install.sh` and `scripts/uninstall.sh` are the single entry points on both OSes (`curl -fsSL …/main/scripts/{install,uninstall}.sh | bash`), dispatching on `uname -s`; each is standalone (no sourcing), body in `main()` called on the last line so a truncated download runs nothing; every curl is `--proto =https --proto-redir =https --tlsv1.2`.
+- Linux installs from the per-arch release tarball (the .debs are amd64-only), verified against the GitHub REST API per-asset `digest` field (tarballs have no `.sha256` sibling), fail closed; then the tarball's own `SHA256SUMS`. If the release workflow later publishes tarball `.sha256` files, `install_linux` may prefer them. macOS keeps the `.dmg.sha256` flow.
+- Supported Linux = Ubuntu 22.04/24.04 + GNOME; anything else stops unless `CLIPNEST_FORCE=1`. Both scripts refuse root on Linux.
+- Uninstall is non-destructive by default; data deletion only with `--purge` / `CLIPNEST_PURGE=1` (no interactive prompt). `--purge` also purges packages left in dpkg `rc` state by an earlier plain uninstall, so the `clipnest-input` group is removed.
+- macOS launch-at-login (`SMAppService`) can't be unregistered from a shell script; the uninstaller tells the user to remove it in Login Items.
+- Test hooks: `CLIPNEST_DRY_RUN=1` (both), `CLIPNEST_SOURCE_ONLY=1` (source functions without running).
+- Still open from the 2026-10-10 security audit: no publisher signature / codesign designated-requirement check in either installer (same-origin checksum = integrity only).

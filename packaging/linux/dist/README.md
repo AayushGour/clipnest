@@ -2,7 +2,9 @@
 
 This directory's contents (three `.deb` files plus their `.sha256`
 checksums, downloaded together from a GitHub Release) are what
-`install.sh` in this same folder expects to sit next to. Run it:
+`install.sh` in this same folder expects to sit next to. (Most people never
+need this: the one-line `curl ... scripts/install.sh | bash` command from the
+project README downloads and runs this for you.) To run it by hand:
 
 ```sh
 ./install.sh
@@ -74,3 +76,9 @@ this project's source repository.
    falls back to copy/paste like the picker does. This is snippet
    expansion ONLY — general auto-paste from the picker still uses item 1's
    permission/extension setup.
+
+## Uninstalling
+
+Run `curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/uninstall.sh | bash`
+(add `bash -s -- --purge` to also delete your history and settings), or
+`sudo apt remove clipnest clipnest-ocr clipnest-ocr-data` by hand.

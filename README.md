@@ -92,16 +92,18 @@ Your clipboard is some of the most sensitive data on your machine — passwords,
 
 ## Install
 
-Run this in Terminal:
+One command for macOS and Linux. Run this in Terminal:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash
 ```
 
-Clipnest installs into your Applications folder and launches. Look for its icon
-in the menu bar, then press **⌥⌘V** to open the picker.
+The script detects your system (`uname -s`), fetches the latest release and verifies its SHA-256 before installing anything.
 
-The installer downloads over `curl` (which never sets macOS's quarantine flag, so there's no Gatekeeper "unidentified developer" dialog) and verifies the `.dmg` against a published SHA-256 checksum before ever mounting it — see [Release](#release) for why.
+- **macOS:** Clipnest installs into your Applications folder and launches. Look for its icon in the menu bar, then press **⌥⌘V** to open the picker. The installer downloads over `curl` (which never sets macOS's quarantine flag, so there's no Gatekeeper "unidentified developer" dialog) and verifies the `.dmg` against a published SHA-256 checksum before ever mounting it — see [Release](#release) for why.
+- **Linux (Ubuntu 22.04/24.04 with GNOME, amd64 or arm64):** run it as your normal user; it checks the system, downloads the right tarball, verifies it, and runs the bundled installer, which asks for your `sudo` password to install the packages. See [Linux (Ubuntu)](#linux-ubuntu).
+
+Environment variables: `CLIPNEST_DRY_RUN=1` does everything except the install (detect, download, verify); `CLIPNEST_FORCE=1` lets the Linux path continue on an unsupported system; `GITHUB_TOKEN` raises the GitHub API rate limit.
 
 ### Update
 
@@ -142,14 +144,29 @@ An unsigned dev build's code identity changes on every rebuild, which normally m
 
 ## Uninstall
 
-Drag **Clipnest** from Applications to the Trash. To also remove its local data:
+One command for macOS and Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/uninstall.sh | bash
+```
+
+It works on both macOS and Linux, removes the app and **keeps your history, snippets and settings**. Add `--purge` (`bash -s -- --purge`) to delete that data too; `CLIPNEST_DRY_RUN=1` shows what it would do without doing it. On Linux, `--purge` also removes the `clipnest-input` group, so log out and back in afterwards.
+
+```bash
+# also delete your history, snippets and settings
+curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/uninstall.sh | bash -s -- --purge
+```
+
+**Manual alternative (macOS):** drag **Clipnest** from Applications to the Trash. To also remove its local data:
 
 ```bash
 rm -rf ~/Library/Application\ Support/Clipnest \
-       ~/Library/Preferences/com.clipnest.app.plist
+       ~/Library/Preferences/com.clipnest.app.plist \
+       ~/Library/Caches/com.clipnest.app \
+       ~/Library/HTTPStorages/com.clipnest.app
 ```
 
-Everything Clipnest stores is local, so removing those two paths leaves nothing behind.
+Everything Clipnest stores is local, so removing those paths leaves nothing behind.
 
 ## Linux (Ubuntu)
 
@@ -157,7 +174,15 @@ Clipnest runs on **Ubuntu 22.04 and 24.04 with GNOME**, on X11 or Wayland, for a
 
 ### Install
 
-Download `clipnest-<version>-linux-amd64.tar.gz` (or `-arm64`; run `uname -m` if unsure: `x86_64` is amd64, `aarch64` is arm64) from the [latest release](https://github.com/AayushGour/clipnest/releases/latest), then:
+The same one-line command as on the Mac (run as your normal user, not root):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash
+```
+
+It checks `/etc/os-release` (Ubuntu 22.04/24.04) and that you're on GNOME, maps `uname -m` to amd64/arm64, downloads the latest `clipnest-<version>-linux-<arch>.tar.gz`, verifies it against the SHA-256 GitHub publishes for that release asset (aborting if it is missing or different), checks the files inside with the bundled `SHA256SUMS`, and runs the bundled `install.sh`. On another system it stops unless you set `CLIPNEST_FORCE=1`. It needs `curl`, `tar`, `sha256sum` (or `shasum`), `sudo` and `apt-get`.
+
+**Manual alternative:** download `clipnest-<version>-linux-amd64.tar.gz` (or `-arm64`; run `uname -m` if unsure: `x86_64` is amd64, `aarch64` is arm64) from the [latest release](https://github.com/AayushGour/clipnest/releases/latest), then:
 
 ```bash
 tar xzf clipnest-*-linux-amd64.tar.gz
@@ -166,9 +191,9 @@ sha256sum -c SHA256SUMS
 ./install.sh          # as your normal user, not with sudo
 ```
 
-`install.sh` checks the architecture and installs three packages with `apt`: `clipnest`, plus `clipnest-ocr` and `clipnest-ocr-data` for text recognition in images. To skip OCR (about 26 MB), install only the app: `sudo apt-get install --no-install-recommends ./clipnest_*.deb`.
+The bundled `install.sh` checks the architecture and installs three packages with `apt`: `clipnest`, plus `clipnest-ocr` and `clipnest-ocr-data` for text recognition in images. To skip OCR (about 26 MB), install only the app: `sudo apt-get install --no-install-recommends ./clipnest_*.deb`.
 
-To uninstall: `sudo apt remove clipnest clipnest-ocr clipnest-ocr-data`. Your history in `~/.local/share/Clipnest` is left in place.
+To uninstall, use the one-line command from [Uninstall](#uninstall) (it keeps your history in `~/.local/share/Clipnest` unless you pass `--purge`). Manually: `sudo apt remove clipnest clipnest-ocr clipnest-ocr-data` leaves your history in place.
 
 ### First run
 
