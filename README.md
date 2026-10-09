@@ -136,6 +136,8 @@ open DerivedData/Build/Products/Debug/Clipnest.app   # if built with -derivedDat
 
 On first launch, grant Clipnest **Accessibility** access (System Settings → Privacy & Security → Accessibility) so it can paste into other apps, expand snippets, and fire the global hotkey from other apps. Everything else works without it.
 
+Shortcut: `make test`, `make build`, `make install-mac`, `make dev-mac` wrap all of this — see [Make targets](#make-targets).
+
 An unsigned dev build's code identity changes on every rebuild, which normally makes macOS drop the Accessibility grant each time — `scripts/dev-cert.sh` (run once) plus `scripts/dev-install.sh` (build + sign + install with that stable local identity, instead of steps 4–5 above) fixes that: rebuild as often as you like without re-granting.
 
 ## Uninstall
@@ -199,6 +201,29 @@ docker run --rm -it -v "$PWD":/src -w /src swift:6.0-noble bash -c '
 ```
 
 The `.deb` packages come from `dpkg-buildpackage -us -uc -b -d` in the same image (plus `debhelper devscripts`). That is the recipe CI uses ([`release-linux.yml`](.github/workflows/release-linux.yml)).
+
+No host Swift needed: `make test`, `make lint`, `make deb` and `make install-linux` run the same steps in Docker — see [Make targets](#make-targets).
+
+### Make targets
+
+A top-level [`Makefile`](Makefile) wraps the scripts and recipes above (it holds no build logic of its own). `make` lists every target; the common ones:
+
+| Target | What it does |
+|---|---|
+| `make test` | Unit tests: host `swift test` on macOS, Docker on Linux (`make test-linux` forces the Docker path) |
+| `make lint` / `make format` | swift-format check (the CI-pinned binary via `scripts/lint.sh`) / auto-fix (macOS) |
+| `make build` | `build-linux` (Docker `swift build`) or `build-mac` (`scripts/build.sh` → `build/Clipnest.app`) |
+| `make install-mac` | `scripts/dev-install.sh`: build, sign with the local dev identity, install to `/Applications` (run `scripts/dev-cert.sh` once first) |
+| `make dmg` | macOS: build + `scripts/package_dmg.sh` → `build/Clipnest.dmg` |
+| `make deb` | Linux: local noble `.deb`s into `build/linux/` (version = `debian/changelog` + a `+localYYYYMMDDHHMMSS` suffix) |
+| `make install-linux` / `make uninstall-linux` | Linux: `make deb`, then `pkexec apt-get install` (GUI password prompt) and restart the app / `pkexec apt-get remove` |
+| `make run` / `restart` / `logs` | Linux: launch / kill+relaunch the installed app / follow `journalctl --user -t app.clipnest.Clipnest` |
+| `make tarball` | Linux: release tarball via `packaging/linux/dist/build-tarball.sh` (needs unsuffixed `.deb`s: `LOCAL_SUFFIX= make deb`) |
+| `make dev-linux` | Linux: build the tree into the VNC test container, then open `http://localhost:6080/vnc.html` |
+| `make dev-mac` | macOS: `xcodegen generate` and open the Xcode project |
+| `make clean` | Remove `build/` and the Docker scratch volume |
+
+Targets refuse with a clear error on the wrong OS. Only `install-linux` and `uninstall-linux` elevate privileges (via `pkexec`); nothing uses `sudo`. Tunables (`OUT`, `LOCAL_SUFFIX`, `DEB_SERIES`, image names) are variables at the top of the Makefile and can be overridden, e.g. `make deb OUT=/tmp/debs`. On Linux, Docker test runs use a separate `clipnest-scratch` volume for `.build` so the host `.build` is never mixed with container artifacts.
 
 ## Usage
 

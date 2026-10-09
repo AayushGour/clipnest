@@ -34,7 +34,8 @@ Owner: architect (seed) · senior-dev refines. Grep this before building; match 
 
 ## Test framework + how to run
 - **Framework:** Swift Testing (`import Testing`, `@Test`, `#expect`/`#require`) for all `ClipnestCoreTests`. Do not mix in XCTest unless a specific AppKit/async interop issue forces it — if that happens, log it as a new decision in `project-context.md` before doing it.
-- **Run (Core, CLI-only, no Xcode needed):** `swift test` from the repo root (runs the `ClipnestCoreTests` target defined in `Package.swift`).
+- **Shortcut (all platforms):** `make test` (host `swift test` on macOS, Docker on Linux), `make lint`, `make format`; `make` lists everything. The Makefile only wraps the commands below and `scripts/*.sh` — change the recipe at the source, not in the Makefile.
+- **Run (Core, CLI-only, no Xcode needed):** `swift test` from the repo root (runs the `ClipnestCoreTests` target defined in `Package.swift`). On Linux there is no host Swift: `make test-linux` runs it in the `clipnest-build` Docker image with a separate scratch volume for `.build` (host `.build` mixes static-stdlib and normal artifacts).
 - **Run (App smoke tests, if any):** `xcodebuild test -project ClipnestApp/ClipnestApp.xcodeproj -scheme ClipnestApp -destination 'platform=macOS'` after `xcodegen generate`.
 - UI is kept thin by design (spec: "UI kept thin; light smoke tests only") — the bulk of logic and nearly all unit tests live in `ClipnestCore` and run via `swift test` with zero GUI launch.
 - No feature ships without unit tests for the `ClipnestCore` logic it depends on. Mock side effects (event synthesis, filesystem where practical) so tests are deterministic and CI-safe — never synthesize real key events or touch `NSPasteboard` from a test. Store tests run against `InMemoryClipStore`/`InMemorySnippetStore` (the canonical in-memory store — see Persistence + D6), not a real on-disk DB.
