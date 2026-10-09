@@ -388,4 +388,29 @@ struct LinuxPasteboardTests {
     #expect(pasteboard.string(forType: .string) == nil)
     #expect(PasteboardReader().pullRawPayload(from: pasteboard) == nil)
   }
+
+  /// The owner answers its top-priority text type with nothing but serves a
+  /// later one: the copy must survive, not turn the blank row into a missing one.
+  @Test("An empty top-priority text type falls back to the next advertised type")
+  func emptyTopTextTypeFallsBackToNextType() {
+    let connection = FakeX11SelectionConnecting()
+    connection.targets = ["UTF8_STRING", "text/plain;charset=utf-8"]
+    connection.payloads["text/plain;charset=utf-8"] = Data()
+    connection.payloads["UTF8_STRING"] = Data("served by the second choice".utf8)
+    let pasteboard = LinuxPasteboard(connection: connection)
+
+    #expect(pasteboard.string(forType: .string) == "served by the second choice")
+  }
+
+  @Test("A refused or undecodable top text type falls back to the next advertised type")
+  func failedTopTextTypeFallsBackToNextType() {
+    let connection = FakeX11SelectionConnecting()
+    connection.targets = ["text/plain;charset=utf-8", "UTF8_STRING", "STRING"]
+    // utf-8 type: no entry (refused); UTF8_STRING: invalid UTF-8; STRING: Latin-1 "cé".
+    connection.payloads["UTF8_STRING"] = Data([0xFF, 0xFE])
+    connection.payloads["STRING"] = Data([0x63, 0xE9])
+    let pasteboard = LinuxPasteboard(connection: connection)
+
+    #expect(pasteboard.string(forType: .string) == "c\u{E9}")
+  }
 }

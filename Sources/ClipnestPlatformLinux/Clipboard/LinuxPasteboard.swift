@@ -99,11 +99,11 @@ public final class LinuxPasteboard: MonitoredPasteboard, @unchecked Sendable {
     let serial = connection.changeSerial
     let mimeTypes = connection.currentTargets()
     guard !Self.isOwnWrite(mimeTypes) else {
-      logTargets(mimeTypes, serial: serial, outcome: "Clipnest's own write")
+      logTargets(mimeTypes, serial: serial, verdict: .ownWrite)
       return []
     }
     guard !isConcealed(mimeTypes, serial: serial) else {
-      logTargets(mimeTypes, serial: serial, outcome: "concealed")
+      logTargets(mimeTypes, serial: serial, verdict: .concealed)
       return [.concealed]
     }
 
@@ -114,7 +114,7 @@ public final class LinuxPasteboard: MonitoredPasteboard, @unchecked Sendable {
     if MimeRepresentationSelector.isAvailable(.text, in: mimeTypes) { types.append(.string) }
     logTargets(
       mimeTypes, serial: serial,
-      outcome: types.isEmpty ? "no capturable representation" : "capturable")
+      verdict: types.isEmpty ? .nothingCapturable : .capturable)
     return types
   }
 
@@ -122,18 +122,29 @@ public final class LinuxPasteboard: MonitoredPasteboard, @unchecked Sendable {
   /// (`availableTypes` runs several times per change). Without this line a
   /// dropped copy gave no way to tell "Clipnest never saw the owner change"
   /// from "it saw targets it could not use" (T-TERMCOPY1).
-  private func logTargets(_ mimeTypes: [String], serial: Int, outcome: String) {
+  private func logTargets(_ mimeTypes: [String], serial: Int, verdict: TargetsVerdict) {
     restoreGuardLock.lock()
     let isFirstLogForSerial = lastLoggedTargetsSerial != serial
     lastLoggedTargetsSerial = serial
     restoreGuardLock.unlock()
     guard isFirstLogForSerial else { return }
-    let message = "clipboard serial=\(serial) targets=\(mimeTypes) → \(outcome)"
-    if mimeTypes.isEmpty || outcome == "capturable" || outcome == "Clipnest's own write" {
+    let message = "clipboard serial=\(serial) targets=\(mimeTypes) → \(verdict.rawValue)"
+    if mimeTypes.isEmpty || !verdict.isNoteworthy {
       Self.logger.info(message)
     } else {
       Self.logger.notice(message)
     }
+  }
+
+  /// What `availableTypes` decided about one TARGETS list; carries the log
+  /// text and whether the verdict deserves `notice` rather than `info`.
+  private enum TargetsVerdict: String {
+    case capturable = "capturable"
+    case ownWrite = "Clipnest's own write"
+    case concealed = "concealed"
+    case nothingCapturable = "no capturable representation"
+
+    var isNoteworthy: Bool { self == .concealed || self == .nothingCapturable }
   }
 
   public func string(forType type: ClipMediaType) -> String? {
@@ -147,26 +158,29 @@ public final class LinuxPasteboard: MonitoredPasteboard, @unchecked Sendable {
     case .fileURL:
       return firstFileURI(mimeTypes: mimeTypes)
     case .string:
-      guard let mimeType = MimeRepresentationSelector.winningMimeType(for: .text, in: mimeTypes)
-      else { return nil }
-      guard let data = connection.payload(forMimeType: mimeType) else {
-        Self.logger.notice(
-          "text conversion refused or timed out: mime=\(mimeType) serial=\(serial)")
-        return nil
+      // Walk every advertised text type in priority order: an owner can
+      // answer its first choice with nothing (or undecodable bytes) yet serve
+      // a later one, and dropping the copy then would lose it entirely.
+      for mimeType in MimeRepresentationSelector.allAvailableMimeTypes(for: .text, in: mimeTypes) {
+        guard let data = connection.payload(forMimeType: mimeType) else {
+          Self.logger.notice(
+            "text conversion refused or timed out: mime=\(mimeType) serial=\(serial)")
+          continue
+        }
+        // Zero bytes is "no payload" (a blank history row otherwise; seen on
+        // real hardware, 2026-10-09).
+        guard !data.isEmpty else {
+          Self.logger.notice("text conversion returned 0 bytes: mime=\(mimeType) serial=\(serial)")
+          continue
+        }
+        guard let text = TextPayloadDecoder.decode(data, mimeType: mimeType) else {
+          Self.logger.notice(
+            "text payload not decodable: mime=\(mimeType) bytes=\(data.count) serial=\(serial)")
+          continue
+        }
+        return text
       }
-      // An owner that answers a text request with zero bytes holds nothing
-      // worth keeping; storing it produced a blank history row (seen on real
-      // hardware, 2026-10-09). Treated as "no payload" instead.
-      guard !data.isEmpty else {
-        Self.logger.notice("text conversion returned 0 bytes: mime=\(mimeType) serial=\(serial)")
-        return nil
-      }
-      guard let text = TextPayloadDecoder.decode(data, mimeType: mimeType) else {
-        Self.logger.notice(
-          "text payload not decodable: mime=\(mimeType) bytes=\(data.count) serial=\(serial)")
-        return nil
-      }
-      return text
+      return nil
     default:
       return nil
     }

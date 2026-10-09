@@ -129,8 +129,11 @@ source id, pause flag — never content), where it used to be silent:
 
 Read them with `journalctl --user -t app.clipnest.Clipnest --since '-5min'`. A
 copy with no `selection owner changed` line was never delivered to Clipnest by the
-display server; one with it but no `clipboard serial=` line stopped before the
-TARGETS fetch finished; the rest name their own reason.
+display server; one with it but no `clipboard serial=` line is ambiguous: the TARGETS fetch may
+have stalled (look for `conversion of TARGETS timed out`), Clipnest's own
+ownership check may have skipped it, or several quick changes were coalesced into
+one check; the rest name their own reason. Text copies try every advertised text
+type in priority order, logging one line per type that fails.
 
 **Tests.** `Tests/ClipnestCoreTests/ClipboardMonitorTests.swift` — e.g.
 `checkNow captures exactly one ClipItem on an accepted change` (`:123`),

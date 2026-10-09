@@ -120,9 +120,11 @@ public final class ClipboardMonitor {
   nonisolated static func logSkippedChange(
     reason: String, types: [ClipMediaType], source: String?, isSuspended: Bool
   ) {
+    // A nil `source` omits the clause entirely (privacy rejections pass nil).
+    let sourceClause = source.map { "source=\($0), " } ?? ""
     let message =
       "change not captured — \(reason) (types=\(types.map(\.rawValue)), "
-      + "source=\(source ?? "unknown"), captureSuspended=\(isSuspended))"
+      + "\(sourceClause)captureSuspended=\(isSuspended))"
     if types.isEmpty {
       logger.info(message)
     } else {
@@ -450,8 +452,8 @@ public final class ClipboardMonitor {
     // T-TERMCOPY1: every "this change was not captured" exit below used to be
     // silent, which made a dropped copy (a terminal copy that never reached
     // history) impossible to tell apart from "Clipnest never saw it". Each
-    // exit now logs one metadata-only line — type names, source id, the
-    // pause flag; never content — via `logSkippedChange`.
+    // exit now logs one metadata-only line — type names, the pause flag
+    // (source id only for non-privacy exits); never content — via `logSkippedChange`.
     let availableTypes = pasteboard.availableTypes
     let isCaptureSuspended = isPaused || !captureEnabledProvider()
     guard
@@ -464,7 +466,9 @@ public final class ClipboardMonitor {
     else {
       Self.logSkippedChange(
         reason: "rejected by PrivacyFilter (concealed/transient marker, paused, or excluded app)",
-        types: availableTypes, source: sourceBundleID, isSuspended: isCaptureSuspended)
+        // No `source`: a persistent "app X copied at T" record for a paused or
+        // excluded app would undercut the pause/exclusion itself.
+        types: availableTypes, source: nil, isSuspended: isCaptureSuspended)
       return nil
     }
 
