@@ -422,6 +422,10 @@ final class LinuxAppEnvironment {
     let viewModel = PickerViewModel(
       clipStore: clipStore, snippetStore: snippetStore, pasteboard: sharedWriter,
       blobStore: blobStore, paster: paster, frontmostAppTracker: frontmostAppTracker,
+      // T-PASTEORDER1: mutter drops a clipboard write from a client that has
+      // already lost keyboard focus — write first, hide second.
+      pasteDismissOrdering: .writeBeforeDismiss(
+        confirmationTimeout: PasteDismissOrdering.defaultConfirmationTimeout),
       // T-RT2: lets an already-open picker re-query itself when SOMETHING
       // ELSE mutates this store — a Settings "Clear All History…", or
       // background retention — without either of those call sites needing

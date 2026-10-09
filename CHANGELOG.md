@@ -12,6 +12,11 @@ at any time.
 
 ### Fixed
 
+- Linux (Wayland): pressing Enter on a picker row pasted the previously copied
+  clipboard instead of the selected item. The picker was hidden before the
+  clipboard write, and GNOME's compositor ignores a clipboard write from a
+  window that has lost keyboard focus. The write now happens first, is
+  confirmed, and only then is the picker hidden. macOS behaviour is unchanged.
 - Linux: the hover preview now opens beside the picker window, level with the
   hovered row (on whichever side has room), as on macOS, instead of at the
   mouse cursor.

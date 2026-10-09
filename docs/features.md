@@ -899,14 +899,26 @@ formatting"):
 - Any text-bearing kind, when `plainText == true`, strips down to `.text
   (previewText)` regardless of its richer stored form.
 
-`pasteAndDismiss(_:)` (`:960-978`) is the shared tail for both `select(_:)`
-and `pasteSnippet(_:)`: it calls `frontmostAppTracker.consume()`, then
-**`dismiss()` first**, *then* starts a `Task` that calls `paster.paste
-(content, targetingFrontmostApp:)`. Dismiss-before-paste is deliberate, not
-incidental: `Paster`'s `CGEventSynthesizer` posts through the *global* HID
-event tap after a short delay, and if Clipnest's panel still held key focus
-when that posts, the OS could deliver the synthetic keystroke to Clipnest's
-own search field instead of the target app.
+`select(_:)` and `pasteSnippet(_:)` (`PickerViewModel+Paste.swift`) share one
+tail, `performPaste`, and call `frontmostAppTracker.consume()` first. Whether
+the picker hides before or after the pasteboard write is a **required,
+per-platform `PasteDismissOrdering`** injected into `PickerViewModel` (no
+default, so a missing wiring is a build error):
+- `.dismissBeforeWrite` (**macOS only**): `dismiss()` first, *then* the write
+  and the synthesized paste. Deliberate: `CGEventSynthesizer` posts through
+  the *global* HID event tap after a short delay, and if Clipnest's panel
+  still held key focus when that posts, the OS could deliver the synthetic
+  keystroke to Clipnest's own search field instead of the target app.
+- `.writeBeforeDismiss(confirmationTimeout:)` (**Linux**): the write happens
+  while the picker still has keyboard focus, `performPaste` then waits (bounded,
+  250 ms) for the pasteboard change count to move, *then* hides the picker, and
+  `Paster` sleeps `synthesisDelay` and posts Ctrl+V. Reason: mutter ignores
+  `wl_data_device.set_selection` from a client without keyboard focus, so a
+  write issued after the hide was silently dropped and Enter pasted the
+  previously copied clipboard. If the write is not confirmed in time a NOTICE
+  (`clipboard write not confirmed ...`) is logged and the picker hides anyway.
+  The self-write is still ignored by capture via the
+  `application/x-clipnest-owned` marker (never read back from the GTK thread).
 
 `Paster.paste(_:targetingFrontmostApp:)`
 (`Paster.swift:179-209`) always writes the pasteboard synchronously first

@@ -5,8 +5,8 @@
 // time. This is the pasteboard/paste-orchestration cluster that used to
 // live inline in `PickerViewModel.swift` — mapping a `ClipItem`/`Snippet` to
 // the `PasteContent` `Paster` should write/paste, then dismissing the panel
-// and invoking `Paster` with the "dismiss-before-paste" ordering
-// `performPaste`'s doc comment below documents. Moved here verbatim, same
+// and invoking `Paster` with the per-platform `PasteDismissOrdering` (macOS: dismiss-before-paste;
+// Linux: write-before-dismiss) `performPaste`'s doc comment below documents. Moved here verbatim, same
 // type (`extension PickerViewModel`, so still `@MainActor`), same access
 // levels on every symbol that already existed, EXCEPT four pre-existing
 // dependencies this code needs that are declared in `PickerViewModel.swift`'s
@@ -78,7 +78,7 @@ extension PickerViewModel {
         return
       }
       let frontmostApp = self.frontmostAppTracker.consume()
-      self.dismiss()
+      self.dismissNowIfOrderedBeforeWrite()
       await self.performPaste(content, frontmostApp: frontmostApp)
     }
   }
@@ -207,7 +207,7 @@ extension PickerViewModel {
   /// `frontmostApp`/dismissing.
   public func pasteSnippet(_ snippet: Snippet) {
     let frontmostApp = frontmostAppTracker.consume()
-    dismiss()
+    dismissNowIfOrderedBeforeWrite()
     Task { [weak self] in
       guard let self else { return }
       await self.performPaste(.text(snippet.body), frontmostApp: frontmostApp)
@@ -234,47 +234,102 @@ extension PickerViewModel {
     suppressOwnPasteboardWrite(pasteboard.changeCount)
   }
 
-  /// Shared by `select(_:)` and `pasteSnippet(_:)`, called AFTER the caller
-  /// has already captured `frontmostApp` and dismissed the panel — writes
-  /// `content` through `Paster` and tells the running `ClipboardMonitor` to
-  /// ignore the resulting self-write.
+  /// Dismisses immediately under `.dismissBeforeWrite` (macOS); a no-op under
+  /// `.writeBeforeDismiss`, where `performPaste` dismisses after the write.
+  private func dismissNowIfOrderedBeforeWrite() {
+    if pasteDismissOrdering == .dismissBeforeWrite { dismiss() }
+  }
+
+  /// Shared by `select(_:)` and `pasteSnippet(_:)`, called with `frontmostApp`
+  /// already captured (and, under `.dismissBeforeWrite`, the panel already
+  /// dismissed) — writes `content` through `Paster`, tells the running
+  /// `ClipboardMonitor` to ignore the resulting self-write, and (under
+  /// `.writeBeforeDismiss`) dismisses the panel once the write has landed.
   ///
-  /// **Dismiss-before-paste is deliberate, not incidental ordering** (why
-  /// this is the caller's job, not this method's): `Paster`'s real
-  /// `CGEventSynthesizer` posts the synthesized ⌘V through the *global* HID
-  /// event tap after a short `synthesisDelay`. If Clipnest's own panel
-  /// still held key focus when that posts, the OS could deliver the
-  /// synthetic keystroke to *our* search field instead of the
-  /// previously-frontmost app. The caller dismissing before calling this,
-  /// before `Paster` even starts its delay, gives the OS the full
-  /// `synthesisDelay` window to hand focus back to that app first.
+  /// **The dismiss/write order is per-platform (`PasteDismissOrdering`), and
+  /// each order is deliberate:**
+  ///
+  /// - `.dismissBeforeWrite` (macOS only): `Paster`'s `CGEventSynthesizer`
+  ///   posts the synthesized Cmd+V through the *global* HID event tap after a
+  ///   short `synthesisDelay`. If Clipnest's own panel still held key focus
+  ///   when that posts, the OS could deliver the keystroke to *our* search
+  ///   field instead of the previously-frontmost app. Dismissing before
+  ///   `Paster` even starts its delay gives the OS the full window to hand
+  ///   focus back first.
+  /// - `.writeBeforeDismiss` (Linux): the opposite. Hiding the GTK picker
+  ///   revokes Clipnest's keyboard focus, and mutter ignores
+  ///   `wl_data_device.set_selection` from a client without focus — the write
+  ///   was silently dropped and the synthesized Ctrl+V pasted the PREVIOUS
+  ///   clipboard (T-PASTEORDER1). So the write happens first, we wait
+  ///   (bounded) for it to become visible, and only then hide; `Paster` still
+  ///   sleeps `synthesisDelay` AFTER the hide, before posting the keystroke,
+  ///   so the target regains focus first exactly as on macOS.
   ///
   /// T-HANG2 (fixed a real, quantified race — see `Paster.paste`'s doc
-  /// comment for the full story): this used to call
-  /// `suppressOwnPasteboardWrite` itself, AFTER `paster.paste(...)` had
-  /// FULLY returned — i.e. after `synthesisDelay` (40ms default) plus a
-  /// real event post had already elapsed since the write. T-STRESS1's
-  /// harness quantified that window and showed the 0.4s capture poll
-  /// landing inside it in production (18/18 raced at 5-42ms; worse for
-  /// `.image` content — a genuinely new duplicate row + wasted blob, not
-  /// just a bumped `createdAt`). Now `suppressOwnPasteboardWrite` is passed
-  /// straight through as `Paster.paste`'s `onPasteboardWrite` callback, so
-  /// it fires the instant the write is observable — before
-  /// `synthesisDelay`'s sleep even starts — closing that window down to
-  /// essentially a single `@MainActor` hop instead of 40ms+.
+  /// comment for the full story): `suppressOwnPasteboardWrite` is passed
+  /// through as `Paster.paste`'s `onPasteboardWrite` callback, so it fires the
+  /// instant the write is observable — before `synthesisDelay`'s sleep even
+  /// starts. Under `.writeBeforeDismiss` it is re-armed with the post-write
+  /// change count once the confirmation wait sees it move (on Linux the count
+  /// is bumped asynchronously by the X11 connection's event thread; the
+  /// `application/x-clipnest-owned` marker is what actually keeps capture from
+  /// reading our own write — see `LinuxClipboardConstants`).
   private func performPaste(_ content: PasteContent, frontmostApp: FrontmostAppRef?) async {
+    let ordering = pasteDismissOrdering
+    let countBeforeWrite = pasteboard.changeCount
+    let dismissal = DismissLatch()
     do {
       try await paster.paste(
         content, targetingFrontmostApp: frontmostApp,
         onPasteboardWrite: { [weak self] changeCount in
-          self?.suppressOwnPasteboardWrite(changeCount)
+          guard let self else { return }
+          self.suppressOwnPasteboardWrite(changeCount)
+          guard case .writeBeforeDismiss(let timeout) = ordering else { return }
+          await self.confirmWrite(since: countBeforeWrite, timeout: timeout)
+          dismissal.dismissOnce(self.dismiss)
         })
     } catch {
       // A genuine `PasteError` — the pasteboard write (and therefore
       // `onPasteboardWrite`/suppression) already happened before this could
-      // be thrown, so the item is still on the clipboard and correctly
-      // self-write-suppressed; this is not fatal. Log metadata only.
+      // be thrown, except `.invalidImageData`, which is thrown before any
+      // write. Log metadata only.
       Self.logger.error("Paster failed to synthesize paste: \(String(describing: error))")
     }
+    // Under `.writeBeforeDismiss`, a paste that threw before writing never
+    // reached the callback above — the picker must still close.
+    if case .writeBeforeDismiss = ordering { dismissal.dismissOnce(dismiss) }
+  }
+
+  /// Waits up to `timeout` for `pasteboard.changeCount` to move off
+  /// `countBeforeWrite` — proof the write became visible while the picker still
+  /// holds focus — then re-arms self-write suppression with the new count.
+  /// Logs a NOTICE (metadata only) and returns when the bound is hit, so a
+  /// compositor that never reports the change cannot pin the picker open.
+  private func confirmWrite(since countBeforeWrite: Int, timeout: Duration) async {
+    let clock = ContinuousClock()
+    let deadline = clock.now + timeout
+    while pasteboard.changeCount == countBeforeWrite {
+      if clock.now >= deadline {
+        Self.logger.notice(
+          "clipboard write not confirmed within \(timeout); hiding the picker anyway")
+        return
+      }
+      try? await Task.sleep(for: PasteDismissOrdering.confirmationPollInterval)
+    }
+    suppressOwnPasteboardWrite(pasteboard.changeCount)
+  }
+}
+
+/// Makes the post-write dismissal idempotent: it can be triggered from
+/// `onPasteboardWrite` AND from `performPaste`'s fallback for a paste that
+/// threw before writing.
+@MainActor
+private final class DismissLatch {
+  private var fired = false
+
+  func dismissOnce(_ dismiss: () -> Void) {
+    guard !fired else { return }
+    fired = true
+    dismiss()
   }
 }

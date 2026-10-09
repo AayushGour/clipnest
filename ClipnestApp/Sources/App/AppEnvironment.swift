@@ -284,6 +284,8 @@ final class AppEnvironment {
       blobStore: blobStore,
       paster: paster,
       frontmostAppTracker: frontmostAppTracker,
+      // T-PASTEORDER1: macOS keeps hide-then-write (see `PasteDismissOrdering`).
+      pasteDismissOrdering: .dismissBeforeWrite,
       // T-RT2: lets an already-open picker re-query itself when SOMETHING
       // ELSE mutates this store — Settings' "Clear All History…", or
       // background retention — without either of those call sites needing

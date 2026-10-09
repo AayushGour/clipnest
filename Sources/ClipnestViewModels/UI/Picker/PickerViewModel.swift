@@ -459,6 +459,10 @@ public final class PickerViewModel: ObservableObject {
   /// off this. Still only ever used from within `PickerViewModel`/its
   /// extensions.
   let pasteboard: any PasteboardWriting
+  /// Whether a paste hides the picker before or after the pasteboard write —
+  /// required, per-platform; see `PasteDismissOrdering`. Read only from
+  /// `PickerViewModel+Paste.swift`.
+  let pasteDismissOrdering: PasteDismissOrdering
   /// Used by `ItemRow` to load thumbnail bytes for `.image` rows (via
   /// `BlobStore.read(blobPath:)`) — the actual thumbnail-loading logic lives
   /// there, not in this view model. Defaults to a real `BlobStore` pointed
@@ -547,6 +551,7 @@ public final class PickerViewModel: ObservableObject {
     blobStore: BlobStore = BlobStore(baseDirectory: BlobStore.defaultBaseDirectory()),
     paster: Paster = Paster(),
     frontmostAppTracker: FrontmostAppTracker = FrontmostAppTracker(),
+    pasteDismissOrdering: PasteDismissOrdering,
     storeChanges: ClipStoreChangeBroadcaster? = nil
   ) {
     self.clipStore = clipStore
@@ -555,6 +560,7 @@ public final class PickerViewModel: ObservableObject {
     self.blobStore = blobStore
     self.paster = paster
     self.frontmostAppTracker = frontmostAppTracker
+    self.pasteDismissOrdering = pasteDismissOrdering
     storeChangesSubscription = storeChanges?.subscribe { [weak self] change in
       Task { @MainActor in self?.handleExternalStoreChange(change) }
     }

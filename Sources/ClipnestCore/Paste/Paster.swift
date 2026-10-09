@@ -113,7 +113,8 @@ public struct Paster: Sendable {
   /// than targeting a specific pid (see that type's doc comment) — the
   /// previously-frontmost app needs a brief moment to actually regain key
   /// focus (the caller is expected to have already hidden Clipnest's own
-  /// panel by this point — see `PickerViewModel.pasteAndDismiss`) before a
+  /// panel by this point on macOS — see `PasteDismissOrdering`; on
+  /// Linux it is hidden from `onPasteboardWrite`, still before this delay) before a
   /// globally-posted synthetic keystroke is guaranteed to land there
   /// instead of wherever else currently holds focus.
   public static let defaultSynthesisDelay: Duration = .milliseconds(40)
@@ -218,6 +219,11 @@ public struct Paster: Sendable {
   /// pasteboard write: no error, no crash, no delay — the documented
   /// fallback.
   ///
+  /// `onPasteboardWrite` is itself `async` and is awaited to completion BEFORE
+  /// `synthesisDelay` starts: Linux uses that to confirm the write landed and
+  /// only then hide the picker (T-PASTEORDER1) — a slow callback therefore
+  /// delays the keystroke, by design.
+  ///
   /// `async` for three reasons: `synthesisDelay`, `onPasteboardWrite`'s
   /// hop back onto its caller's actor (below), and — for `.image` — the
   /// off-main decode/re-encode (`imageNormalizer.normalizedForPaste`, run in
@@ -268,7 +274,7 @@ public struct Paster: Sendable {
   public func paste(
     _ content: PasteContent,
     targetingFrontmostApp frontmostApp: FrontmostAppRef?,
-    onPasteboardWrite: (@MainActor @Sendable (Int) -> Void)? = nil
+    onPasteboardWrite: (@MainActor @Sendable (Int) async -> Void)? = nil
   ) async throws {
     switch content {
     case .text(let string):
