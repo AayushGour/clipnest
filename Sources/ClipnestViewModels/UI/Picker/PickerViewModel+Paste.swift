@@ -72,8 +72,11 @@ extension PickerViewModel {
   // never less safe, since it only pushes the delay's start later, not
   // earlier.
   public func select(_ item: ClipItem, plainText: Bool = false) {
+    guard !isPasteInFlight else { return }
+    isPasteInFlight = true
     Task { [weak self] in
       guard let self else { return }
+      defer { self.isPasteInFlight = false }
       guard let content = await self.pasteContent(for: item, plainText: plainText) else {
         return
       }
@@ -206,10 +209,13 @@ extension PickerViewModel {
   /// no async content resolution to sequence before capturing
   /// `frontmostApp`/dismissing.
   public func pasteSnippet(_ snippet: Snippet) {
+    guard !isPasteInFlight else { return }
+    isPasteInFlight = true
     let frontmostApp = frontmostAppTracker.consume()
     dismissNowIfOrderedBeforeWrite()
     Task { [weak self] in
       guard let self else { return }
+      defer { self.isPasteInFlight = false }
       await self.performPaste(.text(snippet.body), frontmostApp: frontmostApp)
     }
   }
@@ -286,7 +292,7 @@ extension PickerViewModel {
           self.suppressOwnPasteboardWrite(changeCount)
           guard case .writeBeforeDismiss(let timeout) = ordering else { return }
           await self.confirmWrite(since: countBeforeWrite, timeout: timeout)
-          dismissal.dismissOnce(self.dismiss)
+          dismissal.dismissOnce(self.dismissIfStillVisible)
         })
     } catch {
       // A genuine `PasteError` — the pasteboard write (and therefore
@@ -297,7 +303,14 @@ extension PickerViewModel {
     }
     // Under `.writeBeforeDismiss`, a paste that threw before writing never
     // reached the callback above — the picker must still close.
-    if case .writeBeforeDismiss = ordering { dismissal.dismissOnce(dismiss) }
+    if case .writeBeforeDismiss = ordering { dismissal.dismissOnce(dismissIfStillVisible) }
+  }
+
+  /// The post-write hide. Skipped when the picker is already hidden — the user
+  /// pressed Esc (or toggled it away) during the confirmation window — so this
+  /// can't re-hide a window that was closed, or a newly reopened one, twice.
+  private func dismissIfStillVisible() {
+    if isVisible { dismiss() }
   }
 
   /// Waits up to `timeout` for `pasteboard.changeCount` to move off
@@ -314,7 +327,13 @@ extension PickerViewModel {
           "clipboard write not confirmed within \(timeout); hiding the picker anyway")
         return
       }
-      try? await Task.sleep(for: PasteDismissOrdering.confirmationPollInterval)
+      do {
+        try await Task.sleep(for: PasteDismissOrdering.confirmationPollInterval)
+      } catch {
+        // Cancelled: stop waiting (a bare `try?` would spin here) and let
+        // the caller hide the picker.
+        return
+      }
     }
     suppressOwnPasteboardWrite(pasteboard.changeCount)
   }

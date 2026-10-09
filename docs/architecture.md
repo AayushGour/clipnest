@@ -340,7 +340,7 @@ sequenceDiagram
     User->>VM: clicks a row / presses Return
     VM->>VM: pasteContent(for: item, plainText:) -> PasteContent
     VM->>Tracker: consume() -> FrontmostAppRef?
-    VM->>VM: dismiss()  (panel hides FIRST, before Paster starts its delay)
+    VM->>VM: dismiss()  (macOS: panel hides FIRST, before Paster starts its delay. Linux: the clipboard is written and confirmed BEFORE dismiss, because mutter drops a write from an unfocused client — see PasteDismissOrdering)
     VM->>Paster: paste(content, targetingFrontmostApp:)
     Paster->>PB: write content synchronously (string/data/rtf+string)
     alt Accessibility granted AND target available

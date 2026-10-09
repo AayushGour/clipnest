@@ -82,12 +82,40 @@ final class OrderRecordingSynthesizer: EventSynthesizing, @unchecked Sendable {
   func synthesizeCommandV(targeting app: FrontmostAppRef?) throws { log.record("synthesize") }
 }
 
+/// Passes bytes through; `RejectingImageNormalizer` models undecodable image data.
+struct AcceptingImageNormalizer: ImageNormalizing {
+  func normalizedForPaste(_ data: Data) -> (data: Data, mediaType: ClipMediaType)? {
+    (data, .png)
+  }
+}
+
+struct RejectingImageNormalizer: ImageNormalizing {
+  func normalizedForPaste(_ data: Data) -> (data: Data, mediaType: ClipMediaType)? { nil }
+}
+
+final class SuppressedCounts: @unchecked Sendable {
+  private let lock = NSLock()
+  private var storage: [Int] = []
+  func append(_ count: Int) {
+    lock.lock()
+    defer { lock.unlock() }
+    storage.append(count)
+  }
+  var values: [Int] {
+    lock.lock()
+    defer { lock.unlock() }
+    return storage
+  }
+}
+
 @MainActor
 @Suite("PickerViewModel paste ordering (T-PASTEORDER1)")
 struct PickerViewModelPasteOrderTests {
 
   private func makeViewModel(
-    ordering: PasteDismissOrdering, log: PasteOrderLog, pasteboard: OrderRecordingPasteboard
+    ordering: PasteDismissOrdering, log: PasteOrderLog, pasteboard: OrderRecordingPasteboard,
+    imageNormalizer: any ImageNormalizing = AcceptingImageNormalizer(),
+    blobStore: BlobStore? = nil
   ) -> PickerViewModel {
     let paster = Paster(
       pasteboard: pasteboard,
@@ -95,10 +123,15 @@ struct PickerViewModelPasteOrderTests {
       isAccessibilityGranted: { true },
       synthesisDelay: .zero,
       frontmostAppProvider: FakeFrontmostAppReferenceProviding(),
+      imageNormalizer: imageNormalizer,
       synthesizesWithoutVerifiedTarget: true)
     let viewModel = makeTestPickerViewModel(
-      pasteboard: pasteboard, paster: paster, pasteDismissOrdering: ordering)
+      pasteboard: pasteboard, blobStore: blobStore ?? makeTempBlobStore().blobStore,
+      paster: paster, pasteDismissOrdering: ordering)
     viewModel.dismiss = { log.record("dismiss") }
+    // A real window is visible while the user picks; the post-write hide is
+    // skipped for an already-hidden picker.
+    viewModel.willShow()
     return viewModel
   }
 
@@ -183,5 +216,83 @@ struct PickerViewModelPasteOrderTests {
     await waitForSynthesis(log)
 
     #expect(log.events == ["dismiss", "write", "changed", "synthesize"])
+  }
+
+  @Test("Linux policy: a second Enter during the confirmation window pastes only once")
+  func linuxSecondSelectWhilePendingIsIgnored() async {
+    let log = PasteOrderLog()
+    let viewModel = makeViewModel(
+      ordering: .writeBeforeDismiss(confirmationTimeout: .seconds(2)), log: log,
+      pasteboard: OrderRecordingPasteboard(log: log, bumpDelay: .milliseconds(80)))
+    let item = makeClipItem(kind: .text, previewText: "picked")
+
+    viewModel.select(item)
+    viewModel.select(item)
+    viewModel.pasteSnippet(Snippet(title: "t", body: "other"))
+    await waitForSynthesis(log)
+    try? await Task.sleep(for: .milliseconds(100))
+
+    #expect(log.events == ["write", "changed", "dismiss", "synthesize"])
+
+    // The guard clears on completion: the next paste goes through.
+    viewModel.select(item)
+    for _ in 0..<300 where log.events.filter({ $0 == "synthesize" }).count < 2 {
+      try? await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(log.events.filter { $0 == "synthesize" }.count == 2)
+  }
+
+  @Test("Linux policy: re-arms self-write suppression with the post-bump count, last")
+  func linuxRearmsSuppressionWithNewCount() async {
+    let log = PasteOrderLog()
+    let pasteboard = OrderRecordingPasteboard(log: log, bumpDelay: .milliseconds(60))
+    let viewModel = makeViewModel(
+      ordering: .writeBeforeDismiss(confirmationTimeout: .seconds(2)), log: log,
+      pasteboard: pasteboard)
+    let suppressed = SuppressedCounts()
+    viewModel.suppressOwnPasteboardWrite = { suppressed.append($0) }
+
+    viewModel.select(makeClipItem(kind: .text, previewText: "picked"))
+    await waitForSynthesis(log)
+
+    // Initial count straight after the write (not yet bumped), then the
+    // post-bump count.
+    #expect(suppressed.values == [100, 101])
+    #expect(suppressed.values.last == pasteboard.changeCount)
+  }
+
+  @Test("Linux policy: a paste that throws before writing still closes the picker exactly once")
+  func linuxInvalidImageStillDismissesOnce() async throws {
+    let log = PasteOrderLog()
+    let (directory, blobStore) = makeTempBlobStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let blobPath = try blobStore.write(Data([0x00, 0x01]))
+    let viewModel = makeViewModel(
+      ordering: .writeBeforeDismiss(confirmationTimeout: .seconds(1)), log: log,
+      pasteboard: OrderRecordingPasteboard(log: log), imageNormalizer: RejectingImageNormalizer(),
+      blobStore: blobStore)
+
+    viewModel.select(makeClipItem(kind: .image, previewText: "img", blobPath: blobPath))
+    for _ in 0..<300 where !log.events.contains("dismiss") {
+      try? await Task.sleep(for: .milliseconds(10))
+    }
+    try? await Task.sleep(for: .milliseconds(100))
+
+    #expect(log.events == ["dismiss"])
+  }
+
+  @Test("Linux policy: Esc during the confirmation window is not followed by a second hide")
+  func linuxAlreadyHiddenPickerIsNotHiddenAgain() async {
+    let log = PasteOrderLog()
+    let viewModel = makeViewModel(
+      ordering: .writeBeforeDismiss(confirmationTimeout: .seconds(2)), log: log,
+      pasteboard: OrderRecordingPasteboard(log: log, bumpDelay: .milliseconds(80)))
+
+    viewModel.select(makeClipItem(kind: .text, previewText: "picked"))
+    try? await Task.sleep(for: .milliseconds(20))
+    viewModel.didHide()  // Esc / focus loss while waiting for confirmation
+    await waitForSynthesis(log)
+
+    #expect(!log.events.contains("dismiss"))
   }
 }

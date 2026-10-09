@@ -672,7 +672,11 @@ import ClipnestViewModels
 
 ClipnestGTKApplication.initializeGTK()
 
-let viewModel = PickerViewModel(clipStore: clipStore, snippetStore: snippetStore)
+// `pasteDismissOrdering` is required: Linux writes the clipboard BEFORE hiding the picker.
+let viewModel = PickerViewModel(
+  clipStore: clipStore, snippetStore: snippetStore,
+  pasteDismissOrdering: .writeBeforeDismiss(
+    confirmationTimeout: PasteDismissOrdering.defaultConfirmationTimeout))
 let settings = SettingsStore()
 
 let picker = PickerWindow(viewModel: viewModel) {

@@ -145,13 +145,20 @@ public final class PickerWindow: @unchecked Sendable {
   /// timeout below bounds that staleness window instead of relying on every
   /// future caller to remember to clear it.
   private var pasteAttemptPending = false
-  /// How long `pasteAttemptPending` stays armed before self-clearing —
-  /// comfortably above the slowest real content resolution
+  /// Budget for the slowest real content resolution
   /// (`PickerViewModel+Paste.swift`'s own doc comment measures ~9-80ms for
-  /// an off-main blob read on a large image), so a real paste attempt is
-  /// never missed, while still closing the misattribution window above to
-  /// something no realistic user interaction can land inside.
-  private static let pasteAttemptPendingTimeoutMs: UInt32 = 400
+  /// an off-main blob read on a large image), with generous headroom.
+  private static let contentResolutionBudgetMs: Int64 = 400
+  /// How long `pasteAttemptPending` stays armed before self-clearing. On
+  /// Linux `dismiss()` runs only AFTER content resolution AND the clipboard
+  /// write confirmation (`PasteDismissOrdering.writeBeforeDismiss`, up to
+  /// `defaultConfirmationTimeoutMs`), so the window must cover both or a real
+  /// paste attempt would be missed; it still closes the misattribution window
+  /// above to something no realistic user interaction can land inside. Tied to
+  /// the confirmation timeout the composition root injects
+  /// (`LinuxAppEnvironment` uses the default).
+  private static let pasteAttemptPendingTimeoutMs: UInt32 = UInt32(
+    contentResolutionBudgetMs + PasteDismissOrdering.defaultConfirmationTimeoutMs)
   /// Shown at most once per process lifetime — see `showClipboardOnlyNoticeThenDismiss()`.
   private var hasShownClipboardOnlyNotice = false
 

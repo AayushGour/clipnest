@@ -24,7 +24,13 @@ public enum PasteDismissOrdering: Equatable, Sendable {
   /// How long Linux waits for its own write to show up (as a pasteboard change
   /// count bump) before hiding anyway. Bounded so a compositor/bridge that
   /// never reports the change cannot keep the picker on screen.
-  public static let defaultConfirmationTimeout: Duration = .milliseconds(250)
+  public static let defaultConfirmationTimeout: Duration =
+    .milliseconds(defaultConfirmationTimeoutMs)
+
+  /// `defaultConfirmationTimeout` in milliseconds — the single source of the
+  /// number, also read by `PickerWindow`'s paste-attempt window, which must
+  /// outlast it.
+  public static let defaultConfirmationTimeoutMs: Int64 = 250
 
   /// How often the confirmation wait re-reads the pasteboard change count.
   static let confirmationPollInterval: Duration = .milliseconds(10)

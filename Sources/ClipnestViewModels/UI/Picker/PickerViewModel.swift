@@ -483,7 +483,13 @@ public final class PickerViewModel: ObservableObject {
   /// True between `willShow()` and `didHide()` — gates whether a live
   /// capture (`handleNewCapture()`) bothers requerying at all; nothing
   /// re-queries a hidden picker.
-  private var isVisible = false
+  private(set) var isVisible = false
+  /// `true` from `select`/`pasteSnippet` accepting a paste until it finishes
+  /// (or fails). Under `.writeBeforeDismiss` the picker stays interactive for
+  /// the confirmation window, so a second Enter would otherwise start a second
+  /// paste and send two keystrokes. Read/written only from
+  /// `PickerViewModel+Paste.swift`.
+  var isPasteInFlight = false
 
   /// The row currently under the pointer, reported by `ItemRow.onHover` via
   /// `hoverItem(_:)` — `nil` when the pointer isn't over any row. Not
