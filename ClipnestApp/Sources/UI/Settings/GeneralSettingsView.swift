@@ -63,6 +63,15 @@ struct GeneralSettingsView: View {
       Text("Checks once a day. Nothing downloads automatically — you still choose when to update.")
         .font(.caption)
         .foregroundStyle(.secondary)
+
+      // T-PREVIEWSEL1: default OFF (hover-only preview, as before).
+      Toggle(
+        "Show preview when selecting with the keyboard",
+        isOn: $settings.showPreviewOnKeyboardSelection
+      )
+      Text("Shows the item preview beside the picker as you move through rows with the arrow keys.")
+        .font(.caption)
+        .foregroundStyle(.secondary)
     }
     .formStyle(.grouped)
   }

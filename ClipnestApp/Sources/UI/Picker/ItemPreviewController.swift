@@ -57,7 +57,10 @@ final class ItemPreviewController {
   /// type isn't nameable here.
   private var hostingController: NSHostingController<AnyView>?
 
-  /// Shows `item`'s preview beside `anchorRect` (in screen coordinates), or
+  /// Shows `item`'s preview beside `anchorRect` (in screen coordinates),
+  /// vertically centred on `verticalCenter` (screen Y — the pointer for a
+  /// hover preview, the selected row for a keyboard-selection preview; the
+  /// caller decides, see `AppEnvironment`'s `updatePreview` wiring), or
   /// hides the preview if `item` (or `anchorRect`) is `nil`. Never becomes
   /// key — the panel's `styleMask` includes `.nonactivatingPanel` and this
   /// only ever calls `orderFrontRegardless()`, so showing/updating the
@@ -67,6 +70,7 @@ final class ItemPreviewController {
     item: ClipItem?,
     blobStore: BlobStore,
     besideAnchor anchorRect: NSRect?,
+    atVerticalCenter verticalCenter: CGFloat,
     onPreviewHover: @escaping (Bool) -> Void
   ) {
     guard let item, let anchorRect else {
@@ -123,10 +127,10 @@ final class ItemPreviewController {
     let size = contentSize(
       for: item, hostingController: hostingController, imageMaxWidth: imageMaxWidth)
     panel.setContentSize(size)
-    // Vertically center the popover on the pointer (which is over the hovered
-    // row), so it appears beside that row rather than at the picker's top.
-    positionPanel(
-      panel, besideAnchor: anchorRect, on: side, atVerticalCenter: NSEvent.mouseLocation.y)
+    // Vertically center the popover on the row it describes (the hovered row
+    // under the pointer, or the keyboard-selected row — T-PREVIEWSEL1), so it
+    // appears beside that row rather than at the picker's top.
+    positionPanel(panel, besideAnchor: anchorRect, on: side, atVerticalCenter: verticalCenter)
     // Never makeKey/makeKeyAndOrderFront — must not steal the search
     // field's first-responder status. See this file's top doc comment.
     panel.orderFrontRegardless()
@@ -199,8 +203,8 @@ final class ItemPreviewController {
   }
 
   /// Places `panel` on the already-chosen `side` of `anchorRect` (the
-  /// picker), vertically centered on `cursorY` (the pointer's screen Y, i.e.
-  /// the hovered row) and clamped on-screen.
+  /// picker), vertically centered on `verticalCenter` (a screen Y: the pointer, i.e.
+  /// the hovered row, or the keyboard-selected row's centre) and clamped on-screen.
   ///
   /// The side is passed in rather than decided here: it is computed once in
   /// `update` from the picker's position alone, so it cannot vary with this
@@ -211,7 +215,7 @@ final class ItemPreviewController {
     _ panel: NSPanel,
     besideAnchor anchorRect: NSRect,
     on side: ClipnestViewModels.WindowPlacement.PreviewSide,
-    atVerticalCenter cursorY: CGFloat
+    atVerticalCenter verticalCenter: CGFloat
   ) {
     let width = panel.frame.width
     let height = panel.frame.height
@@ -225,7 +229,7 @@ final class ItemPreviewController {
       screenVisibleFrame: visible,
       gap: Self.gap)
 
-    var origin = NSPoint(x: originX, y: cursorY - height / 2)
+    var origin = NSPoint(x: originX, y: verticalCenter - height / 2)
     origin.y = min(max(origin.y, visible.minY), visible.maxY - height)
     panel.setFrameOrigin(origin)
   }

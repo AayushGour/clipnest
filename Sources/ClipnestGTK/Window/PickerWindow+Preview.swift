@@ -20,6 +20,7 @@
 // only wires it to the two GTK calls that need it.
 import CGtk4
 import ClipnestCore
+import ClipnestViewModels
 import Foundation
 
 /// Retained for the lifetime of one `GdkPixbufLoader` decode (see
@@ -54,14 +55,75 @@ extension PickerWindow {
     let index = Int(gtk_list_box_row_get_index(row))
     let hoveredID: ClipItem.ID? =
       MainActor.assumeIsolated {
-        guard viewModel.activeTab != .snippets, renderedRows.indices.contains(index) else {
-          return nil
+        // History/Pinned hover a clip, Snippets a snippet — both `UUID`s, which
+        // is what `PickerViewModel.hoverItem(_:)` takes per tab.
+        if viewModel.activeTab == .snippets {
+          return renderedSnippets.indices.contains(index) ? renderedSnippets[index].id : nil
         }
-        return renderedRows[index].id
+        return renderedRows.indices.contains(index) ? renderedRows[index].id : nil
       }
-    lastHoverPoint = GdkRectangle(x: Int32(x), y: Int32(y), width: 1, height: 1)
+    lastHoverAnchor = previewAnchor(forRow: row)
     MainActor.assumeIsolated {
       viewModel.hoverItem(hoveredID)
+    }
+  }
+
+  /// The anchor band for `row`: the row's vertical extent, spanning the
+  /// whole window's width (see `PreviewAnchor`), all in `listBox`
+  /// coordinates (the popover's parent), clipped to the scrolled viewport so
+  /// the anchor never extends outside the window (xdg_positioner requirement).
+  /// Keeps the previous anchor if GTK can't translate coordinates (the widgets
+  /// share no common ancestor).
+  func previewAnchor(forRow row: OpaquePointer) -> GdkRectangle? {
+    guard let rowOrigin = gtkTranslate((0, 0), from: row, to: listBox),
+      let windowOrigin = gtkTranslate((0, 0), from: window, to: listBox),
+      let viewportOrigin = gtkTranslate((0, 0), from: scrolledWindow, to: listBox)
+    else { return lastHoverAnchor }
+    let band = PreviewAnchor.band(
+      windowLeft: Int(windowOrigin.x), windowWidth: Int(gtk_widget_get_width(window)),
+      rowTop: Int(rowOrigin.y), rowHeight: Int(gtk_widget_get_height(row)),
+      visibleTop: Int(viewportOrigin.y), visibleHeight: Int(gtk_widget_get_height(scrolledWindow)))
+    return GdkRectangle(
+      x: band.x.gtkInt32, y: band.y.gtkInt32, width: band.width.gtkInt32,
+      height: band.height.gtkInt32)
+  }
+
+  /// The pointer moving from a row ONTO the preview must keep it open so its
+  /// scrollable (T-ROWLINES1) content can be read: report enter/leave of the
+  /// popover itself to the view model (previewHoverChanged), which holds the
+  /// popover open while hovered and closes it after the grace delay on leave.
+  func connectPreviewPopoverHover() {
+    let controller: OpaquePointer = gtk_event_controller_motion_new()
+    gtkConnect(
+      controller, signal: "enter", context: self,
+      callback: unsafeBitCast(previewPopoverEnterTrampoline, to: GCallback.self))
+    gtkConnect(
+      controller, signal: "leave", context: self,
+      callback: unsafeBitCast(previewPopoverLeaveTrampoline, to: GCallback.self))
+    gtk_widget_add_controller(previewPopover, controller)
+  }
+
+  func handlePreviewPopoverHover(_ hovering: Bool) {
+    MainActor.assumeIsolated {
+      viewModel.previewHoverChanged(hovering)
+    }
+  }
+
+  /// Pops the preview down for good. A popdown that the POINTER did not cause (the
+  /// target was filtered out, the tab changed) may never be followed
+  /// by a motion "leave" from the popover, which would leave the view model's
+  /// `isHoveringPreview` stuck true and keep a later preview open after the
+  /// pointer left; so the hover flag is reset explicitly whenever a mapped popup
+  /// is closed here. A re-map (target or anchor changed while shown) does NOT go
+  /// through here; see `updatePreviewPopover`.
+  func closePreviewPopover() {
+    let wasMapped = gtk_widget_get_mapped(previewPopover) != 0
+    shownPreviewKey = nil
+    gtk_popover_popdown(previewPopover)
+    if wasMapped {
+      MainActor.assumeIsolated {
+        viewModel.previewHoverChanged(false)
+      }
     }
   }
 
@@ -83,15 +145,68 @@ extension PickerWindow {
   /// plus an optional recognized-text section (T-OCR2); `.file` shows the
   /// filename headline plus size/path metadata; everything else shows the
   /// plain wrapped `previewText`.
-  func updatePreviewPopover(targetID: ClipItem.ID?) {
-    guard let targetID, let item = renderedRows.first(where: { $0.id == targetID }) else {
-      gtk_popover_popdown(previewPopover)
+  func updatePreviewPopover(targetID: ClipItem.ID?, source: PreviewTargetSource?) {
+    guard let targetID else {
+      closePreviewPopover()
+      return
+    }
+    let isSnippetTab = MainActor.assumeIsolated { viewModel.activeTab == .snippets }
+    let snippet = isSnippetTab ? renderedSnippets.first(where: { $0.id == targetID }) : nil
+    let clip = isSnippetTab ? nil : renderedRows.first(where: { $0.id == targetID })
+    guard snippet != nil || clip != nil else {
+      closePreviewPopover()
       return
     }
 
-    if var rect = lastHoverPoint {
+    // T-PREVIEWSEL2: a keyboard-selection preview sits beside the SELECTED row,
+    // a hover preview beside the hovered one. Same band geometry, same Wayland
+    // overlap offset (set once in `buildPreviewPopover`).
+    var anchor: GdkRectangle?
+    switch PreviewAnchor.target(for: source) {
+    case .hoveredRow:
+      anchor = lastHoverAnchor
+    case .selectedRow:
+      let ids = isSnippetTab ? renderedSnippets.map(\.id) : renderedRows.map(\.id)
+      if let index = ids.firstIndex(of: targetID),
+        let row = gtk_list_box_get_row_at_index(listBox, index.gtkInt32)
+      {
+        anchor = previewAnchor(forRow: row)
+      }
+    }
+
+    // T-PREVIEWJUMP1: a popup that is already on screen is torn down first when
+    // its target or anchor changed, so the new content, size and anchor are
+    // placed by ONE fresh xdg_popup (a single configure at the final position).
+    // Updating it in place made GTK send xdg_popup.reposition for every size or
+    // anchor change, and the compositor re-evaluated the flip side each time.
+    // An update that changes neither (e.g. hover -> selection on the same row)
+    // leaves the popup alone instead of blinking it.
+    let key = PreviewPlacementKey(
+      targetID: targetID, x: anchor?.x ?? 0, y: anchor?.y ?? 0, width: anchor?.width ?? 0,
+      height: anchor?.height ?? 0)
+    let shown = gtk_widget_get_mapped(previewPopover) != 0 ? shownPreviewKey : nil
+    if PreviewPlacementKey.needsRemap(shown: shown, new: key) {
+      // A re-map is not a real close: pop down directly and leave the hover
+      // flag and the view model's pending resolve alone (resetting it here
+      // replaced the 20 ms show resolve with a 250 ms grace one).
+      gtk_popover_popdown(previewPopover)
+    }
+    shownPreviewKey = key
+    if var rect = anchor {
       gtk_popover_set_pointing_to(previewPopover, &rect)
     }
+
+    if let snippet {
+      // A snippet previews its Body as plain wrapped text (no image/file/OCR).
+      gtk_widget_set_visible(previewImage, 0)
+      gtk_widget_set_visible(previewLabel, 1)
+      gtk_label_set_text(previewLabel, snippet.body)
+      updateFilePreviewMetadata(isFile: false, item: nil, path: nil)
+      hideOCRSection()
+      gtk_popover_popup(previewPopover)
+      return
+    }
+    guard let item = clip else { return }
 
     let content = ItemPreviewContent(item: item)
     let isImage = item.kind == .image
@@ -121,8 +236,8 @@ extension PickerWindow {
   /// is meant to be "read later, off the main thread, only when a preview
   /// needs it" — this is that read. A missing/unreadable file simply omits
   /// the size line, matching macOS `FilePreview`'s `sizeText` staying `nil`.
-  private func updateFilePreviewMetadata(isFile: Bool, item: ClipItem, path: String?) {
-    guard isFile else {
+  private func updateFilePreviewMetadata(isFile: Bool, item: ClipItem?, path: String?) {
+    guard isFile, let item else {
       gtk_widget_set_visible(previewFileSizeLabel, 0)
       gtk_widget_set_visible(previewFilePathLabel, 0)
       return
@@ -153,11 +268,15 @@ extension PickerWindow {
   /// .hasRecognizedText` block) — hidden together whenever the hovered item
   /// has no recognized text (every non-`.image` kind included, since
   /// `ClipItem.hasRecognizedText` is always `false` there).
+  private func hideOCRSection() {
+    gtk_widget_set_visible(previewOCRSeparator, 0)
+    gtk_widget_set_visible(previewOCRHeaderLabel, 0)
+    gtk_widget_set_visible(previewOCRTextLabel, 0)
+  }
+
   private func updateOCRSection(content: ItemPreviewContent) {
     guard content.hasRecognizedText, let ocrText = content.ocrText else {
-      gtk_widget_set_visible(previewOCRSeparator, 0)
-      gtk_widget_set_visible(previewOCRHeaderLabel, 0)
-      gtk_widget_set_visible(previewOCRTextLabel, 0)
+      hideOCRSection()
       return
     }
     gtk_widget_set_visible(previewOCRSeparator, 1)
@@ -227,6 +346,23 @@ private let previewMotionTrampoline:
     guard let window = unretainedContext(data, as: PickerWindow.self) else { return }
     window.handlePreviewMotion(x: x, y: y)
   }
+
+/// `GtkEventControllerMotion::enter` on the preview popover.
+private let previewPopoverEnterTrampoline:
+  @convention(c) (
+    OpaquePointer?, Double, Double, UnsafeMutableRawPointer?
+  ) -> Void = { _, _, _, data in
+    guard let window = unretainedContext(data, as: PickerWindow.self) else { return }
+    window.handlePreviewPopoverHover(true)
+  }
+
+/// `GtkEventControllerMotion::leave` on the preview popover.
+private let previewPopoverLeaveTrampoline:
+  @convention(c) (OpaquePointer?, UnsafeMutableRawPointer?) ->
+    Void = { _, data in
+      guard let window = unretainedContext(data, as: PickerWindow.self) else { return }
+      window.handlePreviewPopoverHover(false)
+    }
 
 /// `GtkEventControllerMotion::leave` — `void (*)(GtkEventControllerMotion*, gpointer)`.
 private let previewLeaveTrampoline:

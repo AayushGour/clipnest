@@ -113,6 +113,27 @@ clipboard content) via `os.Logger`.
 - Nothing classifiable on the pasteboard → `reader.read` returns `nil`, no-op.
 - Blob write failure → capture aborted for that cycle rather than storing a dangling `blobPath` (`:229-250`).
 - Store failure → surfaced via `captureFailureHandler`, never silently swallowed.
+- Linux: a text conversion that returns zero bytes is treated as "no payload" (`LinuxPasteboard.string(forType:)`), so it can no longer create a blank history row.
+
+**Diagnosing a copy that didn't reach history (T-TERMCOPY1).** Every change that
+ends without a captured item now leaves one metadata-only line (type names,
+source id, pause flag — never content), where it used to be silent:
+- `ClipboardMonitor` — `change not captured — rejected by PrivacyFilter …` or
+  `… no readable payload …` (`notice` when the owner offered types, `info` when it
+  offered none, the normal shape of Clipnest's own write).
+- Linux only, `LinuxPasteboard` — `clipboard serial=N targets=[…] → capturable | no
+  capturable representation | concealed | Clipnest's own write`, plus
+  `text conversion refused or timed out / returned 0 bytes / not decodable`.
+- Linux only, `X11ClipboardConnection` — `selection owner changed: serial=N owner=…`
+  for every XFixes event, and `conversion of <mime> refused … / timed out …`.
+
+Read them with `journalctl --user -t app.clipnest.Clipnest --since '-5min'`. A
+copy with no `selection owner changed` line was never delivered to Clipnest by the
+display server; one with it but no `clipboard serial=` line is ambiguous: the TARGETS fetch may
+have stalled (look for `conversion of TARGETS timed out`), Clipnest's own
+ownership check may have skipped it, or several quick changes were coalesced into
+one check; the rest name their own reason. Text copies try every advertised text
+type in priority order, logging one line per type that fails.
 
 **Tests.** `Tests/ClipnestCoreTests/ClipboardMonitorTests.swift` — e.g.
 `checkNow captures exactly one ClipItem on an accepted change` (`:123`),
@@ -761,7 +782,30 @@ show-delay or close-grace (`previewShowDelay`/`previewCloseGrace`, `:355,
 (or, on the Snippets tab, synthesizes one from the snippet's body,
 `:117-120`), and forwards it to `viewModel.updatePreview`, a closure
 `AppEnvironment` wires to the real `ItemPreviewController.update(...)`
-(`AppEnvironment.swift:171-178`). `ItemPreviewController`
+(`AppEnvironment.swift:171-178`). **Keyboard-selection preview
+(T-PREVIEWSEL1):** `SettingsStore.showPreviewOnKeyboardSelection` (Settings ->
+General, default OFF, Linux and macOS) is passed to `PickerViewModel` as the
+required `showPreviewOnKeyboardSelection` closure (live read, no default).
+After an Up/Down move the view calls `selectionChangedForPreview()`; with the
+setting ON and no row hovered, the keyboard-selected row (History/Pinned clip
+if `isPreviewWorthy`, or the Snippet) becomes the target after the same
+show-delay. A hovered row always wins; leaving hover falls back to the
+selection; with the setting OFF selection never previews. Opening the picker,
+search-text changes and tab switches do not count as keyboard moves.
+`previewTargetSource` (`.hover`/`.selection`) tells the view which row to
+anchor to; on macOS `ItemPreviewController` centres a `.selection` preview on
+the selected row's Y (`PickerViewModel.selectedRowMidY`, reported by
+`ScrollResettingList`) instead of the pointer. **Linux GTK (T-PREVIEWSEL2):**
+`PickerWindow+Keyboard.swift` calls `selectionChangedForPreview()` after every
+Up/Down move; `PickerPollSnapshot` carries `previewTargetSource`, so a change of
+source alone also reconciles the popover. For `.selection`,
+`updatePreviewPopover(targetID:source:)` anchors with `previewAnchor(forRow:)`
+on the selected row (`PreviewAnchor.target(for:)`, pure and unit-tested); for
+`.hover` it keeps the anchor captured on pointer motion. Both use the same band
+geometry and the Wayland -2 px overlap. The Snippets tab now previews hover
+targets too (the snippet's Body as wrapped text, no image/file/OCR sections).
+Verified on Xvfb (setting ON: preview beside the selected row after arrowing
+down; OFF: none) and headless mutter (selection preview, `popup_done=0`). `ItemPreviewController`
 (`ItemPreviewController.swift:21-139`) presents `ItemPreview` in its own
 borderless, `.nonactivatingPanel`-style-masked child `NSPanel` — same
 never-`makeKey()` technique as `PickerPanel` itself, so hovering a row can
@@ -772,6 +816,59 @@ plain resizable image to near-zero), text loaded in `2_000`-character chunks
 as the popover scrolls (`TextPreview`, `:110-171`), and file metadata
 (name/size/path) read off-main-thread with **no** file-system access at
 capture time (`FilePreview`, `:179-223`).
+
+**Linux preview placement.** On macOS `WindowPlacement.previewSide` picks the
+side of the picker with more room. GTK4 cannot position windows and, on
+Wayland, an app cannot know where its own window is, so the Linux picker
+(`PickerWindow+Preview.swift`, `PickerWindow+Layout.swift`) lets the
+compositor decide: the preview `GtkPopover` is set to `GTK_POS_RIGHT`, no
+arrow, with an 8 px gap (`PreviewAnchor.gap`), and pointed at a band spanning
+the whole picker window's width at the hovered row's height
+(`PreviewAnchor.band`, pure and unit-tested). That puts it just outside the
+window's right edge level with the row; when there is no room on the right the
+popup positioner's flip constraint moves it to the left. Because the window
+doesn't move while open, the side is stable for a given preview size (image and text previews differ in width). (Verified
+under X11/Xvfb + openbox: preview right of a left-edge window, left of a
+centered window on a 1440 px screen. On Wayland the popup must additionally
+overlap the window by 2 px or mutter dismisses it, see "Wayland
+(T-PREVIEWWL1)" below; verified on headless mutter 46.)
+
+**Row height and preview bounds (T-ROWLINES1).** A Linux row shows at most 3
+lines (`PickerLayoutLimits.rowTextMaxLines`): `RowDisplayText.collapsed` folds
+newlines/tabs/space runs into one paragraph capped at 360 characters, and the
+label wraps (`PANGO_WRAP_WORD_CHAR`), is limited to 3 lines and ellipsized at
+the end. (GTK 4.6's `lines` cap alone was not reliable across explicit
+newlines: a 200-line copy rendered every line.) Search highlighting runs on the
+collapsed text. The Snippets body line gets the same treatment. The picker is
+60 px taller than macOS (`PickerLayoutLimits.windowDefaultHeight` = 480; width
+unchanged at 560). The preview popover wraps its content in a `GtkScrolledWindow`
+capped at `previewMaxContentHeight` (400 px), so a very long copy scrolls
+inside the preview, and the preview stays open while the pointer is over it
+(`previewHoverChanged` is now fed by a motion controller on the popover).
+
+**Single placement per preview (T-PREVIEWJUMP1).** Showing a preview used to
+update an already-open popup in place, so every size or anchor change made GTK
+send `xdg_popup.reposition` and the compositor re-evaluated which side of the
+picker the popup fits on; previews of different widths (100 to 413 px measured)
+could land on opposite sides. Now (1) a mapped preview is popped down first, so
+new content, size and anchor go out in one fresh `xdg_popup` with a single
+`configure` at the final position, and (2) every preview has the same minimum
+width (`PickerLayoutLimits.previewMinContentWidth`, 420 px), so the side choice
+does not vary between text previews (image previews, about 528 px, are wider
+and can still change side on a tight screen). Measured on headless mutter 46 with a hover sweep
+over short, 200-line and very long rows: 13 shows = 13 `get_popup` = 13
+`configure`, 0 `reposition`, 0 `popup_done`; on a 1500 px monitor every preview
+lands on the same side.
+
+**Wayland (T-PREVIEWWL1).** mutter dismisses (`xdg_popup.popup_done`, ~30 ms
+after the first commit) a non-grabbing popup whose geometry does not overlap
+its parent window's geometry, so the 8 px gap above made the preview vanish on
+GNOME Wayland (measured on headless mutter 46: popup placed at window-right + 8
+or + 1 was dismissed every time, any overlap survived). On Wayland the popover
+offset is therefore `-PreviewAnchor.waylandOverlap` (-2 px, via
+`PreviewAnchor.offset(isWayland:)`), reaching 2-3 px back into the window, level
+with the row, on both the right and the flipped-left side. X11 keeps the
+visible 8 px gap.
 
 **How it works — keyboard.** `PickerView.handle(_:)`
 (`PickerView.swift:154-199`) is the single `.onKeyPress` handler for
@@ -791,6 +888,18 @@ but never raised/activated it — the T-SET1 failure mode all over again), so
 it has to be intercepted one layer earlier, in `PickerPanel`'s AppKit-level
 local `NSEvent` monitor (`onCommandComma`, see the panel section above) —
 the same reason `onCommandDelete` already lives there rather than here.
+
+**Linux: keeping the selected row in view.** Arrow keys change the selection
+through `PickerViewModel` while keyboard focus stays in the search entry, so
+GTK never scrolls the list by itself. `PickerWindow.syncListBoxSelection`
+(`PickerWindow+Rows.swift`) therefore scrolls after every selection change
+(arrows, wrap-around, either tab): a row above the viewport has its top aligned
+to the top, one below has its bottom aligned to the bottom, a visible one does
+not move (pure maths in `ScrollIntoView`, unit-tested). Setting the adjustment
+goes through the normal "value-changed" paging, so arrowing past the loaded rows
+keeps loading more. A row not yet allocated (just rebuilt) is scrolled from an
+~16 ms timeout retry after layout (max 20 ticks). The hover preview anchor is in list-box
+coordinates and moves with its row.
 
 **Edge cases handled**
 - Typing while a previous debounced search is still pending → generation counter discards the stale result.
@@ -863,14 +972,34 @@ formatting"):
 - Any text-bearing kind, when `plainText == true`, strips down to `.text
   (previewText)` regardless of its richer stored form.
 
-`pasteAndDismiss(_:)` (`:960-978`) is the shared tail for both `select(_:)`
-and `pasteSnippet(_:)`: it calls `frontmostAppTracker.consume()`, then
-**`dismiss()` first**, *then* starts a `Task` that calls `paster.paste
-(content, targetingFrontmostApp:)`. Dismiss-before-paste is deliberate, not
-incidental: `Paster`'s `CGEventSynthesizer` posts through the *global* HID
-event tap after a short delay, and if Clipnest's panel still held key focus
-when that posts, the OS could deliver the synthetic keystroke to Clipnest's
-own search field instead of the target app.
+`select(_:)` and `pasteSnippet(_:)` (`PickerViewModel+Paste.swift`) share one
+tail, `performPaste`, and call `frontmostAppTracker.consume()` first. Whether
+the picker hides before or after the pasteboard write is a **required,
+per-platform `PasteDismissOrdering`** injected into `PickerViewModel` (no
+default, so a missing wiring is a build error):
+- `.dismissBeforeWrite` (**macOS only**): `dismiss()` first, *then* the write
+  and the synthesized paste. Deliberate: `CGEventSynthesizer` posts through
+  the *global* HID event tap after a short delay, and if Clipnest's panel
+  still held key focus when that posts, the OS could deliver the synthetic
+  keystroke to Clipnest's own search field instead of the target app.
+- `.writeBeforeDismiss(confirmationTimeout:)` (**Linux**): the write happens
+  while the picker still has keyboard focus, `performPaste` then waits (bounded,
+  250 ms) for the pasteboard change count to move, *then* hides the picker, and
+  `Paster` sleeps `synthesisDelay` and posts Ctrl+V. Reason: mutter ignores
+  `wl_data_device.set_selection` from a client without keyboard focus, so a
+  write issued after the hide was silently dropped and Enter pasted the
+  previously copied clipboard. If the write is not confirmed in time a NOTICE
+  (`clipboard write not confirmed ...`) is logged and the picker hides anyway.
+  The self-write is still ignored by capture via the
+  `application/x-clipnest-owned` marker (never read back from the GTK thread).
+
+Both orderings share one **in-flight guard** (`isPasteInFlight`, cross-platform):
+while a paste is being resolved, written, confirmed and dispatched, further
+`select`/`pasteSnippet` calls are ignored, so a double Enter or double click
+pastes once (on Linux the picker is still visible during the confirmation
+wait, so this is reachable). The Linux window that attributes a later dismissal
+to a paste attempt (`pasteAttemptPendingTimeoutMs`) is the 400 ms content budget
+plus the 250 ms confirmation bound, 650 ms.
 
 `Paster.paste(_:targetingFrontmostApp:)`
 (`Paster.swift:179-209`) always writes the pasteboard synchronously first

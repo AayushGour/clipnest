@@ -18,7 +18,8 @@ public struct SnippetRowContent: Equatable, Sendable {
     markupTitle = PangoMarkup.markup(
       for: SearchHighlightSegments.segments(in: snippet.title, matching: searchText))
     markupBody = PangoMarkup.markup(
-      for: SearchHighlightSegments.segments(in: snippet.body, matching: searchText))
+      for: SearchHighlightSegments.segments(
+        in: RowDisplayText.collapsed(snippet.body), matching: searchText))
     keywordLabel = snippet.keyword
   }
 }

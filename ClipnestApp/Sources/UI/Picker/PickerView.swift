@@ -71,8 +71,14 @@
 // switch, kind-filter chip) is in flight — see `content`'s doc comment.
 //
 // Task 12 (item preview): `ItemRow`'s new `onHover` is wired to
-// `viewModel.hoverItem(_:)`; a new `.onChange(of: selectedItemID)` reports
-// keyboard-driven selection changes to `viewModel.selectionChangedForPreview()`.
+// `viewModel.hoverItem(_:)`. T-PREVIEWSEL1: `handle(_:)`'s Up/Down cases call
+// `viewModel.selectionChangedForPreview()` right after `moveSelection(by:)`
+// (when the "show preview on keyboard selection" setting is on, the VM then
+// previews the selected row; the earlier `.onChange(of: selectedItemID)`
+// approach was dropped because it also fired for non-keyboard selection
+// changes — an async query settling on open — which must not preview).
+// `ScrollResettingList` reports the selected row's vertical centre into
+// `viewModel.selectedRowMidY` so the popover anchors beside it.
 // Both feed `viewModel.previewTargetID`, which this view watches via its own
 // `.onChange` — looking the target id up in `viewModel.rows` and forwarding
 // the resolved `ClipItem?` to `viewModel.updatePreview`, a closure the
@@ -80,6 +86,9 @@
 // `ItemPreviewController.update(...)` (same closure-injection pattern as
 // `dismiss`/`presentSnippetEditor`/`suppressOwnPasteboardWrite`) — this view
 // never touches AppKit/`NSPanel` directly.
+// macOS manual checks (never compiled/run off-Mac): row preferences may not
+// propagate out of a `List`, and the popover is not repositioned on mouse-wheel
+// scrolling.
 
 import ClipnestCore
 import ClipnestViewModels
@@ -223,9 +232,13 @@ struct PickerView: View {
       }
     case .upArrow:
       viewModel.moveSelection(by: -1)
+      // T-PREVIEWSEL1: an explicit keyboard move (not an async selection
+      // settle or a click) — the only trigger for the selection preview.
+      viewModel.selectionChangedForPreview()
       return .handled
     case .downArrow:
       viewModel.moveSelection(by: 1)
+      viewModel.selectionChangedForPreview()
       return .handled
     case .delete:
       viewModel.deleteHighlighted()
@@ -538,7 +551,8 @@ struct PickerView: View {
           data: viewModel.rows,
           selection: $viewModel.selectedItemID,
           scrollToTopToken: viewModel.scrollToTopToken,
-          onReachEnd: { viewModel.loadMoreIfNeeded() }
+          onReachEnd: { viewModel.loadMoreIfNeeded() },
+          onSelectedRowMidY: { midY in viewModel.selectedRowMidY = midY }
         ) { item in
           ItemRow(
             item: item,
@@ -565,7 +579,8 @@ struct PickerView: View {
           data: viewModel.snippetRows,
           selection: $viewModel.selectedSnippetID,
           scrollToTopToken: viewModel.scrollToTopToken,
-          onReachEnd: { viewModel.loadMoreIfNeeded() }
+          onReachEnd: { viewModel.loadMoreIfNeeded() },
+          onSelectedRowMidY: { midY in viewModel.selectedRowMidY = midY }
         ) { snippet in
           SnippetRow(
             snippet: snippet,
@@ -638,6 +653,15 @@ struct PickerView: View {
   }
 }
 
+/// Carries the selected row's vertical centre up from `ScrollResettingList`'s
+/// rows (only the selected row contributes a non-nil value).
+private struct SelectedRowMidYKey: PreferenceKey {
+  static var defaultValue: CGFloat? { nil }
+  static func reduce(value: inout CGFloat?, nextValue: () -> CGFloat?) {
+    value = value ?? nextValue()
+  }
+}
+
 /// A `List` wrapped in a `ScrollViewReader` that scrolls to its first row
 /// whenever `scrollToTopToken` changes — the shared shape behind both the
 /// ClipItem list (History/Pinned) and the Snippets list, factored out once
@@ -652,6 +676,10 @@ where Data.Element: Identifiable, Data.Element.ID == ID {
   @Binding var selection: ID?
   let scrollToTopToken: Int
   let onReachEnd: () -> Void
+  /// Reports the selected row's vertical centre (window coordinates, top-down)
+  /// whenever it changes, `nil` when no selected row is laid out. Feeds
+  /// `PickerViewModel.selectedRowMidY` (T-PREVIEWSEL1).
+  let onSelectedRowMidY: @MainActor (CGFloat?) -> Void
   @ViewBuilder let rowContent: (Data.Element) -> RowContent
 
   var body: some View {
@@ -660,6 +688,13 @@ where Data.Element: Identifiable, Data.Element.ID == ID {
         ForEach(data) { element in
           rowContent(element)
             .tag(element.id)
+            .background(
+              GeometryReader { geometry in
+                Color.clear.preference(
+                  key: SelectedRowMidYKey.self,
+                  value: element.id == selection ? geometry.frame(in: .global).midY : nil)
+              }
+            )
             .onAppear {
               if element.id == data.last?.id {
                 onReachEnd()
@@ -668,6 +703,10 @@ where Data.Element: Identifiable, Data.Element.ID == ID {
         }
       }
       .listStyle(.plain)
+      .onPreferenceChange(SelectedRowMidYKey.self) { [onSelectedRowMidY] midY in
+        // The perform closure is Sendable under Swift 6; hop back explicitly.
+        MainActor.assumeIsolated { onSelectedRowMidY(midY) }
+      }
       .onChange(of: scrollToTopToken) { _, _ in
         // Dispatched to the next run-loop tick rather than called
         // synchronously from `.onChange`, since `scrollToTopToken` can

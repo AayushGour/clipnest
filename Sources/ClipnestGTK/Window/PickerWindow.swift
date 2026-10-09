@@ -90,11 +90,12 @@ import ClipnestViewModels
 // concurrent access" guarantee `BlobStore` already documents its own
 // `nonisolated(unsafe)` with elsewhere in this codebase.
 public final class PickerWindow: @unchecked Sendable {
-  /// Matches `PickerPanel.defaultSize` (`NSSize(width: 560, height: 420)`,
-  /// `ClipnestApp/Sources/UI/Picker/PickerPanel.swift`) — the picker keeps
-  /// the same footprint on both platforms.
+  /// Width matches `PickerPanel.defaultSize` (560). Height is deliberately
+  /// taller than macOS's 420 (`PickerLayoutLimits.windowDefaultHeight`,
+  /// T-ROWLINES1) because Linux rows can be up to 3 lines high; placement
+  /// reads the window's real frame, never a hardcoded height.
   static let defaultWidth: Int32 = 560
-  static let defaultHeight: Int32 = 420
+  static let defaultHeight: Int32 = PickerLayoutLimits.windowDefaultHeight
 
   /// T-RT3: `windowToken`'s value — a stable per-ROLE constant, not a
   /// fresh UUID per instance. See this file's top "WINDOW PLACEMENT" doc
@@ -145,13 +146,20 @@ public final class PickerWindow: @unchecked Sendable {
   /// timeout below bounds that staleness window instead of relying on every
   /// future caller to remember to clear it.
   private var pasteAttemptPending = false
-  /// How long `pasteAttemptPending` stays armed before self-clearing —
-  /// comfortably above the slowest real content resolution
+  /// Budget for the slowest real content resolution
   /// (`PickerViewModel+Paste.swift`'s own doc comment measures ~9-80ms for
-  /// an off-main blob read on a large image), so a real paste attempt is
-  /// never missed, while still closing the misattribution window above to
-  /// something no realistic user interaction can land inside.
-  private static let pasteAttemptPendingTimeoutMs: UInt32 = 400
+  /// an off-main blob read on a large image), with generous headroom.
+  private static let contentResolutionBudgetMs: Int64 = 400
+  /// How long `pasteAttemptPending` stays armed before self-clearing. On
+  /// Linux `dismiss()` runs only AFTER content resolution AND the clipboard
+  /// write confirmation (`PasteDismissOrdering.writeBeforeDismiss`, up to
+  /// `defaultConfirmationTimeoutMs`), so the window must cover both or a real
+  /// paste attempt would be missed; it still closes the misattribution window
+  /// above to something no realistic user interaction can land inside. Tied to
+  /// the confirmation timeout the composition root injects
+  /// (`LinuxAppEnvironment` uses the default).
+  private static let pasteAttemptPendingTimeoutMs: UInt32 = UInt32(
+    contentResolutionBudgetMs + PasteDismissOrdering.defaultConfirmationTimeoutMs)
   /// Shown at most once per process lifetime — see `showClipboardOnlyNoticeThenDismiss()`.
   private var hasShownClipboardOnlyNotice = false
 
@@ -249,6 +257,12 @@ public final class PickerWindow: @unchecked Sendable {
   /// run yet (see `PickerWindowRefreshCoalescer`/`scheduleCoalescedRefresh()`
   /// in `PickerWindow+Reconcile.swift`); `nil` whenever none is pending.
   var pendingRefreshSourceID: UInt32?
+  /// T-KBSCROLL1: row index whose scroll-into-view is waiting for layout, the
+  /// idle source retrying it, and how many ticks it has tried. See
+  /// syncListBoxSelection(toIndex:) in PickerWindow+Rows.swift.
+  var pendingScrollRowIndex: Int?
+  var pendingScrollSourceID: UInt32?
+  var pendingScrollAttempts = 0
 
   /// Collapses any number of `objectWillChange` notifications arriving
   /// before the next reconcile actually runs into exactly one
@@ -258,10 +272,15 @@ public final class PickerWindow: @unchecked Sendable {
 
   var lastSnapshot: PickerPollSnapshot = .initial
 
-  /// The pointer position of the most recent hover-preview motion event —
-  /// where `PickerWindow+Preview.swift` anchors `previewPopover` via
-  /// `gtk_popover_set_pointing_to`. `nil` until the first hover.
-  var lastHoverPoint: GdkRectangle?
+  /// The rect (in `listBox` coordinates) of the most recently hovered row's
+  /// full-window-width band — where `PickerWindow+Preview.swift` anchors
+  /// `previewPopover` via `gtk_popover_set_pointing_to` so the popover sits
+  /// beside the window, not at the pointer (see `PreviewAnchor`). `nil`
+  /// until the first hover.
+  var lastHoverAnchor: GdkRectangle?
+  /// Target and anchor of the preview popup currently on screen (T-PREVIEWJUMP1),
+  /// `nil` when none.
+  var shownPreviewKey: PreviewPlacementKey?
 
   /// Guards against `notify::is-active` firing `onDismiss` for the
   /// activation transition `show(at:)` itself causes (a freshly-presented

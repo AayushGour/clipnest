@@ -168,7 +168,35 @@ login until you open the picker once. Turn it on in Settings → General.
 
 ---
 
-## 5. If something breaks
+## 5. Build and install from source (developers)
+
+```bash
+make test-linux      # swift test in Docker (no host Swift needed)
+make lint            # swift-format via scripts/lint.sh
+make deb             # local .debs into build/linux/ (version gets a +local<timestamp> suffix)
+make install-linux   # deb + pkexec apt-get install (GUI password prompt) + restart the app
+make restart         # kill and relaunch the installed app
+make logs            # journalctl --user -t app.clipnest.Clipnest -f
+make uninstall-linux # pkexec apt-get remove
+```
+
+`make` lists every target; see the README's "Make targets" section.
+
+### Checks for the 1.0.1 picker fixes
+
+- Copy something, open the picker, press Enter on an older item: that item (not
+  the last copy) is pasted. Press Enter twice quickly: it pastes once.
+- Hover a row: the preview appears beside the picker, level with the row, on
+  Wayland too, and stays open (scrollable) while the pointer is over it. Same on
+  the Snippets tab.
+- Settings → General → *Show preview when selecting with the keyboard* on: arrow
+  keys show the preview beside the selected row; off: they don't.
+- Arrow through a long list: the selected row stays in view. A 200-line copy
+  shows 3 lines in its row.
+- A copy that is not captured (e.g. concealed) logs a reason:
+  `journalctl --user -t app.clipnest.Clipnest --since '-5min'`.
+
+## 6. If something breaks
 
 ```bash
 clipnest 2>&1 | tee /tmp/clipnest.log     # run in a terminal, keep the log

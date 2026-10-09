@@ -120,7 +120,8 @@ extension PickerWindow {
         focusToken: viewModel.focusToken,
         scrollToTopToken: viewModel.scrollToTopToken,
         searchResetToken: viewModel.searchResetToken,
-        previewTargetID: viewModel.previewTargetID
+        previewTargetID: viewModel.previewTargetID,
+        previewTargetSource: viewModel.previewTargetSource
       )
     }
 
@@ -177,7 +178,8 @@ extension PickerWindow {
       gtk_editable_set_text(searchEntry, "")
     }
     if aspects.contains(.preview) {
-      updatePreviewPopover(targetID: snapshot.previewTargetID)
+      updatePreviewPopover(
+        targetID: snapshot.previewTargetID, source: snapshot.previewTargetSource)
     }
     // The footer's contextual hint (⌥⏎/⌘S-equivalents) depends on
     // `activeTab` AND whichever row is highlighted — recomputed whenever

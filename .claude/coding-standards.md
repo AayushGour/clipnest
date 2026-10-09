@@ -34,7 +34,8 @@ Owner: architect (seed) · senior-dev refines. Grep this before building; match 
 
 ## Test framework + how to run
 - **Framework:** Swift Testing (`import Testing`, `@Test`, `#expect`/`#require`) for all `ClipnestCoreTests`. Do not mix in XCTest unless a specific AppKit/async interop issue forces it — if that happens, log it as a new decision in `project-context.md` before doing it.
-- **Run (Core, CLI-only, no Xcode needed):** `swift test` from the repo root (runs the `ClipnestCoreTests` target defined in `Package.swift`).
+- **Shortcut (all platforms):** `make test` (host `swift test` on macOS, Docker on Linux), `make lint`, `make format`; `make` lists everything. The Makefile only wraps the commands below and `scripts/*.sh` — change the recipe at the source, not in the Makefile.
+- **Run (Core, CLI-only, no Xcode needed):** `swift test` from the repo root (runs the `ClipnestCoreTests` target defined in `Package.swift`). On Linux there is no host Swift: `make test-linux` runs it in the `clipnest-build` Docker image with a separate scratch volume for `.build` (host `.build` mixes static-stdlib and normal artifacts).
 - **Run (App smoke tests, if any):** `xcodebuild test -project ClipnestApp/ClipnestApp.xcodeproj -scheme ClipnestApp -destination 'platform=macOS'` after `xcodegen generate`.
 - UI is kept thin by design (spec: "UI kept thin; light smoke tests only") — the bulk of logic and nearly all unit tests live in `ClipnestCore` and run via `swift test` with zero GUI launch.
 - No feature ships without unit tests for the `ClipnestCore` logic it depends on. Mock side effects (event synthesis, filesystem where practical) so tests are deterministic and CI-safe — never synthesize real key events or touch `NSPasteboard` from a test. Store tests run against `InMemoryClipStore`/`InMemorySnippetStore` (the canonical in-memory store — see Persistence + D6), not a real on-disk DB.
@@ -120,3 +121,8 @@ This codebase has produced three instances, each of which cost hours and each of
 
 **A constraint on how to write these rules, not just which examples to pick:** argue from the case a reader can *see*. `presentSnippetEditor` works as the teaching example because the asymmetry sits two lines apart in one diff — macOS injects, Linux does not. Every other instance in this file needed a grep for readers to exist at all. A rule argued from the visible case gets followed; one argued from the invisible case gets nodded at.
 
+## Linux GTK UI: verify Wayland-specific behaviour on a real compositor (learned 2026-10-09)
+- **Popups beside a window must overlap it on Wayland.** mutter dismisses (`xdg_popup.popup_done`) a non-grabbing popup that does not overlap its parent; Xvfb/X11 never shows this. Keep the overlap in `PreviewAnchor.offset(isWayland:)` and check any new beside-the-window popover.
+- **Verify Wayland UI with headless mutter** (`mutter --headless --wayland`, watch `get_popup`/`configure`/`reposition`/`popup_done`), not only Xvfb. A test that cannot reach the Wayland path reads like a pass.
+- **Clipboard writes need keyboard focus on GNOME.** Write before hiding the window (`PasteDismissOrdering`), confirm via `changeCount`, bound the wait, never read the clipboard back from the GTK thread.
+- **GTK 4.6 `lines` is unreliable across newlines**; collapse text yourself before the label.

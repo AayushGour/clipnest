@@ -192,6 +192,20 @@ extension PickerWindow {
     return old.count
   }
 
+  /// T-ROWLINES1: wraps a row's text label and ellipsizes it at the end of the
+  /// `PickerLayoutLimits.rowTextMaxLines`th line, so a very long or multi-line
+  /// copy never makes the row (and the hover-preview anchor) arbitrarily tall.
+  /// Markup (search highlighting) is unaffected: the cap is a layout property
+  /// of the label, not of its text.
+  private func capRowTextLines(_ label: OpaquePointer) {
+    gtk_label_set_wrap(label, 1)
+    gtk_label_set_wrap_mode(label, PANGO_WRAP_WORD_CHAR)
+    gtk_label_set_lines(label, PickerLayoutLimits.rowTextMaxLines)
+    gtk_label_set_ellipsize(label, PANGO_ELLIPSIZE_END)
+    gtk_label_set_width_chars(label, PickerLayoutLimits.rowTextWidthChars)
+    gtk_label_set_max_width_chars(label, PickerLayoutLimits.rowTextWidthChars)
+  }
+
   /// - Parameter item: the raw model backing `content` — needed only for
   ///   `ItemRowActions.buttons(for:)`'s gating/labels and to capture into
   ///   each button's click closure (see `PickerWindow+RowActions.swift`).
@@ -207,7 +221,7 @@ extension PickerWindow {
 
     let label: OpaquePointer = gtk_label_new(nil)
     gtk_label_set_markup(label, content.markupText)
-    gtk_label_set_ellipsize(label, PANGO_ELLIPSIZE_END)
+    capRowTextLines(label)
     gtk_label_set_xalign(label, 0)
     gtk_widget_set_hexpand(label, 1)
     // Visual-parity pass: matches `ItemRow`'s unstyled (system `.body`,
@@ -263,7 +277,7 @@ extension PickerWindow {
 
     let bodyLabel: OpaquePointer = gtk_label_new(nil)
     gtk_label_set_markup(bodyLabel, content.markupBody)
-    gtk_label_set_ellipsize(bodyLabel, PANGO_ELLIPSIZE_END)
+    capRowTextLines(bodyLabel)
     gtk_label_set_xalign(bodyLabel, 0)
     gtk_widget_add_css_class(bodyLabel, "dim-label")
     // Visual-parity pass: matches `SnippetRow`'s `.caption` (~10pt) body
@@ -359,12 +373,86 @@ extension PickerWindow {
   /// `PickerWindow+Keyboard.swift`).
   func syncListBoxSelection(toIndex index: Int?) {
     guard let index else {
+      pendingScrollRowIndex = nil
       gtk_list_box_unselect_all(listBox)
       return
     }
     guard let row = gtk_list_box_get_row_at_index(listBox, index.gtkInt32) else { return }
     gtk_list_box_select_row(listBox, row)
+    // T-KBSCROLL1: arrow keys move the selection through the view model while
+    // keyboard focus stays in the search entry, so GTK never scrolls the row
+    // into view itself. Every selection change (arrow keys, wrap-around, a
+    // reconcile moving the selection, either tab) funnels through here, so
+    // this one call covers them all.
+    if scrollRowIntoView(row) {
+      // Done: a retry queued for an OLDER selection must not scroll back to it.
+      pendingScrollRowIndex = nil
+    } else {
+      pendingScrollRowIndex = index
+      pendingScrollAttempts = 0
+      scheduleScrollRetry()
+    }
   }
+
+  /// Scrolls the list minimally so the row is fully visible (see
+  /// ScrollIntoView.targetValue). False means the row has no allocation yet
+  /// (just built by a reconcile, layout has not run), so the caller must retry
+  /// after layout.
+  ///
+  /// Setting the adjustment fires "value-changed", i.e. handleAdjustmentChanged,
+  /// which pages in more rows near the bottom, so arrowing toward the end of
+  /// the loaded window keeps loading; a no-change result deliberately never
+  /// touches the adjustment. The hover preview needs no fix-up: its anchor is
+  /// in list-box coordinates and the list box moves with its rows, so it stays
+  /// level with the hovered row.
+  private func scrollRowIntoView(_ row: OpaquePointer) -> Bool {
+    let height = gtk_widget_get_height(row)
+    guard height > 0, let origin = gtkTranslate((0, 0), from: row, to: listBox) else {
+      return false
+    }
+    let adjustment = gtk_scrolled_window_get_vadjustment(scrolledWindow)
+    let current = gtk_adjustment_get_value(adjustment)
+    let target = ScrollIntoView.targetValue(
+      value: current, pageSize: gtk_adjustment_get_page_size(adjustment),
+      upper: gtk_adjustment_get_upper(adjustment), rowTop: origin.y, rowHeight: Double(height))
+    if target != current {
+      gtk_adjustment_set_value(adjustment, target)
+    }
+    return true
+  }
+
+  /// Retries scrollRowIntoView for the still-pending row from a short timeout,
+  /// roughly once per frame. An idle source cannot be relied on here: it can
+  /// fire repeatedly inside one frame, before GTK's layout phase has allocated
+  /// the freshly built rows, and burn all its attempts. Bounded
+  /// (maxScrollRetryAttempts ticks) so a window that never lays out (hidden)
+  /// cannot keep the source alive.
+  private func scheduleScrollRetry() {
+    guard pendingScrollSourceID == nil else { return }
+    pendingScrollSourceID = g_timeout_add_full(
+      G_PRIORITY_DEFAULT, Self.scrollRetryIntervalMs, pendingScrollTrampoline,
+      retainedTrampolineContext(self), releaseTrampolineContextSingleArg)
+  }
+
+  /// One frame at 60 Hz, rounded up.
+  private static let scrollRetryIntervalMs: UInt32 = 16
+
+  /// One tick of the retry. Returns true to keep the source.
+  fileprivate func retryPendingScroll() -> Bool {
+    pendingScrollAttempts += 1
+    if let index = pendingScrollRowIndex,
+      let row = gtk_list_box_get_row_at_index(listBox, index.gtkInt32),
+      !scrollRowIntoView(row), pendingScrollAttempts < Self.maxScrollRetryAttempts
+    {
+      return true
+    }
+    pendingScrollRowIndex = nil
+    pendingScrollSourceID = nil
+    return false
+  }
+
+  /// Ticks to wait for layout before giving up on a pending scroll.
+  private static let maxScrollRetryAttempts = 20
 
   func handleRowSelected(row: OpaquePointer?) {
     guard let row else { return }
@@ -443,3 +531,10 @@ private let adjustmentChangedTrampoline:
     guard let window = unretainedContext(data, as: PickerWindow.self) else { return }
     window.handleAdjustmentChanged(adjustment)
   }
+
+/// GSourceFunc (timeout) for the pending scroll-into-view retry. gboolean: nonzero keeps
+/// the source, zero removes it.
+private let pendingScrollTrampoline: @convention(c) (UnsafeMutableRawPointer?) -> Int32 = { data in
+  guard let window = unretainedContext(data, as: PickerWindow.self) else { return 0 }
+  return window.retryPendingScroll() ? 1 : 0
+}

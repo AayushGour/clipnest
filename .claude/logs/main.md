@@ -6,3 +6,14 @@
 - 2026-10-05 [T-REL2] VM install.sh run (user typed sudo in VM gnome-terminal): rc=0; dpkg: clipnest/clipnest-ocr/clipnest-ocr-data 1.0.0; /usr/bin/clipnest --version 1.0.0, ping ok, uinput + IBus tier + shellExtensionKeybinding, no ERROR/FAULT lines.
 - 2026-10-06 [T97] SEO name collision (other ClipNest products on the Mac App Store, Microsoft Store, tmpacc100.github.io, thewonderjoy, myerwang/clipnest, plus clipnest.org/.video/.co). `gh repo edit` set description (macOS & Linux), homepage https://aayushgour.github.io/clipnest/, 20 topics — read back: 20 topics, homepage set. docs/_includes/seo-jsonld.html: alternateName[5], operatingSystem macOS+Linux, softwareVersion 0.9.0→1.0.0 (project.yml MARKETING_VERSION, debian/changelog). docs/pages/faq.md: "Is this the same as the other apps called ClipNest?". README TODO(T78) → site link. `bundle exec jekyll build` clean; built index.html JSON-LD json.loads OK (SoftwareApplication alternateName/OS/1.0.0), faq entry rendered. Release v1.0.0 deferred to merge→main (release.yml auto-tags; manual tag would skip dmg+linux builds). Site changes go live only once docs/ reaches main.
 - 2026-10-06 [T97] FAQ: dropped stale "v0.9.0, about a month old"; "What macOS versions" → "What systems" with Linux (Ubuntu 22.04/24.04 GNOME, X11/Wayland, amd64/arm64, per README). jekyll build clean, entry rendered.
+- 2026-10-09 [T-PREVIEWSIDE1] tester PASS → board done (evidence logs/tester.md#T-PREVIEWSIDE1); filed T-PREVIEWFIT1 (P3) for no-room image preview
+- 2026-10-09 [T-TERMCOPY1A] tester PASS → done; T-TERMCOPY1 blocked on user live repro; fix/linux-1.0.1 integrates T-PREVIEWSIDE1+T-TERMCOPY1A
+- 2026-10-09 [T-TERMCOPY1A/T-PREVIEWSIDE1] built clipnest 1.0.1~local1 (noble, from fix/linux-1.0.1 @5fad24e) and installed on user's machine; capture probe saved + new diagnostic log lines confirmed live
+- 2026-10-09 [T-KBSCROLL1/T-PASTEORDER1] installed 1.0.1~local3 (90ae2cb) on user's machine at user request, BEFORE review PASS
+- 2026-10-09 [PR] pushed linux-1.0.1-fixes (34a147a + board/log commits) and opened draft PR #11 to main
+- 2026-10-09 [PR#11] rewrote 18 PR commits' author/committer Debarun Pal → Aayush Gour <ag14906@gmail.com> at user request (tree identical), force-pushed; repo-local git identity set to Aayush Gour
+- 2026-10-09 [T-AUTHORFIX1] rewrote main (20b3ae6→3d15dcf author Aayush Gour), main 4e6b044→3562a9a, v1.0.0 cc2055b→52f3d32, PR#11 →def7470; Release (Linux) disabled 17:37:39Z→re-enabled 17:38:50Z, no Linux run, assets unchanged
+- 2026-10-09 [PR#11] cherry-picked 7ef4146(re-authored)/d757cba/b783afe/886f35d + board/log commit onto linux-1.0.1-fixes → f73b39d (23 commits, all AayushGour), PR body updated
+- 2026-10-09 installed 1.0.1~local7 (f73b39d, PR #11 head)
+- 2026-10-09 [T-MAKE1] Makefile d5b0ce1 pushed to PR #11
+- 2026-10-09 [T-DOCS1] docs pass 41f9db2/e8f9a36; pushing to PR #11 and marking ready; then full machine cleanup per user

@@ -26,19 +26,26 @@ func makeTestPickerViewModel(
   // `NotifyingClipStore.changes` (built from the SAME `clipStore` passed
   // above) to exercise the "an external mutation refreshes an open picker"
   // path. See `PickerViewModelStoreChangeTests.swift`.
-  storeChanges: ClipStoreChangeBroadcaster? = nil
+  storeChanges: ClipStoreChangeBroadcaster? = nil,
+  paster: Paster? = nil,
+  pasteDismissOrdering: PasteDismissOrdering = .dismissBeforeWrite,
+  // Explicit in the factory (test code): selection preview OFF unless a test opts in.
+  showPreviewOnKeyboardSelection: @escaping @MainActor () -> Bool = { false }
 ) -> PickerViewModel {
   PickerViewModel(
     clipStore: clipStore,
     snippetStore: snippetStore,
     pasteboard: pasteboard,
     blobStore: blobStore,
-    paster: Paster(
-      pasteboard: FakePasteboardWriting(),
-      eventSynthesizer: FakeEventSynthesizing(),
-      isAccessibilityGranted: { false }
-    ),
+    paster: paster
+      ?? Paster(
+        pasteboard: FakePasteboardWriting(),
+        eventSynthesizer: FakeEventSynthesizing(),
+        isAccessibilityGranted: { false }
+      ),
     frontmostAppTracker: FrontmostAppTracker(provider: FakeFrontmostAppReferenceProviding()),
+    pasteDismissOrdering: pasteDismissOrdering,
+    showPreviewOnKeyboardSelection: showPreviewOnKeyboardSelection,
     storeChanges: storeChanges
   )
 }

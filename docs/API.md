@@ -602,7 +602,11 @@ public struct Paster: Sendable {
     synthesizesWithoutVerifiedTarget: Bool = false
   )
 
-  public func paste(_ content: PasteContent, targetingFrontmostApp frontmostApp: FrontmostAppRef?) async throws
+  public func paste(
+    _ content: PasteContent,
+    targetingFrontmostApp frontmostApp: FrontmostAppRef?,
+    onPasteboardWrite: (@MainActor @Sendable (Int) async -> Void)? = nil
+  ) async throws
 }
 
 public enum PasteError: Error, Equatable, Sendable {
@@ -624,10 +628,14 @@ ever sets it), `paste(_:targetingFrontmostApp:)` stops cleanly after the
 pasteboard write: **no error, no crash** — this is the documented fallback
 (see `.claude/coding-standards.md`: "Paster must degrade to 'item on
 clipboard, no synthesized paste' rather than throw/crash when Accessibility
-is missing"). The pasteboard write itself is synchronous, before any
-suspension point — read `pasteboard.changeCount` right after calling
-`paste` (e.g. to feed `ClipboardMonitor.ignore(changeCount:)`) and you're
-guaranteed to observe the write's result even though the method is `async`.
+is missing"). The pasteboard write completes before `paste` returns, but callers
+that need the post-write `changeCount` (e.g. to feed
+`ClipboardMonitor.ignore(changeCount:)`) should take it from the
+`onPasteboardWrite` callback, which receives it right after the write.
+`onPasteboardWrite` is `async` and is awaited to completion BEFORE
+`synthesisDelay` starts: the Linux picker uses it to confirm the write
+landed and only then hide itself (`PasteDismissOrdering.writeBeforeDismiss`),
+so a slow callback delays the keystroke by design.
 
 `synthesizesWithoutVerifiedTarget` (new) is the seam the Linux port uses to
 fix a real P0 (T-WLPASTE-NIL1): when `true` AND no `frontmostApp` target

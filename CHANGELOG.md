@@ -10,7 +10,54 @@ at any time.
 
 ## [Unreleased]
 
-No unreleased changes.
+### Added
+
+- New setting, **Settings -> General -> "Show preview when selecting with the
+  keyboard"** (off by default): when on, moving through the picker list with the
+  arrow keys also shows the item preview beside the highlighted row, not only
+  when hovering with the pointer. Hovering a row still takes priority.
+- Linux: the hover preview now also works on the Snippets tab (it shows the
+  snippet's body), and the keyboard-selection preview setting is honoured by the
+  GTK picker, anchored beside the selected row.
+- Linux: a copy that does not reach history now leaves a log line saying why
+  (the owner's offered targets, a refused or timed-out conversion, a privacy or
+  pause rejection). Previously every such drop was silent. The lines carry
+  metadata only (type names, never content, and no source id on privacy
+  rejections). See [docs/features.md](docs/features.md#1-clipboard-capture).
+- A top-level `Makefile` wrapping the test, lint, build, `.deb`, install and
+  dev flows (`make` lists the targets; see the README's "Make targets").
+
+### Fixed
+
+- Pressing Enter twice quickly (or double-clicking) on a picker row now pastes
+  once. The guard against a second paste while one is being written and
+  confirmed applies on both platforms; on Linux the picker stays visible during
+  that wait, so it was reachable.
+- Linux: the hover preview no longer visibly jumps (for example from the left of
+  the picker to the right) when it appears or changes. It is placed once at its
+  final position and all previews share one width.
+- Linux: a very long or multi-line copy no longer makes its picker row tall. Rows
+  show at most 3 lines (ellipsized), the picker window is a little taller, and
+  the hover preview is height-bounded and scrolls inside itself.
+- Linux (Wayland): the hover preview appeared nowhere on GNOME Wayland since the
+  side-by-side placement change: the compositor dismissed a preview that did not
+  overlap the picker window. It now overlaps the window edge by a couple of
+  pixels and shows, level with the hovered row.
+- Linux: moving through the picker list with the arrow keys now scrolls the list
+  so the selected row always stays in view (it used to move off-screen).
+- Linux (Wayland): pressing Enter on a picker row pasted the previously copied
+  clipboard instead of the selected item. The picker was hidden before the
+  clipboard write, and GNOME's compositor ignores a clipboard write from a
+  window that has lost keyboard focus. The write now happens first, is
+  confirmed, and only then is the picker hidden. macOS behaviour is unchanged.
+- Linux: the hover preview now opens beside the picker window, level with the
+  hovered row (on whichever side has room), as on macOS, instead of at the
+  mouse cursor.
+- Linux: a clipboard owner that answered a text request with zero bytes was
+  saved as a blank history row. It is now treated as "nothing to capture".
+- Linux: a text copy whose preferred text type comes back empty, refused or
+  undecodable now falls back to the owner's other advertised text types,
+  instead of being dropped.
 
 ## [1.0.0] - 2026-10-06
 

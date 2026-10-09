@@ -146,8 +146,8 @@ final class LinuxAppEnvironment {
   /// is `var`, not `let`, with an implicit-`nil` Optional default).
   private var clipStoreChangeSubscription: ClipStoreChangeSubscription?
 
-  /// `PickerViewModel.isVisible` is `private` (out of this task's scope to
-  /// widen), and the minimal `PickerWindow` contract exposes no visibility
+  /// `PickerViewModel.isVisible` is `private(set)` — readable (internal) only
+  /// inside the `ClipnestViewModels` module, so not from this one — and the minimal `PickerWindow` contract exposes no visibility
   /// getter either — every trigger (D-Bus, tray, hotkey) funnels through
   /// `showPicker`/`hidePicker`/`togglePicker` below, which keep this box
   /// current; `PickerWindow`'s own `onDismiss` (fired for a GTK-side
@@ -422,6 +422,13 @@ final class LinuxAppEnvironment {
     let viewModel = PickerViewModel(
       clipStore: clipStore, snippetStore: snippetStore, pasteboard: sharedWriter,
       blobStore: blobStore, paster: paster, frontmostAppTracker: frontmostAppTracker,
+      // T-PASTEORDER1: mutter drops a clipboard write from a client that has
+      // already lost keyboard focus — write first, hide second.
+      pasteDismissOrdering: .writeBeforeDismiss(
+        confirmationTimeout: PasteDismissOrdering.defaultConfirmationTimeout),
+      showPreviewOnKeyboardSelection: { [settingsStore] in
+        settingsStore.showPreviewOnKeyboardSelection
+      },
       // T-RT2: lets an already-open picker re-query itself when SOMETHING
       // ELSE mutates this store — a Settings "Clear All History…", or
       // background retention — without either of those call sites needing

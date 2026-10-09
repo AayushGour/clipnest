@@ -314,6 +314,21 @@ public final class PickerViewModel: ObservableObject {
   /// its mutator, `setPreviewTarget(_:)`, now lives in that file, and
   /// `private` is file-scoped in Swift.
   @Published public var previewTargetID: ClipItem.ID?
+  /// Why `previewTargetID` is what it is (T-PREVIEWSEL1): `.hover` = the
+  /// pointer is over that row (anchor the preview to the pointer/row under
+  /// it), `.selection` = the keyboard-highlighted row (anchor to the
+  /// selected row). `nil` exactly when `previewTargetID` is `nil`. Always
+  /// written BEFORE `previewTargetID` (see `setPreviewTarget`), so a view
+  /// reacting to a `previewTargetID` change reads a consistent source. Not
+  /// `private(set)` for the same file-scope reason as `previewTargetID`;
+  /// views must treat it as read-only.
+  @Published public internal(set) var previewTargetSource: PreviewTargetSource?
+  /// macOS view-reported: the keyboard-selected row's vertical centre in the
+  /// picker window's top-down coordinate space, kept current by `PickerView`
+  /// so `ItemPreviewController` can anchor a `.selection` preview beside that
+  /// row. Deliberately NOT `@Published` (it changes on every scroll tick and
+  /// nothing renders from it). Unused on Linux.
+  public var selectedRowMidY: CGFloat?
   /// The current window of Snippets rows loaded from `SnippetStore`.
   @Published public private(set) var snippetRows: [Snippet] = []
   @Published public var selectedSnippetID: Snippet.ID?
@@ -459,6 +474,10 @@ public final class PickerViewModel: ObservableObject {
   /// off this. Still only ever used from within `PickerViewModel`/its
   /// extensions.
   let pasteboard: any PasteboardWriting
+  /// Whether a paste hides the picker before or after the pasteboard write —
+  /// required, per-platform; see `PasteDismissOrdering`. Read only from
+  /// `PickerViewModel+Paste.swift`.
+  let pasteDismissOrdering: PasteDismissOrdering
   /// Used by `ItemRow` to load thumbnail bytes for `.image` rows (via
   /// `BlobStore.read(blobPath:)`) — the actual thumbnail-loading logic lives
   /// there, not in this view model. Defaults to a real `BlobStore` pointed
@@ -479,7 +498,13 @@ public final class PickerViewModel: ObservableObject {
   /// True between `willShow()` and `didHide()` — gates whether a live
   /// capture (`handleNewCapture()`) bothers requerying at all; nothing
   /// re-queries a hidden picker.
-  private var isVisible = false
+  private(set) var isVisible = false
+  /// `true` from `select`/`pasteSnippet` accepting a paste until it finishes
+  /// (or fails). Under `.writeBeforeDismiss` the picker stays interactive for
+  /// the confirmation window, so a second Enter would otherwise start a second
+  /// paste and send two keystrokes. Read/written only from
+  /// `PickerViewModel+Paste.swift`.
+  var isPasteInFlight = false
 
   /// The row currently under the pointer, reported by `ItemRow.onHover` via
   /// `hoverItem(_:)` — `nil` when the pointer isn't over any row. Not
@@ -501,6 +526,19 @@ public final class PickerViewModel: ObservableObject {
   /// `cancelPreviewAndHide()` — see `PickerViewModel+Preview.swift`). Not
   /// `private` — see `hoveredItemID`'s doc comment above for why.
   var previewTask: Task<Void, Never>?
+
+  var selectionPreviewArmed = false
+  /// Live read of `SettingsStore.showPreviewOnKeyboardSelection` — required
+  /// at init, no default (cross-platform seam rule, coding-standards.md).
+  /// Read on every resolve, so the Settings toggle applies immediately.
+  /// T-PREVIEWSEL1. `selectionPreviewArmed` (above) is whether an explicit
+  /// keyboard selection move has happened since the picker opened / the tab
+  /// or search last changed (set by `selectionChangedForPreview()`); it gates
+  /// the selection preview so a freshly opened picker's default-selected row
+  /// never previews on its own. Cleared by `willShow()`, `didHide()`, tab
+  /// switches and search-text changes. Neither is `private` — see
+  /// `hoveredItemID`'s doc comment for why.
+  let showPreviewOnKeyboardSelection: @MainActor () -> Bool
 
   /// The Rows (History/Pinned) and Snippets paged-query pipelines — see this
   /// file's top "DRY follow-up" doc comment and `PagedQuery.swift`. Each
@@ -532,6 +570,11 @@ public final class PickerViewModel: ObservableObject {
     case selectNear(previousIndex: Int?)
   }
 
+  /// - Parameter showPreviewOnKeyboardSelection: T-PREVIEWSEL1 — live read of
+  ///   `SettingsStore.showPreviewOnKeyboardSelection`; REQUIRED (no default)
+  ///   so a platform that forgets to wire it fails to build rather than
+  ///   shipping a Settings toggle that does nothing. Tests that don't care
+  ///   write `{ false }` explicitly.
   /// - Parameter storeChanges: T-RT2 — the SAME `NotifyingClipStore.changes`
   ///   broadcaster wrapping `clipStore`, if the composition root wired one
   ///   up (`AppEnvironment`/`LinuxAppEnvironment` always do; test/preview
@@ -547,6 +590,8 @@ public final class PickerViewModel: ObservableObject {
     blobStore: BlobStore = BlobStore(baseDirectory: BlobStore.defaultBaseDirectory()),
     paster: Paster = Paster(),
     frontmostAppTracker: FrontmostAppTracker = FrontmostAppTracker(),
+    pasteDismissOrdering: PasteDismissOrdering,
+    showPreviewOnKeyboardSelection: @escaping @MainActor () -> Bool,
     storeChanges: ClipStoreChangeBroadcaster? = nil
   ) {
     self.clipStore = clipStore
@@ -555,6 +600,8 @@ public final class PickerViewModel: ObservableObject {
     self.blobStore = blobStore
     self.paster = paster
     self.frontmostAppTracker = frontmostAppTracker
+    self.pasteDismissOrdering = pasteDismissOrdering
+    self.showPreviewOnKeyboardSelection = showPreviewOnKeyboardSelection
     storeChangesSubscription = storeChanges?.subscribe { [weak self] change in
       Task { @MainActor in self?.handleExternalStoreChange(change) }
     }
@@ -598,6 +645,7 @@ public final class PickerViewModel: ObservableObject {
   /// active, matching ordinary tabbed-UI expectations.
   public func willShow() {
     isVisible = true
+    selectionPreviewArmed = false
     currentSearchText = ""
     isSearching = false
     query = SearchQuery()
@@ -678,6 +726,9 @@ public final class PickerViewModel: ObservableObject {
   public func searchTextChanged(_ text: String) {
     guard text != currentSearchText else { return }
     currentSearchText = text
+    // Typing re-seats the selection on the first result; that is not an
+    // explicit keyboard move, so drop any selection preview.
+    disarmSelectionPreview()
     runActiveTabQuery(policy: .hardReset, debounced: true)
   }
 
@@ -991,14 +1042,14 @@ public final class PickerViewModel: ObservableObject {
 
   /// The `ClipItem` currently highlighted (`selectedItemID`), if it's both
   /// set and still present in `rows`.
-  private var highlightedItem: ClipItem? {
+  var highlightedItem: ClipItem? {
     guard let selectedItemID else { return nil }
     return rows.first { $0.id == selectedItemID }
   }
 
   /// The `Snippet` currently highlighted (`selectedSnippetID`), if it's
   /// both set and still present in `snippetRows`. Mirrors `highlightedItem`.
-  private var highlightedSnippet: Snippet? {
+  var highlightedSnippet: Snippet? {
     guard let selectedSnippetID else { return nil }
     return snippetRows.first { $0.id == selectedSnippetID }
   }

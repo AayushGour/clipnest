@@ -1273,3 +1273,28 @@ Clipnest must never request clipboard BYTES (or, on GDK X11, even TARGETS) for i
 ## Decision (2026-10-03): GNOME clipboard-manager restore is treated as the concealed copy it restores
 mutter re-publishes a released owner's text as a single-MIME owner, stripping `x-kde-passwordManagerHint`. `ClipboardManagerRestoreGuard` (presence-only, per-serial memo, serial read before targets) treats that restore as concealed; fails closed (single-type copies skipped while armed, incl. GTK4 TextView copies). Known limit: a hinted owner appearing and releasing within one 0.4 s poll is never seen.
 
+## Decisions (2026-10-09): Linux 1.0.1 fix round (branch `linux-1.0.1-fixes`, PR #11)
+
+### D107 — `PasteDismissOrdering` is required, per platform; Linux confirms the write, then hides
+`PickerViewModel.init` takes `pasteDismissOrdering` with no default, so a missing wiring is a build error. macOS uses `.dismissBeforeWrite` (hide, write, synthesize: the synthetic keystroke must not land in Clipnest's own search field). Linux uses `.writeBeforeDismiss(confirmationTimeout:)`: write, wait for the pasteboard `changeCount` to move (bound 250 ms, `PasteDismissOrdering.defaultConfirmationTimeoutMs`), then hide, then `Paster` sleeps `synthesisDelay` and synthesizes Ctrl+V. Reason: mutter ignores `wl_data_device.set_selection` from a client without keyboard focus, so a write issued after the hide was silently dropped and Enter pasted the previous clipboard. A timeout logs a NOTICE (`clipboard write not confirmed ...`) and hides anyway (a compositor that never reports the change must not pin the picker open). `Paster.paste`'s `onPasteboardWrite` is now `async` and awaited before `synthesisDelay`. Rejected: a fixed sleep (timing guess), reading the clipboard back (deadlocks the GTK thread, see the 2026-10-03 self-write decision).
+
+### D108 — The paste in-flight guard is cross-platform
+`isPasteInFlight` makes `select`/`pasteSnippet` ignore calls while a paste is resolving, writing, confirming and dispatching. A double Enter pastes once. It lives in the shared view model, not the Linux layer, because the macOS path has the same window (shorter). The GTK `pasteAttemptPendingTimeoutMs` window is 400 ms content budget + 250 ms confirmation = 650 ms.
+
+### D109 — The Wayland hover preview must overlap its parent window
+mutter sends `xdg_popup.popup_done` (~30 ms after the first commit) to a non-grabbing popup whose geometry does not overlap its parent's. Measured on headless mutter 46: left edge at window-right + 8 or + 1 dismissed every time, any overlap survived. `PreviewAnchor.offset(isWayland:)` is therefore -2 px on Wayland and the visible +8 px gap on X11. Any new Linux popup/popover placed beside a window needs the same check on headless mutter, not just Xvfb.
+
+### D110 — Keyboard-selection preview: opt-in setting, required live-read closure, arming rules
+`SettingsStore.showPreviewOnKeyboardSelection` (default OFF, Settings -> General on both platforms). `PickerViewModel.init` takes a required `showPreviewOnKeyboardSelection: @MainActor () -> Bool` (live read; no default so an unwired setting cannot silently do nothing). Contract: the view calls `selectionChangedForPreview()` after an Up/Down move; `previewTargetSource` (`.hover`/`.selection`) says which row to anchor to. Arming: only an arrow move arms it (opening the picker, search-text changes and tab switches do not); a hovered row wins; a pointer over the popover wins; leaving hover falls back to the selection; setting OFF means selection never previews.
+
+### D111 — Linux preview re-map policy, shared width and height bound
+A mapped preview is popped down, content set, then popped up again only when the target or anchor changes (a re-map no longer resets hover state). Updating an open popup in place made GTK send `xdg_popup.reposition` per size change and previews of different widths landed on opposite sides. All previews share `previewMinContentWidth` (420 px) and the content is capped at `previewMaxContentHeight` (400 px) inside a `GtkScrolledWindow`; the popover's own motion controller feeds `previewHoverChanged`.
+
+### D112 — Row text is collapsed before the label; Linux picker is 480 px tall
+GTK 4.6's `lines` cap is unreliable across explicit newlines (a 200-line copy rendered every line). `RowDisplayText.collapsed` folds whitespace runs and caps at 360 characters before the label, which is then limited to 3 lines and ellipsized. Search highlighting runs on the collapsed text. Linux `PickerLayoutLimits.windowDefaultHeight` = 480 (macOS 420, width unchanged).
+
+### D113 — Capture diagnostics are metadata only; zero bytes is "no payload"; text types fall back
+Every capture that ends without an item logs a metadata-only line (type names, serial, pause flag; never content). Privacy rejections do not log the source id. A text conversion that returns zero bytes is "no payload" (never a blank row). Text capture tries every advertised text type in priority order and logs one line per type that fails. Reader for these: `journalctl --user -t app.clipnest.Clipnest`.
+
+### D114 — Repository identity and history
+This repo's local git identity is Aayush Gour <ag14906@gmail.com>. On 2026-10-09, with the user's authorization, the "release 1.0.0" commit was re-authored, `main` was force-rewritten and the `v1.0.0` tag moved. Commit hashes recorded before that date (in logs, board, older notes) may no longer exist on `main`; trust `git log`, not an old hash.

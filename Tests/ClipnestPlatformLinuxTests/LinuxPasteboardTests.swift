@@ -338,4 +338,79 @@ struct LinuxPasteboardTests {
     #expect(pasteboard.availableTypes == [.png])
     #expect(pasteboard.data(forType: .png) == nil)
   }
+
+  // MARK: - T-TERMCOPY1: terminal copies
+
+  /// The TARGETS list a GTK X11 owner (and the user's real GNOME Terminal
+  /// session, 2026-10-09) offers, as `X11ClipboardConnection` caches it —
+  /// bookkeeping atoms already stripped by `IgnoredTargetsFilter`.
+  @Test("A GTK-style terminal owner's three text targets are captured as text")
+  func terminalOwnerTextTargetsAreCaptured() {
+    let connection = FakeX11SelectionConnecting()
+    connection.targets = IgnoredTargetsFilter.filter([
+      "UTF8_STRING", "text/plain;charset=utf-8", "text/plain;charset=UTF-8",
+      "TARGETS", "SAVE_TARGETS",
+    ])
+    connection.payloads["text/plain;charset=utf-8"] = Data("copied from a terminal".utf8)
+    let pasteboard = LinuxPasteboard(connection: connection)
+
+    #expect(pasteboard.availableTypes == [.string])
+    #expect(pasteboard.string(forType: .string) == "copied from a terminal")
+  }
+
+  /// mutter's XWayland bridge for a native-Wayland GNOME Terminal copy lists
+  /// several text atoms TWICE (measured 2026-10-09 on GNOME 46) — duplicates
+  /// must neither confuse the priority pick nor the restore guard.
+  @Test("A bridged native-Wayland terminal copy, with duplicate atoms, is captured as text")
+  func bridgedWaylandTerminalCopyIsCaptured() {
+    let connection = FakeX11SelectionConnecting()
+    connection.targets = IgnoredTargetsFilter.filter([
+      "text/plain", "text/plain;charset=utf-8", "STRING", "text/plain", "TEXT",
+      "COMPOUND_TEXT", "UTF8_STRING", "text/plain;charset=utf-8", "TARGETS", "TIMESTAMP",
+    ])
+    connection.payloads["text/plain;charset=utf-8"] = Data("wayland terminal text".utf8)
+    let pasteboard = LinuxPasteboard(connection: connection)
+
+    #expect(pasteboard.availableTypes == [.string])
+    #expect(pasteboard.string(forType: .string) == "wayland terminal text")
+  }
+
+  /// A conversion that succeeds with ZERO bytes used to surface as an empty
+  /// string, which `ClipboardMonitor` stored as a blank history row (a text
+  /// row with an empty preview, seen on real hardware). It is "no payload".
+  @Test("A text conversion that returns zero bytes is no payload, not an empty string")
+  func emptyTextPayloadIsNoPayload() {
+    let connection = FakeX11SelectionConnecting()
+    connection.targets = ["UTF8_STRING", "text/plain;charset=utf-8"]
+    connection.payloads["text/plain;charset=utf-8"] = Data()
+    let pasteboard = LinuxPasteboard(connection: connection)
+
+    #expect(pasteboard.string(forType: .string) == nil)
+    #expect(PasteboardReader().pullRawPayload(from: pasteboard) == nil)
+  }
+
+  /// The owner answers its top-priority text type with nothing but serves a
+  /// later one: the copy must survive, not turn the blank row into a missing one.
+  @Test("An empty top-priority text type falls back to the next advertised type")
+  func emptyTopTextTypeFallsBackToNextType() {
+    let connection = FakeX11SelectionConnecting()
+    connection.targets = ["UTF8_STRING", "text/plain;charset=utf-8"]
+    connection.payloads["text/plain;charset=utf-8"] = Data()
+    connection.payloads["UTF8_STRING"] = Data("served by the second choice".utf8)
+    let pasteboard = LinuxPasteboard(connection: connection)
+
+    #expect(pasteboard.string(forType: .string) == "served by the second choice")
+  }
+
+  @Test("A refused or undecodable top text type falls back to the next advertised type")
+  func failedTopTextTypeFallsBackToNextType() {
+    let connection = FakeX11SelectionConnecting()
+    connection.targets = ["text/plain;charset=utf-8", "UTF8_STRING", "STRING"]
+    // utf-8 type: no entry (refused); UTF8_STRING: invalid UTF-8; STRING: Latin-1 "cé".
+    connection.payloads["UTF8_STRING"] = Data([0xFF, 0xFE])
+    connection.payloads["STRING"] = Data([0x63, 0xE9])
+    let pasteboard = LinuxPasteboard(connection: connection)
+
+    #expect(pasteboard.string(forType: .string) == "c\u{E9}")
+  }
 }

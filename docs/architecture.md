@@ -243,7 +243,7 @@ This is the largest area of the App target. Responsibilities split cleanly betwe
 | `PickerViewModel` | `UI/Picker/PickerViewModel.swift:166-1218` | `@MainActor ObservableObject` — all picker state, the async query pipeline, select/paste/pin/delete/snippet-CRUD actions. |
 | `PagedQuery<Element>` | `UI/Picker/PagedQuery.swift:49-231` | `@MainActor` generic paged-query engine (review #6 DRY follow-up) — owns paging (`PageState`: offset/hasMore), the generation-counter race guard, and the query/load-more `Task` lifecycle shared by `PickerViewModel`'s two pipelines (`rowsQuery`/`snippetsQuery`). |
 | `ItemRow` / `SnippetRow` | `UI/Picker/ItemRow.swift`, `UI/Picker/SnippetRow.swift` | One row each, kind-specific leading icon/thumbnail, trailing action buttons, context menu, search-match highlighting. |
-| `ItemPreview` / `ItemPreviewController` | `UI/Picker/ItemPreview.swift`, `UI/Picker/ItemPreviewController.swift:21-139` | The hover popover (content view + non-key `NSPanel` host). |
+| `ItemPreview` / `ItemPreviewController` | `UI/Picker/ItemPreview.swift`, `UI/Picker/ItemPreviewController.swift:21-139` | The hover popover (content view + non-key `NSPanel` host). `update(item:blobStore:besideAnchor:atVerticalCenter:onPreviewHover:)` takes the screen Y to centre on: the pointer for a hover preview, the selected row for a keyboard-selection preview. |
 | `ItemThumbnailCache` | `UI/Picker/ItemThumbnailCache.swift:18-32` | `NSCache`-backed, content-address-keyed thumbnail cache shared by every row. |
 | `SnippetEditorWindow` / `SnippetFormView` | `UI/Picker/SnippetEditorWindow.swift:37-163`, `UI/Picker/SnippetFormView.swift` | A real, activating, titled `NSWindow` for snippet create/edit (deliberately **not** a `.sheet()` on the non-activating picker — see below). |
 | `TabSwitcher` | `UI/Picker/TabSwitcher.swift:16-60` | The `PickerTab` enum (`.history`/`.pinned`/`.snippets`) + segmented control. |
@@ -260,9 +260,9 @@ This is the largest area of the App target. Responsibilities split cleanly betwe
 - Two independent windowed query pipelines (`rows: [ClipItem]` for History/Pinned, `snippetRows: [Snippet]` for Snippets), each with its own paging (`pageSize = 75`, `UI/Picker/PickerViewModel.swift:174`), 400ms search debounce (`UI/Picker/PickerViewModel.swift:180`), and a generation counter guaranteeing only the most-recently-started query can ever land in published state — as of the review #6 DRY follow-up, that paging/generation state is no longer duplicated per pipeline: it lives once in `PagedQuery<Element>` (`PagedQuery.generation`/`beginNewGeneration()`, `UI/Picker/PagedQuery.swift:73, 111-117`), and `PickerViewModel` just holds one instance per pipeline, `rowsQuery`/`snippetsQuery` (`UI/Picker/PickerViewModel.swift:365-366`).
 - Select-to-paste (`select(_:plainText:)` → `pasteContent(for:plainText:)` → `pasteAndDismiss(_:)`, `UI/Picker/PickerViewModel.swift:875-978`) — see [§4.2](#42-hotkey--picker--select--paste).
 - Pin/delete/snippet CRUD, each of which mutates via the store then re-queries the current window depth (`refreshRowsWindow`/`refreshSnippetsWindow`) rather than collapsing back to page 0 (`UI/Picker/PickerViewModel.swift:622-637, 693-705`).
-- Hover-driven preview resolution (`hoverItem(_:)`/`previewHoverChanged(_:)`/`resolvePreview()`), decoupled from keyboard selection (`UI/Picker/PickerViewModel.swift:740-805`).
+- Hover-driven preview resolution (`hoverItem(_:)`/`previewHoverChanged(_:)`/`resolvePreview()`), keyboard selection joins in only when the opt-in `showPreviewOnKeyboardSelection` setting is on, via `selectionChangedForPreview()` and `previewTargetSource`; a hovered row (or the pointer over the popover) always wins (`UI/Picker/PickerViewModel.swift:740-805`).
 
-It depends on `ClipStore`, `SnippetStore`, `PasteboardWriting`, `BlobStore`, `Paster`, and `FrontmostAppTracker` — all injected via its initializer (`UI/Picker/PickerViewModel.swift:391-405`) — plus five closures set post-construction by `AppEnvironment` (`dismiss`, `suppressOwnPasteboardWrite`, `presentSnippetEditor`, `updatePreview`) to avoid a construction-order cycle (`UI/Picker/PickerViewModel.swift:289-313`).
+It depends on `ClipStore`, `SnippetStore`, `PasteboardWriting`, `BlobStore`, `Paster`, and `FrontmostAppTracker` — all injected via its initializer (`UI/Picker/PickerViewModel.swift:391-405`; since 1.0.1 it also takes two required, default-less parameters: `pasteDismissOrdering: PasteDismissOrdering` and `showPreviewOnKeyboardSelection: @MainActor () -> Bool`, a live read of the setting) — plus five closures set post-construction by `AppEnvironment` (`dismiss`, `suppressOwnPasteboardWrite`, `presentSnippetEditor`, `updatePreview`) to avoid a construction-order cycle (`UI/Picker/PickerViewModel.swift:289-313`).
 
 ---
 
@@ -340,7 +340,7 @@ sequenceDiagram
     User->>VM: clicks a row / presses Return
     VM->>VM: pasteContent(for: item, plainText:) -> PasteContent
     VM->>Tracker: consume() -> FrontmostAppRef?
-    VM->>VM: dismiss()  (panel hides FIRST, before Paster starts its delay)
+    VM->>VM: dismiss()  (macOS: panel hides FIRST, before Paster starts its delay. Linux: the clipboard is written and confirmed BEFORE dismiss, because mutter drops a write from an unfocused client — see PasteDismissOrdering)
     VM->>Paster: paste(content, targetingFrontmostApp:)
     Paster->>PB: write content synchronously (string/data/rtf+string)
     alt Accessibility granted AND target available

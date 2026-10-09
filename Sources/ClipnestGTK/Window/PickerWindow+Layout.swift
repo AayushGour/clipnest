@@ -175,6 +175,16 @@ extension PickerWindow {
   func buildPreviewPopover() {
     gtk_widget_set_parent(previewPopover, listBox)
     gtk_popover_set_autohide(previewPopover, 0)
+    // Beside the window, like macOS (`ItemPreviewController`): the anchor is a
+    // full-window-width band (`PreviewAnchor`), so `GTK_POS_RIGHT` puts the
+    // popover just outside the window's right edge. GTK cannot know the
+    // window's screen position (Wayland), so the left/right choice is left to
+    // the compositor: popovers are xdg_popups whose positioner has flip
+    // constraints, so with no room on the right it flips to the left.
+    gtk_popover_set_position(previewPopover, GTK_POS_RIGHT)
+    gtk_popover_set_has_arrow(previewPopover, 0)
+    gtk_popover_set_offset(
+      previewPopover, PreviewAnchor.offset(isWayland: gdkDisplayIsWayland()), 0)
 
     let previewBox: OpaquePointer = gtk_box_new(GTK_ORIENTATION_VERTICAL, PickerWindow.outerSpacing)
     gtk_widget_set_size_request(previewImage, ThumbnailBounds.previewMaxPixelSize.gtkInt32, -1)
@@ -215,6 +225,18 @@ extension PickerWindow {
     gtk_label_set_max_width_chars(previewOCRTextLabel, PickerWindow.previewTextMaxWidthChars)
     gtk_box_append(previewBox, previewOCRTextLabel)
 
-    gtk_popover_set_child(previewPopover, previewBox)
+    // T-ROWLINES1: bounded height. Very long text scrolls inside the preview
+    // rather than growing past the screen (where the compositor flips or jumps
+    // it). Natural size is propagated so short content stays compact.
+    let previewScroller: OpaquePointer = gtk_scrolled_window_new()
+    gtk_scrolled_window_set_policy(previewScroller, GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
+    gtk_scrolled_window_set_propagate_natural_height(previewScroller, 1)
+    gtk_scrolled_window_set_propagate_natural_width(previewScroller, 1)
+    gtk_widget_set_size_request(previewScroller, PickerLayoutLimits.previewMinContentWidth, -1)
+    gtk_scrolled_window_set_max_content_height(
+      previewScroller, PickerLayoutLimits.previewMaxContentHeight)
+    gtk_scrolled_window_set_child(previewScroller, previewBox)
+    gtk_popover_set_child(previewPopover, previewScroller)
+    connectPreviewPopoverHover()
   }
 }
