@@ -28,7 +28,9 @@ func makeTestPickerViewModel(
   // path. See `PickerViewModelStoreChangeTests.swift`.
   storeChanges: ClipStoreChangeBroadcaster? = nil,
   paster: Paster? = nil,
-  pasteDismissOrdering: PasteDismissOrdering = .dismissBeforeWrite
+  pasteDismissOrdering: PasteDismissOrdering = .dismissBeforeWrite,
+  // Explicit in the factory (test code): selection preview OFF unless a test opts in.
+  showPreviewOnKeyboardSelection: @escaping @MainActor () -> Bool = { false }
 ) -> PickerViewModel {
   PickerViewModel(
     clipStore: clipStore,
@@ -43,6 +45,7 @@ func makeTestPickerViewModel(
       ),
     frontmostAppTracker: FrontmostAppTracker(provider: FakeFrontmostAppReferenceProviding()),
     pasteDismissOrdering: pasteDismissOrdering,
+    showPreviewOnKeyboardSelection: showPreviewOnKeyboardSelection,
     storeChanges: storeChanges
   )
 }

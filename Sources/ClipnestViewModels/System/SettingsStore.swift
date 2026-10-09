@@ -31,6 +31,7 @@
 
 import ClipnestCore
 import Foundation
+
 #if canImport(Darwin)
   import Observation
 #endif
@@ -68,6 +69,7 @@ public final class SettingsStore {
     static let automaticallyCheckForUpdates = "settings.automaticallyCheckForUpdates"
     static let isTextRecognitionEnabled = "settings.isTextRecognitionEnabled"
     static let textRecognitionQuality = "settings.textRecognitionQuality"
+    static let showPreviewOnKeyboardSelection = "settings.showPreviewOnKeyboardSelection"
   }
 
   // `@ObservationIgnored`: the backing store is not observable UI state.
@@ -170,6 +172,18 @@ public final class SettingsStore {
     }
   }
 
+  /// T-PREVIEWSEL1: "Show preview when selecting with the keyboard"
+  /// (General settings). Default OFF — the item preview is hover-only unless
+  /// the user opts in, so existing behavior is unchanged. Read LIVE by
+  /// `PickerViewModel` through the required `showPreviewOnKeyboardSelection`
+  /// closure its composition root passes (so flipping the toggle takes effect
+  /// without relaunching).
+  public var showPreviewOnKeyboardSelection: Bool {
+    didSet {
+      defaults.set(showPreviewOnKeyboardSelection, forKey: Key.showPreviewOnKeyboardSelection)
+    }
+  }
+
   /// The designated initializer — takes any `KeyValueStore`, defaulting to
   /// this platform's production backing (`PlatformDefaults.keyValueStore`;
   /// see this file's top doc comment).
@@ -202,6 +216,9 @@ public final class SettingsStore {
     self.textRecognitionQuality =
       defaults.string(forKey: Key.textRecognitionQuality).flatMap(
         TextRecognitionQuality.init(rawValue:)) ?? .accurate
+    // `bool(forKey:)` is correct here: absent -> false, which IS the default.
+    self.showPreviewOnKeyboardSelection = defaults.bool(
+      forKey: Key.showPreviewOnKeyboardSelection)
   }
 
   #if os(macOS)

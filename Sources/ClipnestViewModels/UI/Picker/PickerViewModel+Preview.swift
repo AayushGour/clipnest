@@ -42,7 +42,7 @@ extension PickerViewModel {
   /// popover (or back) without it closing underfoot.
   private static let previewCloseGrace = Duration.milliseconds(250)
 
-  // MARK: - Preview popover tracking (hover-only)
+  // MARK: - Preview popover tracking (hover; keyboard selection when enabled)
 
   /// Called by `ItemRow.onHover`. `id` = the row now under the pointer,
   /// `nil` = the pointer left that row. Entering a row shows its popover
@@ -61,6 +61,31 @@ extension PickerViewModel {
   public func previewHoverChanged(_ hovering: Bool) {
     isHoveringPreview = hovering
     scheduleResolve(delay: hovering ? Self.previewShowDelay : Self.previewCloseGrace)
+  }
+
+  /// T-PREVIEWSEL1: views call this right after an EXPLICIT keyboard
+  /// selection move (the Up/Down handlers, after `moveSelection(by:)`) —
+  /// never on picker open, search-text reset, tab switch or an async
+  /// query settling, none of which are keyboard moves. With
+  /// `showPreviewOnKeyboardSelection()` ON and no row hovered, the
+  /// keyboard-selected row becomes the preview target after the same show
+  /// delay as hover (`previewTargetSource == .selection`); a hovered row
+  /// always wins; with the setting OFF this never previews anything (it
+  /// still re-resolves, so a stale preview closes). Debounced like hover, so
+  /// holding an arrow key coalesces to the last row.
+  public func selectionChangedForPreview() {
+    selectionPreviewArmed = true
+    scheduleResolve(delay: Self.previewShowDelay)
+  }
+
+  /// Clears the "an explicit keyboard move happened" gate and closes a
+  /// selection-sourced preview that was showing. Used by search-text
+  /// changes.
+  func disarmSelectionPreview() {
+    selectionPreviewArmed = false
+    if previewTargetSource == .selection {
+      scheduleResolve(delay: Self.previewCloseGrace)
+    }
   }
 
   /// Cancels any pending resolve and schedules a fresh one after `delay`, so a
@@ -92,14 +117,20 @@ extension PickerViewModel {
       if let hoveredItemID, let item = rows.first(where: { $0.id == hoveredItemID }),
         item.isPreviewWorthy
       {
-        setPreviewTarget(hoveredItemID)
+        setPreviewTarget(hoveredItemID, source: .hover)
         return
       }
     case .snippets:
       if let hoveredItemID, snippetRows.contains(where: { $0.id == hoveredItemID }) {
-        setPreviewTarget(hoveredItemID)
+        setPreviewTarget(hoveredItemID, source: .hover)
         return
       }
+    }
+    // A hovered row always wins over the keyboard selection, even a hovered
+    // row that has no preview (hover then closes rather than falling back).
+    if hoveredItemID == nil, let selectedID = keyboardSelectionPreviewID() {
+      setPreviewTarget(selectedID, source: .selection)
+      return
     }
     if isHoveringPreview {
       // Keep the current popover open while the pointer is over it.
@@ -108,10 +139,27 @@ extension PickerViewModel {
     setPreviewTarget(nil)
   }
 
-  /// Writes `previewTargetID` only when it actually changes, so re-hovering an
+  /// The keyboard-selected row's id if it should preview: an explicit
+  /// keyboard move armed it, the setting is ON, and the row is
+  /// preview-worthy (History/Pinned clip) or exists (Snippet).
+  private func keyboardSelectionPreviewID() -> ClipItem.ID? {
+    guard selectionPreviewArmed, showPreviewOnKeyboardSelection() else { return nil }
+    switch activeTab {
+    case .history, .pinned:
+      guard let item = highlightedItem, item.isPreviewWorthy else { return nil }
+      return item.id
+    case .snippets:
+      return highlightedSnippet?.id
+    }
+  }
+
+  /// Writes the target only when it actually changes, so re-hovering an
   /// already-shown popover doesn't rebuild it (which would reset its scroll
-  /// position — see `ItemPreviewController.update`).
-  private func setPreviewTarget(_ id: ClipItem.ID?) {
+  /// position — see `ItemPreviewController.update`). The source is written
+  /// first so observers of `previewTargetID` read a consistent pair.
+  private func setPreviewTarget(_ id: ClipItem.ID?, source: PreviewTargetSource? = nil) {
+    let newSource = id == nil ? nil : source
+    if previewTargetSource != newSource { previewTargetSource = newSource }
     guard previewTargetID != id else { return }
     previewTargetID = id
   }
@@ -130,6 +178,8 @@ extension PickerViewModel {
     previewTask = nil
     hoveredItemID = nil
     isHoveringPreview = false
+    selectionPreviewArmed = false
+    previewTargetSource = nil
     previewTargetID = nil
   }
 
@@ -144,6 +194,7 @@ extension PickerViewModel {
   func resetHoverForTabSwitch() {
     hoveredItemID = nil
     isHoveringPreview = false
+    selectionPreviewArmed = false
     resolvePreview()
   }
 }

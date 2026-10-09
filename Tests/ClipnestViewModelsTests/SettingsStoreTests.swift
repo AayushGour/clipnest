@@ -175,4 +175,15 @@ struct SettingsStoreTests {
     store.hasShownAutoPasteStartupPrompt = true
     #expect(SettingsStore(defaults: defaults).hasShownAutoPasteStartupPrompt == true)
   }
+
+  /// T-PREVIEWSEL1: keyboard-selection preview is opt-in (default OFF) and sticky.
+  @Test("showPreviewOnKeyboardSelection: defaults false, persists once set")
+  func showPreviewOnKeyboardSelectionPersists() {
+    let defaults = makeDefaults()
+    let store = SettingsStore(defaults: defaults)
+    #expect(store.showPreviewOnKeyboardSelection == false)
+
+    store.showPreviewOnKeyboardSelection = true
+    #expect(SettingsStore(defaults: defaults).showPreviewOnKeyboardSelection == true)
+  }
 }

@@ -430,6 +430,9 @@ final class LinuxAppEnvironment {
       // ELSE mutates this store — a Settings "Clear All History…", or
       // background retention — without either of those call sites needing
       // to know `pickerViewModel` exists.
+      showPreviewOnKeyboardSelection: { [settingsStore] in
+        settingsStore.showPreviewOnKeyboardSelection
+      },
       storeChanges: clipStore.changes)
     self.pickerViewModel = viewModel
 
