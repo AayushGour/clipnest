@@ -20,6 +20,7 @@
 // only wires it to the two GTK calls that need it.
 import CGtk4
 import ClipnestCore
+import ClipnestViewModels
 import Foundation
 
 /// Retained for the lifetime of one `GdkPixbufLoader` decode (see
@@ -54,10 +55,12 @@ extension PickerWindow {
     let index = Int(gtk_list_box_row_get_index(row))
     let hoveredID: ClipItem.ID? =
       MainActor.assumeIsolated {
-        guard viewModel.activeTab != .snippets, renderedRows.indices.contains(index) else {
-          return nil
+        // History/Pinned hover a clip, Snippets a snippet — both `UUID`s, which
+        // is what `PickerViewModel.hoverItem(_:)` takes per tab.
+        if viewModel.activeTab == .snippets {
+          return renderedSnippets.indices.contains(index) ? renderedSnippets[index].id : nil
         }
-        return renderedRows[index].id
+        return renderedRows.indices.contains(index) ? renderedRows[index].id : nil
       }
     lastHoverAnchor = previewAnchor(forRow: row)
     MainActor.assumeIsolated {
@@ -103,15 +106,49 @@ extension PickerWindow {
   /// plus an optional recognized-text section (T-OCR2); `.file` shows the
   /// filename headline plus size/path metadata; everything else shows the
   /// plain wrapped `previewText`.
-  func updatePreviewPopover(targetID: ClipItem.ID?) {
-    guard let targetID, let item = renderedRows.first(where: { $0.id == targetID }) else {
+  func updatePreviewPopover(targetID: ClipItem.ID?, source: PreviewTargetSource?) {
+    guard let targetID else {
+      gtk_popover_popdown(previewPopover)
+      return
+    }
+    let isSnippetTab = MainActor.assumeIsolated { viewModel.activeTab == .snippets }
+    let snippet = isSnippetTab ? renderedSnippets.first(where: { $0.id == targetID }) : nil
+    let clip = isSnippetTab ? nil : renderedRows.first(where: { $0.id == targetID })
+    guard snippet != nil || clip != nil else {
       gtk_popover_popdown(previewPopover)
       return
     }
 
-    if var rect = lastHoverAnchor {
+    // T-PREVIEWSEL2: a keyboard-selection preview sits beside the SELECTED row,
+    // a hover preview beside the hovered one. Same band geometry, same Wayland
+    // overlap offset (set once in `buildPreviewPopover`).
+    var anchor: GdkRectangle?
+    switch PreviewAnchor.target(for: source) {
+    case .hoveredRow:
+      anchor = lastHoverAnchor
+    case .selectedRow:
+      let ids = isSnippetTab ? renderedSnippets.map(\.id) : renderedRows.map(\.id)
+      if let index = ids.firstIndex(of: targetID),
+        let row = gtk_list_box_get_row_at_index(listBox, index.gtkInt32)
+      {
+        anchor = previewAnchor(forRow: row)
+      }
+    }
+    if var rect = anchor {
       gtk_popover_set_pointing_to(previewPopover, &rect)
     }
+
+    if let snippet {
+      // A snippet previews its Body as plain wrapped text (no image/file/OCR).
+      gtk_widget_set_visible(previewImage, 0)
+      gtk_widget_set_visible(previewLabel, 1)
+      gtk_label_set_text(previewLabel, snippet.body)
+      updateFilePreviewMetadata(isFile: false, item: nil, path: nil)
+      hideOCRSection()
+      gtk_popover_popup(previewPopover)
+      return
+    }
+    guard let item = clip else { return }
 
     let content = ItemPreviewContent(item: item)
     let isImage = item.kind == .image
@@ -141,8 +178,8 @@ extension PickerWindow {
   /// is meant to be "read later, off the main thread, only when a preview
   /// needs it" — this is that read. A missing/unreadable file simply omits
   /// the size line, matching macOS `FilePreview`'s `sizeText` staying `nil`.
-  private func updateFilePreviewMetadata(isFile: Bool, item: ClipItem, path: String?) {
-    guard isFile else {
+  private func updateFilePreviewMetadata(isFile: Bool, item: ClipItem?, path: String?) {
+    guard isFile, let item else {
       gtk_widget_set_visible(previewFileSizeLabel, 0)
       gtk_widget_set_visible(previewFilePathLabel, 0)
       return
@@ -173,11 +210,15 @@ extension PickerWindow {
   /// .hasRecognizedText` block) — hidden together whenever the hovered item
   /// has no recognized text (every non-`.image` kind included, since
   /// `ClipItem.hasRecognizedText` is always `false` there).
+  private func hideOCRSection() {
+    gtk_widget_set_visible(previewOCRSeparator, 0)
+    gtk_widget_set_visible(previewOCRHeaderLabel, 0)
+    gtk_widget_set_visible(previewOCRTextLabel, 0)
+  }
+
   private func updateOCRSection(content: ItemPreviewContent) {
     guard content.hasRecognizedText, let ocrText = content.ocrText else {
-      gtk_widget_set_visible(previewOCRSeparator, 0)
-      gtk_widget_set_visible(previewOCRHeaderLabel, 0)
-      gtk_widget_set_visible(previewOCRTextLabel, 0)
+      hideOCRSection()
       return
     }
     gtk_widget_set_visible(previewOCRSeparator, 1)

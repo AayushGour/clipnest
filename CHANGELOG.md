@@ -16,6 +16,9 @@ at any time.
   keyboard"** (off by default): when on, moving through the picker list with the
   arrow keys also shows the item preview beside the highlighted row, not only
   when hovering with the pointer. Hovering a row still takes priority.
+- Linux: the hover preview now also works on the Snippets tab (it shows the
+  snippet's body), and the keyboard-selection preview setting is honoured by the
+  GTK picker, anchored beside the selected row.
 
 ### Fixed
 

@@ -236,9 +236,16 @@ extension PickerWindow {
   private func dispatch(_ action: PickerKeyAction) {
     switch action {
     case .moveUp:
-      MainActor.assumeIsolated { viewModel.moveSelection(by: -1) }
+      MainActor.assumeIsolated {
+        viewModel.moveSelection(by: -1)
+        // T-PREVIEWSEL2: an explicit keyboard move (never open/search/tab).
+        viewModel.selectionChangedForPreview()
+      }
     case .moveDown:
-      MainActor.assumeIsolated { viewModel.moveSelection(by: 1) }
+      MainActor.assumeIsolated {
+        viewModel.moveSelection(by: 1)
+        viewModel.selectionChangedForPreview()
+      }
     case .commit(let plainText):
       markPasteAttemptPending()
       MainActor.assumeIsolated { viewModel.selectHighlighted(plainText: plainText) }

@@ -2,6 +2,8 @@
 //
 // See GTKKeyEventMappingTests.swift's top doc comment for the
 // `ClipnestPlatformLinuxTests` -> `ClipnestGTK` manifest-dependency note.
+import ClipnestViewModels
+import Foundation
 import Testing
 
 @testable import ClipnestGTK
@@ -76,5 +78,25 @@ struct GTKPreviewAnchorTests {
   func x11KeepsGap() {
     #expect(PreviewAnchor.offset(isWayland: false) == PreviewAnchor.gap)
     #expect(PreviewAnchor.offset(isWayland: false) > 0)
+  }
+
+  // T-PREVIEWSEL2
+  @Test("A selection-sourced preview anchors to the selected row; hover and nil to the hovered one")
+  func targetFollowsSource() {
+    #expect(PreviewAnchor.target(for: .selection) == .selectedRow)
+    #expect(PreviewAnchor.target(for: .hover) == .hoveredRow)
+    #expect(PreviewAnchor.target(for: nil) == .hoveredRow)
+  }
+
+  @Test("The poll snapshot flags .preview when only the source changes (same target)")
+  func sourceChangeIsAPreviewChange() {
+    var old = PickerPollSnapshot.initial
+    let id = UUID()
+    old.previewTargetID = id
+    old.previewTargetSource = .hover
+    var new = old
+    new.previewTargetSource = .selection
+    #expect(PickerPollSnapshot.changedAspects(from: old, to: new) == [.preview])
+    #expect(PickerPollSnapshot.changedAspects(from: new, to: new).isEmpty)
   }
 }

@@ -795,7 +795,17 @@ search-text changes and tab switches do not count as keyboard moves.
 `previewTargetSource` (`.hover`/`.selection`) tells the view which row to
 anchor to; on macOS `ItemPreviewController` centres a `.selection` preview on
 the selected row's Y (`PickerViewModel.selectedRowMidY`, reported by
-`ScrollResettingList`) instead of the pointer. `ItemPreviewController`
+`ScrollResettingList`) instead of the pointer. **Linux GTK (T-PREVIEWSEL2):**
+`PickerWindow+Keyboard.swift` calls `selectionChangedForPreview()` after every
+Up/Down move; `PickerPollSnapshot` carries `previewTargetSource`, so a change of
+source alone also reconciles the popover. For `.selection`,
+`updatePreviewPopover(targetID:source:)` anchors with `previewAnchor(forRow:)`
+on the selected row (`PreviewAnchor.target(for:)`, pure and unit-tested); for
+`.hover` it keeps the anchor captured on pointer motion. Both use the same band
+geometry and the Wayland -2 px overlap. The Snippets tab now previews hover
+targets too (the snippet's Body as wrapped text, no image/file/OCR sections).
+Verified on Xvfb (setting ON: preview beside the selected row after arrowing
+down; OFF: none) and headless mutter (selection preview, `popup_done=0`). `ItemPreviewController`
 (`ItemPreviewController.swift:21-139`) presents `ItemPreview` in its own
 borderless, `.nonactivatingPanel`-style-masked child `NSPanel` — same
 never-`makeKey()` technique as `PickerPanel` itself, so hovering a row can

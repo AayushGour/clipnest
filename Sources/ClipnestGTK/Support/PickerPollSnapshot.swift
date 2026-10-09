@@ -37,6 +37,10 @@ public struct PickerPollSnapshot: Equatable, Sendable {
   /// needs to notice the RESULT so the popover's content/visibility can be
   /// kept in sync.
   public var previewTargetID: ClipItem.ID?
+  /// Mirrors `PickerViewModel.previewTargetSource` (T-PREVIEWSEL2): the same
+  /// target can switch between hover and keyboard selection, which moves the
+  /// anchor, so the source is diffed too.
+  public var previewTargetSource: PreviewTargetSource?
 
   public init(
     activeTab: PickerTab,
@@ -49,7 +53,8 @@ public struct PickerPollSnapshot: Equatable, Sendable {
     focusToken: Int,
     scrollToTopToken: Int,
     searchResetToken: Int,
-    previewTargetID: ClipItem.ID?
+    previewTargetID: ClipItem.ID?,
+    previewTargetSource: PreviewTargetSource?
   ) {
     self.activeTab = activeTab
     self.rows = rows
@@ -62,6 +67,7 @@ public struct PickerPollSnapshot: Equatable, Sendable {
     self.scrollToTopToken = scrollToTopToken
     self.searchResetToken = searchResetToken
     self.previewTargetID = previewTargetID
+    self.previewTargetSource = previewTargetSource
   }
 
   /// A snapshot with no rows/snippets and every token at its `PickerViewModel`
@@ -79,7 +85,8 @@ public struct PickerPollSnapshot: Equatable, Sendable {
     focusToken: 0,
     scrollToTopToken: 0,
     searchResetToken: 0,
-    previewTargetID: nil
+    previewTargetID: nil,
+    previewTargetSource: nil
   )
 }
 
@@ -106,7 +113,7 @@ public enum PickerPollAspect: Equatable, Sendable {
   case scrollToTop
   /// `searchResetToken` bumped — clear the search entry's live text.
   case searchReset
-  /// `previewTargetID` changed — show/update/hide the hover-preview popover.
+  /// `previewTargetID` or `previewTargetSource` changed — show/update/hide the hover-preview popover.
   case preview
 }
 
@@ -143,7 +150,9 @@ extension PickerPollSnapshot {
     if old.searchResetToken != new.searchResetToken {
       aspects.insert(.searchReset)
     }
-    if old.previewTargetID != new.previewTargetID {
+    if old.previewTargetID != new.previewTargetID
+      || old.previewTargetSource != new.previewTargetSource
+    {
       aspects.insert(.preview)
     }
     return aspects

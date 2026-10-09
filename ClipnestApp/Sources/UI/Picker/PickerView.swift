@@ -78,9 +78,7 @@
 // approach was dropped because it also fired for non-keyboard selection
 // changes — an async query settling on open — which must not preview).
 // `ScrollResettingList` reports the selected row's vertical centre into
-// `viewModel.selectedRowMidY` so the popover anchors beside it. macOS manual
-// checks (never compiled/run off-Mac): row preferences may not propagate out
-// of a `List`, and the popover is not repositioned on mouse-wheel scrolling.
+// `viewModel.selectedRowMidY` so the popover anchors beside it.
 // Both feed `viewModel.previewTargetID`, which this view watches via its own
 // `.onChange` — looking the target id up in `viewModel.rows` and forwarding
 // the resolved `ClipItem?` to `viewModel.updatePreview`, a closure the
@@ -88,6 +86,9 @@
 // `ItemPreviewController.update(...)` (same closure-injection pattern as
 // `dismiss`/`presentSnippetEditor`/`suppressOwnPasteboardWrite`) — this view
 // never touches AppKit/`NSPanel` directly.
+// macOS manual checks (never compiled/run off-Mac): row preferences may not
+// propagate out of a `List`, and the popover is not repositioned on mouse-wheel
+// scrolling.
 
 import ClipnestCore
 import ClipnestViewModels

@@ -9,6 +9,8 @@
 // the hovered row's height: the popover then lands just outside the window's
 // right edge, and the compositor flips it to the left when there is no room
 // (xdg_popup positioner flip constraints).
+import ClipnestViewModels
+
 public enum PreviewAnchor {
   /// Gap in pixels between the window edge and the preview.
   public static let gap: Int32 = 8
@@ -27,6 +29,20 @@ public enum PreviewAnchor {
   /// a couple of pixels (the same on the flipped side).
   public static func offset(isWayland: Bool) -> Int32 {
     isWayland ? -waylandOverlap : gap
+  }
+
+  /// Which row the preview is anchored to (T-PREVIEWSEL2).
+  public enum Target: Equatable {
+    /// The row under the pointer (anchor captured on motion).
+    case hoveredRow
+    /// The keyboard-selected row.
+    case selectedRow
+  }
+
+  /// A keyboard-selection preview anchors to the selected row; everything else
+  /// (hover, or no source) keeps the hovered-row anchor.
+  public static func target(for source: PreviewTargetSource?) -> Target {
+    source == .selection ? .selectedRow : .hoveredRow
   }
 
   public struct Band: Equatable {
