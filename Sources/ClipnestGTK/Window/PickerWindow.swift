@@ -196,6 +196,11 @@ public final class PickerWindow: @unchecked Sendable {
   /// same way as `emptyStateLabel` immediately above.
   let clipboardOnlyNoticeLabel: OpaquePointer
   let footerLabel: OpaquePointer
+  /// Footer row: `footerLabel` (shortcut hints, left, ellipsized) + the
+  /// muted version button (right) — see `PickerWindow+Footer.swift`.
+  let footerBox: OpaquePointer
+  let footerVersionButton: OpaquePointer
+  let footerUpdateDot: OpaquePointer
   let previewPopover: OpaquePointer
   let previewImage: OpaquePointer
   let previewLabel: OpaquePointer
@@ -361,6 +366,9 @@ public final class PickerWindow: @unchecked Sendable {
     emptyStateLabel = gtk_label_new("")
     clipboardOnlyNoticeLabel = gtk_label_new("")
     footerLabel = gtk_label_new("")
+    footerBox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, PickerWindow.chipSpacing)
+    footerVersionButton = gtk_button_new_with_label("")
+    footerUpdateDot = gtk_label_new("●")
     previewPopover = gtk_popover_new()
     previewImage = gtk_image_new()
     previewLabel = gtk_label_new("")

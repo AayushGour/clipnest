@@ -111,7 +111,7 @@ Environment variables: `CLIPNEST_DRY_RUN=1` does everything except the install (
 curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/update.sh | bash
 ```
 
-Updates Clipnest to the latest version, if a newer one is available. Same checksum verification as Install. You can also trigger this from inside the app: click the version number in the picker's footer (it shows a small dot when an update is available) and confirm — Clipnest opens Terminal and runs this exact script for you, then relaunches itself.
+Updates Clipnest to the latest version, if a newer one is available. Same checksum verification as Install. You can also trigger this from inside the app: click the version number in the picker's footer (it shows a small dot when an update is available) and confirm — Clipnest opens Terminal and runs this exact script for you, then relaunches itself. On Linux the picker footer also shows the version (with the same dot); clicking it opens Settings, where **Check for Updates Now** / **Install Update…** live.
 
 ### Build from source
 

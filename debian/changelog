@@ -1,3 +1,12 @@
+clipnest (1.2.0) jammy; urgency=medium
+
+  * feat(linux): the picker footer now shows the version (v1.2.0) at its
+    right edge, with a dot when a newer release is available; clicking it
+    opens Settings, where the update lives. The shortcut hints are
+    word-wrapped so they can no longer widen the window.
+
+ -- Aayush Gour <ag14906@gmail.com>  Sat, 10 Oct 2026 00:00:00 +0000
+
 clipnest (1.1.0) jammy; urgency=medium
 
   * feat: one install command for macOS and Linux (scripts/install.sh

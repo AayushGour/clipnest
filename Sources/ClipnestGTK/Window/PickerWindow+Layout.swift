@@ -27,7 +27,9 @@
 //          │                              is in flight — see
 //          │                              PickerWindow+Reconcile.swift's
 //          │                              updateContentVisibility(snapshot:))
-//          └─ footerLabel                (ShortcutHints text)
+//          └─ footerBox                  (see PickerWindow+Footer.swift)
+//               ├─ footerLabel           (ShortcutHints text, ellipsized)
+//               └─ footerVersionButton   (`v<version>` + update dot)
 //   previewPopover (parented to listBox, NOT part of the tree above —
 //                    GtkPopover manages its own floating surface)
 //        └─ previewBox (vertical)
@@ -123,13 +125,7 @@ extension PickerWindow {
     gtk_widget_set_visible(clipboardOnlyNoticeLabel, 0)
     gtk_box_append(outerBox, clipboardOnlyNoticeLabel)
 
-    gtk_label_set_xalign(footerLabel, 0)
-    gtk_widget_add_css_class(footerLabel, "dim-label")
-    // Visual-parity pass: matches `PickerView.shortcutHintBar`'s
-    // `.caption2` size + the `Divider()` above it — see
-    // `PickerStyleSheet.swift`.
-    gtk_widget_add_css_class(footerLabel, "picker-footer")
-    gtk_box_append(outerBox, footerLabel)
+    buildFooter(in: outerBox)
 
     gtk_window_set_child(window, outerBox)
 

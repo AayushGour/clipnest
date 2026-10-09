@@ -125,7 +125,7 @@ final class LinuxAppEnvironment {
   /// second reader, in `ClipnestLinuxAppKit` alongside this file — the
   /// existing source of truth, so `--version` never grows a second
   /// hardcoded copy of the version string.
-  nonisolated static let installedVersion = "1.1.0"
+  nonisolated static let installedVersion = "1.2.0"
 
   /// Resolves this process's own absolute executable path for
   /// `AutostartDesktopFile.setEnabled(_:executablePath:)`'s `.desktop`
@@ -639,16 +639,15 @@ final class LinuxAppEnvironment {
     // T-LXUPD: closes another instance of the exact silent-seam-default trap
     // coding-standards.md documents (`presentSnippetEditor`/`openSettings`
     // above) — `PickerViewModel.appVersion`/`requestAppUpdate` both default
-    // to a no-op/empty value and were never set anywhere on Linux. No
-    // picker-footer UI consumes them yet (`PickerWindow*.swift` is out of
-    // this task's owned-files scope this session — another agent owns it),
-    // but wiring them now means the moment picker-footer parity lands there,
-    // this "just works" instead of silently no-op'ing a third time.
+    // to a no-op/empty value and were never set anywhere on Linux. The
+    // picker's footer (`PickerWindow+Footer.swift`) now shows `appVersion`
+    // plus the update dot, and its click opens Settings via
+    // `openSettingsFromPicker()`.
     // `requestAppUpdate` opens Settings' General tab — the real
     // install/apt-command surface this task adds (`SettingsWindow
     // +General.swift`) — rather than performing the update directly from
-    // here, since there is no picker-side confirmation/progress UI to drive
-    // yet. Placed after `self.settingsWindow` is constructed (definite
+    // here, since there is no picker-side confirmation/progress UI to drive.
+    // Placed after `self.settingsWindow` is constructed (definite
     // initialization: `openSettings()` reads it).
     viewModel.appVersion = Self.installedVersion
     viewModel.requestAppUpdate = { [weak self] in self?.openSettings() }
