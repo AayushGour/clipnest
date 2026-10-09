@@ -309,6 +309,9 @@ func gtk_adjustment_set_value(_ adjustment: OpaquePointer, _ value: Double) {
 func gtk_button_set_icon_name(_ button: OpaquePointer, _ iconName: String) {
   gtk_button_set_icon_name(gtkPointer(button) as UnsafeMutablePointer<GtkButton>, iconName)
 }
+func gtk_button_set_label(_ button: OpaquePointer, _ label: String) {
+  gtk_button_set_label(gtkPointer(button) as UnsafeMutablePointer<GtkButton>, label)
+}
 func gtk_toggle_button_set_group(_ button: OpaquePointer, _ group: OpaquePointer) {
   gtk_toggle_button_set_group(
     gtkPointer(button) as UnsafeMutablePointer<GtkToggleButton>,

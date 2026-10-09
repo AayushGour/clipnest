@@ -10,6 +10,19 @@ at any time.
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-10
+
+### Added
+
+- Linux: the picker footer now shows the installed version (`v1.2.0`) at its
+  right edge, with an accent dot when a newer release is available. Clicking
+  it opens Settings, where "Check for Updates Now" / "Install Update…" live.
+
+### Fixed
+
+- Linux: the footer's shortcut hints now wrap onto a second line when needed; a
+  long hint string no longer widens the picker beyond its 560 px width.
+
 ## [1.1.0] - 2026-10-10
 
 ### Added
@@ -358,7 +371,8 @@ release (0.5.0, above). None of them were ever installed by a user.
 
 - `Sendable` conformance for `NSPasteboard` access, required by Swift 6.
 
-[Unreleased]: https://github.com/AayushGour/clipnest/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/AayushGour/clipnest/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/AayushGour/clipnest/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/AayushGour/clipnest/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/AayushGour/clipnest/compare/v0.9.2...v1.0.0
 [0.9.4]: https://github.com/AayushGour/clipnest/commit/a07182712457991e6437847812239e77e1c9ab89

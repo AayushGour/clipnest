@@ -193,6 +193,9 @@ extension PickerWindow {
       )
       gtk_label_set_text(footerLabel, footerText)
     }
+    // Not part of the snapshot diff: `isUpdateAvailable` flips from the
+    // background `UpdateChecker`, which only fires `objectWillChange`.
+    updateFooterVersion()
   }
 
   /// Routed bug report ("make it honest" — Phase 2): `ShortcutHints.text`'s

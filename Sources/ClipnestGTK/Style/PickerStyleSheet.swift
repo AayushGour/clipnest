@@ -231,10 +231,26 @@ enum PickerStyleSheet {
 
     /* ===== Footer hint bar — shortcutHintBar: `.caption2` (~10pt),
        secondary, with a divider above it matching PickerView's Divider(). */
-    label.picker-footer {
-      font-size: 10pt;
+    box.picker-footer {
       border-top: 1px solid alpha(@borders, 0.5);
       padding: 4px 4px 0 4px;
+    }
+    label.picker-footer-hints {
+      font-size: 10pt;
+    }
+    button.picker-footer-version {
+      font-size: 10pt;
+      padding: 0 4px;
+      min-height: 0;
+      min-width: 0;
+      background: transparent;
+      border: none;
+      box-shadow: none;
+      color: alpha(@theme_fg_color, 0.55);
+    }
+    label.picker-footer-update-dot {
+      font-size: 6pt;
+      color: @accent_bg_color;
     }
 
     /* ===== Empty state — PickerView.emptyState: `.callout` (~12pt). */

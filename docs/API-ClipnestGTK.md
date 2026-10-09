@@ -137,6 +137,17 @@ scenario for scenario:
 | An active selection in the search field, Delete | `TextField` deletes the selection; picker never sees it | `GtkText` deletes the selection; picker never sees it |
 | Focus outside the search field (e.g. a row button), Delete | N/A on macOS today (the search field is always focused) | Picker always deletes the highlighted item, regardless of caret/selection |
 
+### Picker footer (`PickerWindow+Footer.swift`)
+
+One row under a divider: `footerLabel` (the tab-aware `footerText` hints,
+word-wrapped so it can never widen the window) and, at
+the right, a muted `v<appVersion>` button (`footerVersionText`) with an accent
+dot while `viewModel.isUpdateAvailable`. The tooltip is
+`footerVersionTooltip(isUpdateAvailable:latestVersion:)`. Clicking calls
+`viewModel.openSettingsFromPicker()` (Settings → General holds "Check for
+Updates Now" / "Install Update…"). `updateFooterVersion()` runs on every
+reconcile because the update flag is not part of the poll snapshot.
+
 ### Honest paste feedback on `.clipboardOnly` (routed bug report)
 
 **Root cause, confirmed live in a real Wayland session (weston, WAYLAND_DISPLAY
