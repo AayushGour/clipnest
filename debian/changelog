@@ -1,3 +1,28 @@
+clipnest (1.1.0) jammy; urgency=medium
+
+  * feat: one install command for macOS and Linux (scripts/install.sh
+    detects the OS and CPU, verifies the release tarball against the
+    SHA-256 GitHub publishes for it, then runs the bundled installer) and
+    a matching scripts/uninstall.sh that keeps your data unless --purge.
+  * feat: optional preview while moving through the picker with the
+    keyboard (Settings -> General, off by default); the hover preview
+    also works on the Snippets tab.
+  * fix(linux, Wayland): pressing Enter on a picker row pasted the
+    previously copied clipboard instead of the selected item; the
+    clipboard is now written before the picker hides.
+  * fix: pressing Enter twice quickly or double-clicking a row pastes once.
+  * fix(linux, Wayland): the hover preview showed nowhere on GNOME Wayland;
+    it now opens beside the picker, level with the row, without jumping.
+  * fix(linux): long or multi-line copies no longer make picker rows tall
+    (3 lines max, scrollable preview); arrow keys keep the selected row
+    in view.
+  * fix(linux): copies whose preferred text type comes back empty or
+    refused fall back to the other advertised text types, blank rows are
+    no longer stored, and a copy that is not captured logs why
+    (metadata only, never content).
+
+ -- Aayush Gour <ag14906@gmail.com>  Sat, 10 Oct 2026 00:00:00 +0000
+
 clipnest (1.0.0) jammy; urgency=medium
 
   * fix(linux): password-manager copies are no longer saved to history.
