@@ -829,8 +829,9 @@ window's right edge level with the row; when there is no room on the right the
 popup positioner's flip constraint moves it to the left. Because the window
 doesn't move while open, the side is stable for a given preview size (image and text previews differ in width). (Verified
 under X11/Xvfb + openbox: preview right of a left-edge window, left of a
-centered window on a 1440 px screen. The Wayland xdg_popup flip is the same
-GTK/GDK mechanism but was not exercised on a real compositor.)
+centered window on a 1440 px screen. On Wayland the popup must additionally
+overlap the window by 2 px or mutter dismisses it, see "Wayland
+(T-PREVIEWWL1)" below; verified on headless mutter 46.)
 
 **Row height and preview bounds (T-ROWLINES1).** A Linux row shows at most 3
 lines (`PickerLayoutLimits.rowTextMaxLines`): `RowDisplayText.collapsed` folds
@@ -991,6 +992,14 @@ default, so a missing wiring is a build error):
   (`clipboard write not confirmed ...`) is logged and the picker hides anyway.
   The self-write is still ignored by capture via the
   `application/x-clipnest-owned` marker (never read back from the GTK thread).
+
+Both orderings share one **in-flight guard** (`isPasteInFlight`, cross-platform):
+while a paste is being resolved, written, confirmed and dispatched, further
+`select`/`pasteSnippet` calls are ignored, so a double Enter or double click
+pastes once (on Linux the picker is still visible during the confirmation
+wait, so this is reachable). The Linux window that attributes a later dismissal
+to a paste attempt (`pasteAttemptPendingTimeoutMs`) is the 400 ms content budget
+plus the 250 ms confirmation bound, 650 ms.
 
 `Paster.paste(_:targetingFrontmostApp:)`
 (`Paster.swift:179-209`) always writes the pasteboard synchronously first

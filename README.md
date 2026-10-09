@@ -184,6 +184,9 @@ To uninstall: `sudo apt remove clipnest clipnest-ocr clipnest-ocr-data`. Your hi
   ```bash
   gnome-extensions install --force /usr/share/clipnest/gnome-shell-extension/esm
   ```
+- **Previews and rows.** The hover preview opens beside the picker, level with the row (also on the Snippets tab); Settings → General → *Show preview when selecting with the keyboard* (off by default) adds it for arrow-key selection. Rows show at most 3 lines, and a long preview scrolls inside itself. On Wayland the preview overlaps the picker edge by 2 px (GNOME closes a popup that doesn't touch its parent window).
+- **Picking an item.** Clipnest writes the clipboard first and hides the picker only once the write is confirmed (at most 250 ms), because GNOME ignores a clipboard write from a window without focus; the Mac hides first.
+- **A copy that didn't show up in history.** Every skipped copy leaves a metadata-only log line saying why: `journalctl --user -t app.clipnest.Clipnest --since '-5min'`.
 - **Terminals.** Pasting into GNOME Terminal and other VTE terminals uses Ctrl+Shift+V automatically.
 - **Password managers.** Copies marked as secret (`x-kde-passwordManagerHint`, used by KeePassXC and others) are never stored, including the copy GNOME re-publishes after the password manager clears the clipboard. On Wayland, Clipnest can't tell which app made a copy, so Settings → Apps exclusions only apply to X11/XWayland apps; the secret marker works everywhere.
 - **Ubuntu 22.04** ships GTK 4.6, which has an upstream clipboard bug that can, rarely, make Clipnest quit. It is fixed in GTK 4.10+ (Ubuntu 24.04). Your history is never affected; see `packaging/linux/dist/README.md`.
