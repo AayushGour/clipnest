@@ -307,8 +307,11 @@ extension PickerViewModel {
   }
 
   /// The post-write hide. Skipped when the picker is already hidden — the user
-  /// pressed Esc (or toggled it away) during the confirmation window — so this
-  /// can't re-hide a window that was closed, or a newly reopened one, twice.
+  /// pressed Esc (or toggled it away) during the confirmation window — so a
+  /// window that was closed is not hidden a second time. Known, accepted edge:
+  /// if the user closes AND reopens the picker within the confirmation window
+  /// (at most 250 ms), the reopened picker IS hidden here, which is harmless
+  /// because the paste's Ctrl+V is about to be sent into the target anyway.
   private func dismissIfStillVisible() {
     if isVisible { dismiss() }
   }

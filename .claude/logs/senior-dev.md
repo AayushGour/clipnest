@@ -254,3 +254,4 @@ Verified: macOS `swift build` clean; `swift test` exactly 615 tests/52 suites (u
 - 2026-10-09 [T-PASTEORDER1] review follow-up: in-flight paste guard, cancel-safe confirm loop, derived pasteAttemptPending timeout, skip post-write hide if already hidden, +4 tests (1528 green), docs; → reviewer
 - 2026-10-09 [T-KBSCROLL1] picker keeps keyboard-selected row in view (ScrollIntoView helper + scroll in syncListBoxSelection w/ idle retry), 7 tests (1535 green), lint clean, Xvfb screenshots, → reviewer
 - 2026-10-09 [T-PREVIEWWL1] Wayland hover preview: mutter popup_done for popups not overlapping parent geometry; offset now -2 on Wayland (PreviewAnchor.offset), X11 unchanged; tests + headless mutter wayland-debug proof, to reviewer
+- 2026-10-09 [T-PASTEORDER1/KBSCROLL1] review fixes: deterministic Esc test (10x under load green), comment fixes, scroll retry via 16ms timeout + clear stale pending index; 1537 tests x3, lint clean

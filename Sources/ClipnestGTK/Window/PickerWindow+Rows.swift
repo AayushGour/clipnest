@@ -359,6 +359,7 @@ extension PickerWindow {
   /// `PickerWindow+Keyboard.swift`).
   func syncListBoxSelection(toIndex index: Int?) {
     guard let index else {
+      pendingScrollRowIndex = nil
       gtk_list_box_unselect_all(listBox)
       return
     }
@@ -369,7 +370,10 @@ extension PickerWindow {
     // into view itself. Every selection change (arrows, Home/End, PageUp/Down,
     // wrap-around, either tab) funnels through here, so this one call covers
     // them all.
-    if !scrollRowIntoView(row) {
+    if scrollRowIntoView(row) {
+      // Done: a retry queued for an OLDER selection must not scroll back to it.
+      pendingScrollRowIndex = nil
+    } else {
       pendingScrollRowIndex = index
       pendingScrollAttempts = 0
       scheduleScrollRetry()
@@ -403,18 +407,23 @@ extension PickerWindow {
     return true
   }
 
-  /// Retries scrollRowIntoView for the still-selected row from an idle
-  /// callback: G_PRIORITY_DEFAULT_IDLE sits below GDK's redraw priority, so it
-  /// runs after the frame that lays the new rows out. Bounded so a window that
-  /// never lays out (hidden) cannot keep the source alive.
+  /// Retries scrollRowIntoView for the still-pending row from a short timeout,
+  /// roughly once per frame. An idle source cannot be relied on here: it can
+  /// fire repeatedly inside one frame, before GTK's layout phase has allocated
+  /// the freshly built rows, and burn all its attempts. Bounded
+  /// (maxScrollRetryAttempts ticks) so a window that never lays out (hidden)
+  /// cannot keep the source alive.
   private func scheduleScrollRetry() {
     guard pendingScrollSourceID == nil else { return }
-    pendingScrollSourceID = g_idle_add_full(
-      G_PRIORITY_DEFAULT_IDLE, pendingScrollTrampoline, retainedTrampolineContext(self),
-      releaseTrampolineContextSingleArg)
+    pendingScrollSourceID = g_timeout_add_full(
+      G_PRIORITY_DEFAULT, Self.scrollRetryIntervalMs, pendingScrollTrampoline,
+      retainedTrampolineContext(self), releaseTrampolineContextSingleArg)
   }
 
-  /// One idle tick of the retry. Returns true to keep the source.
+  /// One frame at 60 Hz, rounded up.
+  private static let scrollRetryIntervalMs: UInt32 = 16
+
+  /// One tick of the retry. Returns true to keep the source.
   fileprivate func retryPendingScroll() -> Bool {
     pendingScrollAttempts += 1
     if let index = pendingScrollRowIndex,
@@ -428,7 +437,7 @@ extension PickerWindow {
     return false
   }
 
-  /// Idle ticks to wait for layout before giving up on a pending scroll.
+  /// Ticks to wait for layout before giving up on a pending scroll.
   private static let maxScrollRetryAttempts = 20
 
   func handleRowSelected(row: OpaquePointer?) {
@@ -509,7 +518,7 @@ private let adjustmentChangedTrampoline:
     window.handleAdjustmentChanged(adjustment)
   }
 
-/// GSourceFunc for the pending scroll-into-view retry. gboolean: nonzero keeps
+/// GSourceFunc (timeout) for the pending scroll-into-view retry. gboolean: nonzero keeps
 /// the source, zero removes it.
 private let pendingScrollTrampoline: @convention(c) (UnsafeMutableRawPointer?) -> Int32 = { data in
   guard let window = unretainedContext(data, as: PickerWindow.self) else { return 0 }

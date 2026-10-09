@@ -847,7 +847,7 @@ to the top, one below has its bottom aligned to the bottom, a visible one does
 not move (pure maths in `ScrollIntoView`, unit-tested). Setting the adjustment
 goes through the normal "value-changed" paging, so arrowing past the loaded rows
 keeps loading more. A row not yet allocated (just rebuilt) is scrolled from an
-idle callback after layout (max 20 ticks). The hover preview anchor is in list-box
+~16 ms timeout retry after layout (max 20 ticks). The hover preview anchor is in list-box
 coordinates and moves with its row.
 
 **Edge cases handled**

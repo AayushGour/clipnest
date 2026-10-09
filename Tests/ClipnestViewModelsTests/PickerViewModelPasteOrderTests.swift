@@ -30,16 +30,22 @@ final class PasteOrderLog: @unchecked Sendable {
 /// A pasteboard that logs writes. `bumpDelay == nil` bumps `changeCount`
 /// synchronously (macOS-like); otherwise the bump lands later on another task
 /// (Linux-like: the X11 event thread reports the owner change asynchronously),
-/// and `neverBumps` models a compositor that never reports it.
+/// `neverBumps` models a compositor that never reports it, and `manualBump`
+/// holds the bump until the test calls `releaseBump()` (no wall-clock races).
 final class OrderRecordingPasteboard: PasteboardWriting, @unchecked Sendable {
   private let log: PasteOrderLog
   private let bumpDelay: Duration?
   private let neverBumps: Bool
+  private let manualBump: Bool
   private let lock = NSLock()
   private var count = 100
 
-  init(log: PasteOrderLog, bumpDelay: Duration? = nil, neverBumps: Bool = false) {
+  init(
+    log: PasteOrderLog, bumpDelay: Duration? = nil, neverBumps: Bool = false,
+    manualBump: Bool = false
+  ) {
     self.log = log
+    self.manualBump = manualBump
     self.bumpDelay = bumpDelay
     self.neverBumps = neverBumps
   }
@@ -52,7 +58,7 @@ final class OrderRecordingPasteboard: PasteboardWriting, @unchecked Sendable {
 
   private func didWrite() {
     log.record("write")
-    guard !neverBumps else { return }
+    guard !neverBumps, !manualBump else { return }
     guard let bumpDelay else {
       bump()
       return
@@ -62,6 +68,9 @@ final class OrderRecordingPasteboard: PasteboardWriting, @unchecked Sendable {
       self.bump()
     }
   }
+
+  /// Lets a `manualBump` pasteboard report its change.
+  func releaseBump() { bump() }
 
   private func bump() {
     lock.lock()
@@ -284,13 +293,19 @@ struct PickerViewModelPasteOrderTests {
   @Test("Linux policy: Esc during the confirmation window is not followed by a second hide")
   func linuxAlreadyHiddenPickerIsNotHiddenAgain() async {
     let log = PasteOrderLog()
+    let pasteboard = OrderRecordingPasteboard(log: log, manualBump: true)
     let viewModel = makeViewModel(
       ordering: .writeBeforeDismiss(confirmationTimeout: .seconds(2)), log: log,
-      pasteboard: OrderRecordingPasteboard(log: log, bumpDelay: .milliseconds(80)))
+      pasteboard: pasteboard)
 
     viewModel.select(makeClipItem(kind: .text, previewText: "picked"))
-    try? await Task.sleep(for: .milliseconds(20))
+    // Deterministic: the write has happened, the confirmation is still pending
+    // (the bump is held), THEN the picker is hidden, THEN the bump is released.
+    for _ in 0..<300 where !log.events.contains("write") {
+      try? await Task.sleep(for: .milliseconds(10))
+    }
     viewModel.didHide()  // Esc / focus loss while waiting for confirmation
+    pasteboard.releaseBump()
     await waitForSynthesis(log)
 
     #expect(!log.events.contains("dismiss"))
