@@ -10,7 +10,11 @@ at any time.
 
 ## [Unreleased]
 
-No unreleased changes.
+### Fixed
+
+- Linux: the hover preview now opens beside the picker window, level with the
+  hovered row (on whichever side has room), as on macOS, instead of at the
+  mouse cursor.
 
 ## [1.0.0] - 2026-10-06
 

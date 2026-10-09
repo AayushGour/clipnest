@@ -177,6 +177,25 @@ func gtk_widget_set_tooltip_text(_ widget: OpaquePointer, _ text: String) {
 func gtk_widget_set_size_request(_ widget: OpaquePointer, _ width: Int32, _ height: Int32) {
   gtk_widget_set_size_request(gtkPointer(widget) as UnsafeMutablePointer<GtkWidget>, width, height)
 }
+func gtk_widget_get_width(_ widget: OpaquePointer) -> Int32 {
+  gtk_widget_get_width(gtkPointer(widget) as UnsafeMutablePointer<GtkWidget>)
+}
+func gtk_widget_get_height(_ widget: OpaquePointer) -> Int32 {
+  gtk_widget_get_height(gtkPointer(widget) as UnsafeMutablePointer<GtkWidget>)
+}
+/// The point `(x, y)` in `source`'s coordinates, expressed in `destination`'s
+/// coordinates; `nil` when the widgets share no common ancestor.
+func gtkTranslate(
+  _ point: (x: Double, y: Double), from source: OpaquePointer, to destination: OpaquePointer
+) -> (x: Double, y: Double)? {
+  var translatedX = 0.0
+  var translatedY = 0.0
+  let ok = gtk_widget_translate_coordinates(
+    gtkPointer(source) as UnsafeMutablePointer<GtkWidget>,
+    gtkPointer(destination) as UnsafeMutablePointer<GtkWidget>,
+    point.x, point.y, &translatedX, &translatedY)
+  return ok != 0 ? (translatedX, translatedY) : nil
+}
 func gtk_widget_set_parent(_ widget: OpaquePointer, _ parent: OpaquePointer) {
   gtk_widget_set_parent(
     gtkPointer(widget) as UnsafeMutablePointer<GtkWidget>,
@@ -355,6 +374,18 @@ func gtk_popover_set_child(_ popover: OpaquePointer, _ child: OpaquePointer) {
 }
 func gtk_popover_set_pointing_to(_ popover: OpaquePointer, _ rect: inout GdkRectangle) {
   gtk_popover_set_pointing_to(gtkPointer(popover) as UnsafeMutablePointer<GtkPopover>, &rect)
+}
+/// `GtkPositionType` (`GTK_POS_LEFT`/`GTK_POS_RIGHT`/...) — the side of the
+/// `pointing_to` rect the popover is placed on.
+func gtk_popover_set_position(_ popover: OpaquePointer, _ position: GtkPositionType) {
+  gtk_popover_set_position(gtkPointer(popover) as UnsafeMutablePointer<GtkPopover>, position)
+}
+func gtk_popover_set_has_arrow(_ popover: OpaquePointer, _ hasArrow: Int32) {
+  gtk_popover_set_has_arrow(gtkPointer(popover) as UnsafeMutablePointer<GtkPopover>, hasArrow)
+}
+func gtk_popover_set_offset(_ popover: OpaquePointer, _ xOffset: Int32, _ yOffset: Int32) {
+  gtk_popover_set_offset(
+    gtkPointer(popover) as UnsafeMutablePointer<GtkPopover>, xOffset, yOffset)
 }
 func gtk_popover_popup(_ popover: OpaquePointer) {
   gtk_popover_popup(gtkPointer(popover) as UnsafeMutablePointer<GtkPopover>)
