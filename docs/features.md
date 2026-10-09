@@ -828,6 +828,18 @@ it has to be intercepted one layer earlier, in `PickerPanel`'s AppKit-level
 local `NSEvent` monitor (`onCommandComma`, see the panel section above) —
 the same reason `onCommandDelete` already lives there rather than here.
 
+**Linux: keeping the selected row in view.** Arrow keys change the selection
+through `PickerViewModel` while keyboard focus stays in the search entry, so
+GTK never scrolls the list by itself. `PickerWindow.syncListBoxSelection`
+(`PickerWindow+Rows.swift`) therefore scrolls after every selection change
+(arrows, wrap-around, either tab): a row above the viewport has its top aligned
+to the top, one below has its bottom aligned to the bottom, a visible one does
+not move (pure maths in `ScrollIntoView`, unit-tested). Setting the adjustment
+goes through the normal "value-changed" paging, so arrowing past the loaded rows
+keeps loading more. A row not yet allocated (just rebuilt) is scrolled from an
+idle callback after layout (max 20 ticks). The hover preview anchor is in list-box
+coordinates and moves with its row.
+
 **Edge cases handled**
 - Typing while a previous debounced search is still pending → generation counter discards the stale result.
 - Commit action (paste/pin/delete) fired right after typing → flushed against the live search text first, never a stale row.

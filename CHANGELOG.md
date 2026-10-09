@@ -12,6 +12,8 @@ at any time.
 
 ### Fixed
 
+- Linux: moving through the picker list with the arrow keys now scrolls the list
+  so the selected row always stays in view (it used to move off-screen).
 - Linux (Wayland): pressing Enter on a picker row pasted the previously copied
   clipboard instead of the selected item. The picker was hidden before the
   clipboard write, and GNOME's compositor ignores a clipboard write from a

@@ -364,7 +364,72 @@ extension PickerWindow {
     }
     guard let row = gtk_list_box_get_row_at_index(listBox, index.gtkInt32) else { return }
     gtk_list_box_select_row(listBox, row)
+    // T-KBSCROLL1: arrow keys move the selection through the view model while
+    // keyboard focus stays in the search entry, so GTK never scrolls the row
+    // into view itself. Every selection change (arrows, Home/End, PageUp/Down,
+    // wrap-around, either tab) funnels through here, so this one call covers
+    // them all.
+    if !scrollRowIntoView(row) {
+      pendingScrollRowIndex = index
+      pendingScrollAttempts = 0
+      scheduleScrollRetry()
+    }
   }
+
+  /// Scrolls the list minimally so the row is fully visible (see
+  /// ScrollIntoView.targetValue). False means the row has no allocation yet
+  /// (just built by a reconcile, layout has not run), so the caller must retry
+  /// after layout.
+  ///
+  /// Setting the adjustment fires "value-changed", i.e. handleAdjustmentChanged,
+  /// which pages in more rows near the bottom, so arrowing toward the end of
+  /// the loaded window keeps loading; a no-change result deliberately never
+  /// touches the adjustment. The hover preview needs no fix-up: its anchor is
+  /// in list-box coordinates and the list box moves with its rows, so it stays
+  /// level with the hovered row.
+  private func scrollRowIntoView(_ row: OpaquePointer) -> Bool {
+    let height = gtk_widget_get_height(row)
+    guard height > 0, let origin = gtkTranslate((0, 0), from: row, to: listBox) else {
+      return false
+    }
+    let adjustment = gtk_scrolled_window_get_vadjustment(scrolledWindow)
+    let current = gtk_adjustment_get_value(adjustment)
+    let target = ScrollIntoView.targetValue(
+      value: current, pageSize: gtk_adjustment_get_page_size(adjustment),
+      upper: gtk_adjustment_get_upper(adjustment), rowTop: origin.y, rowHeight: Double(height))
+    if target != current {
+      gtk_adjustment_set_value(adjustment, target)
+    }
+    return true
+  }
+
+  /// Retries scrollRowIntoView for the still-selected row from an idle
+  /// callback: G_PRIORITY_DEFAULT_IDLE sits below GDK's redraw priority, so it
+  /// runs after the frame that lays the new rows out. Bounded so a window that
+  /// never lays out (hidden) cannot keep the source alive.
+  private func scheduleScrollRetry() {
+    guard pendingScrollSourceID == nil else { return }
+    pendingScrollSourceID = g_idle_add_full(
+      G_PRIORITY_DEFAULT_IDLE, pendingScrollTrampoline, retainedTrampolineContext(self),
+      releaseTrampolineContextSingleArg)
+  }
+
+  /// One idle tick of the retry. Returns true to keep the source.
+  fileprivate func retryPendingScroll() -> Bool {
+    pendingScrollAttempts += 1
+    if let index = pendingScrollRowIndex,
+      let row = gtk_list_box_get_row_at_index(listBox, index.gtkInt32),
+      !scrollRowIntoView(row), pendingScrollAttempts < Self.maxScrollRetryAttempts
+    {
+      return true
+    }
+    pendingScrollRowIndex = nil
+    pendingScrollSourceID = nil
+    return false
+  }
+
+  /// Idle ticks to wait for layout before giving up on a pending scroll.
+  private static let maxScrollRetryAttempts = 20
 
   func handleRowSelected(row: OpaquePointer?) {
     guard let row else { return }
@@ -443,3 +508,10 @@ private let adjustmentChangedTrampoline:
     guard let window = unretainedContext(data, as: PickerWindow.self) else { return }
     window.handleAdjustmentChanged(adjustment)
   }
+
+/// GSourceFunc for the pending scroll-into-view retry. gboolean: nonzero keeps
+/// the source, zero removes it.
+private let pendingScrollTrampoline: @convention(c) (UnsafeMutableRawPointer?) -> Int32 = { data in
+  guard let window = unretainedContext(data, as: PickerWindow.self) else { return 0 }
+  return window.retryPendingScroll() ? 1 : 0
+}

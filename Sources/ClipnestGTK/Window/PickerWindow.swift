@@ -256,6 +256,12 @@ public final class PickerWindow: @unchecked Sendable {
   /// run yet (see `PickerWindowRefreshCoalescer`/`scheduleCoalescedRefresh()`
   /// in `PickerWindow+Reconcile.swift`); `nil` whenever none is pending.
   var pendingRefreshSourceID: UInt32?
+  /// T-KBSCROLL1: row index whose scroll-into-view is waiting for layout, the
+  /// idle source retrying it, and how many ticks it has tried. See
+  /// syncListBoxSelection(toIndex:) in PickerWindow+Rows.swift.
+  var pendingScrollRowIndex: Int?
+  var pendingScrollSourceID: UInt32?
+  var pendingScrollAttempts = 0
 
   /// Collapses any number of `objectWillChange` notifications arriving
   /// before the next reconcile actually runs into exactly one
