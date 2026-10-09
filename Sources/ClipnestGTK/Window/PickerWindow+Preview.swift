@@ -109,13 +109,13 @@ extension PickerWindow {
     }
   }
 
-  /// Pops the preview down. A popdown that the POINTER did not cause (the
-  /// target was filtered out, the tab changed, a re-map) may never be followed
+  /// Pops the preview down for good. A popdown that the POINTER did not cause (the
+  /// target was filtered out, the tab changed) may never be followed
   /// by a motion "leave" from the popover, which would leave the view model's
   /// `isHoveringPreview` stuck true and keep a later preview open after the
   /// pointer left; so the hover flag is reset explicitly whenever a mapped popup
-  /// is closed here. If the pointer is still over a re-mapped popup, its
-  /// "enter" sets the flag again.
+  /// is closed here. A re-map (target or anchor changed while shown) does NOT go
+  /// through here; see `updatePreviewPopover`.
   func closePreviewPopover() {
     let wasMapped = gtk_widget_get_mapped(previewPopover) != 0
     shownPreviewKey = nil
@@ -186,7 +186,10 @@ extension PickerWindow {
       height: anchor?.height ?? 0)
     let shown = gtk_widget_get_mapped(previewPopover) != 0 ? shownPreviewKey : nil
     if PreviewPlacementKey.needsRemap(shown: shown, new: key) {
-      closePreviewPopover()
+      // A re-map is not a real close: pop down directly and leave the hover
+      // flag and the view model's pending resolve alone (resetting it here
+      // replaced the 20 ms show resolve with a 250 ms grace one).
+      gtk_popover_popdown(previewPopover)
     }
     shownPreviewKey = key
     if var rect = anchor {
