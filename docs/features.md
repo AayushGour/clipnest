@@ -113,6 +113,24 @@ clipboard content) via `os.Logger`.
 - Nothing classifiable on the pasteboard → `reader.read` returns `nil`, no-op.
 - Blob write failure → capture aborted for that cycle rather than storing a dangling `blobPath` (`:229-250`).
 - Store failure → surfaced via `captureFailureHandler`, never silently swallowed.
+- Linux: a text conversion that returns zero bytes is treated as "no payload" (`LinuxPasteboard.string(forType:)`), so it can no longer create a blank history row.
+
+**Diagnosing a copy that didn't reach history (T-TERMCOPY1).** Every change that
+ends without a captured item now leaves one metadata-only line (type names,
+source id, pause flag — never content), where it used to be silent:
+- `ClipboardMonitor` — `change not captured — rejected by PrivacyFilter …` or
+  `… no readable payload …` (`notice` when the owner offered types, `info` when it
+  offered none, the normal shape of Clipnest's own write).
+- Linux only, `LinuxPasteboard` — `clipboard serial=N targets=[…] → capturable | no
+  capturable representation | concealed | Clipnest's own write`, plus
+  `text conversion refused or timed out / returned 0 bytes / not decodable`.
+- Linux only, `X11ClipboardConnection` — `selection owner changed: serial=N owner=…`
+  for every XFixes event, and `conversion of <mime> refused … / timed out …`.
+
+Read them with `journalctl --user -t app.clipnest.Clipnest --since '-5min'`. A
+copy with no `selection owner changed` line was never delivered to Clipnest by the
+display server; one with it but no `clipboard serial=` line stopped before the
+TARGETS fetch finished; the rest name their own reason.
 
 **Tests.** `Tests/ClipnestCoreTests/ClipboardMonitorTests.swift` — e.g.
 `checkNow captures exactly one ClipItem on an accepted change` (`:123`),

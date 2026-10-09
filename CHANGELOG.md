@@ -10,7 +10,17 @@ at any time.
 
 ## [Unreleased]
 
-No unreleased changes.
+### Fixed
+
+- Linux: a clipboard owner that answered a text request with zero bytes was
+  saved as a blank history row. It is now treated as "nothing to capture".
+
+### Added
+
+- Linux: a copy that does not reach history now leaves a log line saying why
+  (the owner's offered targets, a refused or timed-out conversion, a privacy or
+  pause rejection). Previously every such drop was silent. See
+  [docs/features.md](docs/features.md#1-clipboard-capture).
 
 ## [1.0.0] - 2026-10-06
 

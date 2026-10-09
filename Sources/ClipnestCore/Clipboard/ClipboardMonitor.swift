@@ -110,6 +110,26 @@ public final class ClipboardMonitor {
     logger.error("ClipboardMonitor: failed to persist a captured item (\(reason))")
   }
 
+  /// T-TERMCOPY1: logs why a pasteboard change ended without a captured
+  /// item. Metadata only (coding-standards.md privacy rule) — `ClipMediaType`
+  /// raw values, the source identifier, the pause flag; never clipboard
+  /// content. An EMPTY `types` is the normal shape of Clipnest's own
+  /// clipboard write (and of an owner mid-handover), so it logs at `info`;
+  /// a change that offered types yet still produced nothing is the one
+  /// worth surfacing by default, at `notice`.
+  nonisolated static func logSkippedChange(
+    reason: String, types: [ClipMediaType], source: String?, isSuspended: Bool
+  ) {
+    let message =
+      "change not captured — \(reason) (types=\(types.map(\.rawValue)), "
+      + "source=\(source ?? "unknown"), captureSuspended=\(isSuspended))"
+    if types.isEmpty {
+      logger.info(message)
+    } else {
+      logger.notice(message)
+    }
+  }
+
   private let store: any ClipStore
   private let privacyFilter: PrivacyFilter
   private let reader: PasteboardReader
@@ -427,14 +447,24 @@ public final class ClipboardMonitor {
     let sourceBundleID = frontmostApplicationProvider.frontmostBundleID
     let sourceAppName = frontmostApplicationProvider.frontmostAppName
 
+    // T-TERMCOPY1: every "this change was not captured" exit below used to be
+    // silent, which made a dropped copy (a terminal copy that never reached
+    // history) impossible to tell apart from "Clipnest never saw it". Each
+    // exit now logs one metadata-only line — type names, source id, the
+    // pause flag; never content — via `logSkippedChange`.
+    let availableTypes = pasteboard.availableTypes
+    let isCaptureSuspended = isPaused || !captureEnabledProvider()
     guard
       privacyFilter.shouldCapture(
-        availableTypes: pasteboard.availableTypes,
+        availableTypes: availableTypes,
         sourceBundleID: sourceBundleID,
-        isPaused: isPaused || !captureEnabledProvider(),
+        isPaused: isCaptureSuspended,
         customExcludedBundleIDs: excludedBundleIDsProvider()
       )
     else {
+      Self.logSkippedChange(
+        reason: "rejected by PrivacyFilter (concealed/transient marker, paused, or excluded app)",
+        types: availableTypes, source: sourceBundleID, isSuspended: isCaptureSuspended)
       return nil
     }
 
@@ -448,7 +478,12 @@ public final class ClipboardMonitor {
     // pattern the blob write just below already uses. `reader` is `Sendable`
     // (stateless struct) so it's safe to copy into the closure; `rawPayload`
     // is `Sendable` by construction (`PasteboardReader.RawPayload`).
-    guard let rawPayload = reader.pullRawPayload(from: pasteboard) else { return nil }
+    guard let rawPayload = reader.pullRawPayload(from: pasteboard) else {
+      Self.logSkippedChange(
+        reason: "no readable payload",
+        types: availableTypes, source: sourceBundleID, isSuspended: isCaptureSuspended)
+      return nil
+    }
     let reader = self.reader
     let classified = await Task.detached(priority: .utility) {
       reader.classify(rawPayload)

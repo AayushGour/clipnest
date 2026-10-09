@@ -52,6 +52,12 @@ public final class LinuxPasteboard: MonitoredPasteboard, @unchecked Sendable {
   private let restoreGuardLock = NSLock()
   private var restoreGuard = ClipboardManagerRestoreGuard()
   private let isOwnedByThisProcess: () -> Bool
+  private var lastLoggedTargetsSerial: Int?
+
+  /// T-TERMCOPY1: a copy that is dropped must leave a trace. Metadata only —
+  /// MIME type names and byte counts, never clipboard content.
+  private static let logger = ClipnestLogger(
+    subsystem: ClipnestLog.subsystem, category: "LinuxPasteboard")
 
   /// Clipnest's own clipboard writes are skipped and their bytes never
   /// requested — on GNOME the owner answering a byte request is this
@@ -92,15 +98,42 @@ public final class LinuxPasteboard: MonitoredPasteboard, @unchecked Sendable {
     guard !isOwnedByThisProcess() else { return [] }
     let serial = connection.changeSerial
     let mimeTypes = connection.currentTargets()
-    guard !Self.isOwnWrite(mimeTypes) else { return [] }
-    guard !isConcealed(mimeTypes, serial: serial) else { return [.concealed] }
+    guard !Self.isOwnWrite(mimeTypes) else {
+      logTargets(mimeTypes, serial: serial, outcome: "Clipnest's own write")
+      return []
+    }
+    guard !isConcealed(mimeTypes, serial: serial) else {
+      logTargets(mimeTypes, serial: serial, outcome: "concealed")
+      return [.concealed]
+    }
 
     var types: [ClipMediaType] = []
     if MimeRepresentationSelector.isAvailable(.file, in: mimeTypes) { types.append(.fileURL) }
     if MimeRepresentationSelector.isAvailable(.image, in: mimeTypes) { types.append(.png) }
     if MimeRepresentationSelector.isAvailable(.richText, in: mimeTypes) { types.append(.rtf) }
     if MimeRepresentationSelector.isAvailable(.text, in: mimeTypes) { types.append(.string) }
+    logTargets(
+      mimeTypes, serial: serial,
+      outcome: types.isEmpty ? "no capturable representation" : "capturable")
     return types
+  }
+
+  /// Logs the TARGETS this owner offered, once per clipboard serial
+  /// (`availableTypes` runs several times per change). Without this line a
+  /// dropped copy gave no way to tell "Clipnest never saw the owner change"
+  /// from "it saw targets it could not use" (T-TERMCOPY1).
+  private func logTargets(_ mimeTypes: [String], serial: Int, outcome: String) {
+    restoreGuardLock.lock()
+    let isFirstLogForSerial = lastLoggedTargetsSerial != serial
+    lastLoggedTargetsSerial = serial
+    restoreGuardLock.unlock()
+    guard isFirstLogForSerial else { return }
+    let message = "clipboard serial=\(serial) targets=\(mimeTypes) → \(outcome)"
+    if mimeTypes.isEmpty || outcome == "capturable" || outcome == "Clipnest's own write" {
+      Self.logger.info(message)
+    } else {
+      Self.logger.notice(message)
+    }
   }
 
   public func string(forType type: ClipMediaType) -> String? {
@@ -114,10 +147,26 @@ public final class LinuxPasteboard: MonitoredPasteboard, @unchecked Sendable {
     case .fileURL:
       return firstFileURI(mimeTypes: mimeTypes)
     case .string:
-      guard let mimeType = MimeRepresentationSelector.winningMimeType(for: .text, in: mimeTypes),
-        let data = connection.payload(forMimeType: mimeType)
+      guard let mimeType = MimeRepresentationSelector.winningMimeType(for: .text, in: mimeTypes)
       else { return nil }
-      return TextPayloadDecoder.decode(data, mimeType: mimeType)
+      guard let data = connection.payload(forMimeType: mimeType) else {
+        Self.logger.notice(
+          "text conversion refused or timed out: mime=\(mimeType) serial=\(serial)")
+        return nil
+      }
+      // An owner that answers a text request with zero bytes holds nothing
+      // worth keeping; storing it produced a blank history row (seen on real
+      // hardware, 2026-10-09). Treated as "no payload" instead.
+      guard !data.isEmpty else {
+        Self.logger.notice("text conversion returned 0 bytes: mime=\(mimeType) serial=\(serial)")
+        return nil
+      }
+      guard let text = TextPayloadDecoder.decode(data, mimeType: mimeType) else {
+        Self.logger.notice(
+          "text payload not decodable: mime=\(mimeType) bytes=\(data.count) serial=\(serial)")
+        return nil
+      }
+      return text
     default:
       return nil
     }
