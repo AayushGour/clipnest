@@ -183,7 +183,8 @@ extension PickerWindow {
     // constraints, so with no room on the right it flips to the left.
     gtk_popover_set_position(previewPopover, GTK_POS_RIGHT)
     gtk_popover_set_has_arrow(previewPopover, 0)
-    gtk_popover_set_offset(previewPopover, PreviewAnchor.gap, 0)
+    gtk_popover_set_offset(
+      previewPopover, PreviewAnchor.offset(isWayland: gdkDisplayIsWayland()), 0)
 
     let previewBox: OpaquePointer = gtk_box_new(GTK_ORIENTATION_VERTICAL, PickerWindow.outerSpacing)
     gtk_widget_set_size_request(previewImage, ThumbnailBounds.previewMaxPixelSize.gtkInt32, -1)

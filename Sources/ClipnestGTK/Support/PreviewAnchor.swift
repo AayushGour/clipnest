@@ -13,6 +13,22 @@ public enum PreviewAnchor {
   /// Gap in pixels between the window edge and the preview.
   public static let gap: Int32 = 8
 
+  /// How far (px) the preview must reach back INTO the picker window on
+  /// Wayland. mutter dismisses (`xdg_popup.popup_done`, within ~30 ms of the
+  /// first commit) a non-grabbing popup whose geometry does not overlap its
+  /// parent's window geometry, so a popover placed with a clear gap beside the
+  /// window never appears there (T-PREVIEWWL1; measured on mutter 46 headless:
+  /// popup left edge at window right + 8 or + 1 dismissed, any overlap kept).
+  /// X11 has no such rule and keeps the visible `gap`.
+  public static let waylandOverlap: Int32 = 2
+
+  /// The popover offset from the anchor band's edge: a positive `gap` on X11,
+  /// a negative `waylandOverlap` on Wayland so the popup overlaps the window by
+  /// a couple of pixels (the same on the flipped side).
+  public static func offset(isWayland: Bool) -> Int32 {
+    isWayland ? -waylandOverlap : gap
+  }
+
   public struct Band: Equatable {
     public let x: Int
     public let y: Int

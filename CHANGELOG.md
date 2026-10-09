@@ -12,6 +12,10 @@ at any time.
 
 ### Fixed
 
+- Linux (Wayland): the hover preview appeared nowhere on GNOME Wayland since the
+  side-by-side placement change: the compositor dismissed a preview that did not
+  overlap the picker window. It now overlaps the window edge by a couple of
+  pixels and shows, level with the hovered row.
 - Linux: moving through the picker list with the arrow keys now scrolls the list
   so the selected row always stays in view (it used to move off-screen).
 - Linux (Wayland): pressing Enter on a picker row pasted the previously copied

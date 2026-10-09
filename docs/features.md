@@ -809,6 +809,16 @@ under X11/Xvfb + openbox: preview right of a left-edge window, left of a
 centered window on a 1440 px screen. The Wayland xdg_popup flip is the same
 GTK/GDK mechanism but was not exercised on a real compositor.)
 
+**Wayland (T-PREVIEWWL1).** mutter dismisses (`xdg_popup.popup_done`, ~30 ms
+after the first commit) a non-grabbing popup whose geometry does not overlap
+its parent window's geometry, so the 8 px gap above made the preview vanish on
+GNOME Wayland (measured on headless mutter 46: popup placed at window-right + 8
+or + 1 was dismissed every time, any overlap survived). On Wayland the popover
+offset is therefore `-PreviewAnchor.waylandOverlap` (-2 px, via
+`PreviewAnchor.offset(isWayland:)`), reaching 2-3 px back into the window, level
+with the row, on both the right and the flipped-left side. X11 keeps the
+visible 8 px gap.
+
 **How it works — keyboard.** `PickerView.handle(_:)`
 (`PickerView.swift:154-199`) is the single `.onKeyPress` handler for
 Esc (dismiss), Return / ⌥-Return (paste rich / paste plain), ↑/↓ (move

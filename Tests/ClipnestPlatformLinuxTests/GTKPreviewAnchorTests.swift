@@ -55,4 +55,26 @@ struct GTKPreviewAnchorTests {
   func gapPositive() {
     #expect(PreviewAnchor.gap > 0)
   }
+
+  // T-PREVIEWWL1: mutter dismisses a non-grabbing popup that does not overlap
+  // its parent's window geometry, so on Wayland the popup must reach back into
+  // the window; X11 keeps the visible gap.
+  @Test("Wayland: the popup's near edge lands inside the window, on both flip sides")
+  func waylandPopupOverlapsWindow() {
+    let windowWidth = 758
+    let band = PreviewAnchor.band(
+      windowLeft: 1, windowWidth: windowWidth - 2, rowTop: 0, rowHeight: 40, visibleTop: 0,
+      visibleHeight: 400)
+    let offset = Int(PreviewAnchor.offset(isWayland: true))
+    let rightPlacementLeftEdge = band.x + band.width + offset
+    let flippedPlacementRightEdge = band.x - offset
+    #expect(rightPlacementLeftEdge < windowWidth)
+    #expect(flippedPlacementRightEdge > 0)
+  }
+
+  @Test("X11 keeps the visible gap between the window and the preview")
+  func x11KeepsGap() {
+    #expect(PreviewAnchor.offset(isWayland: false) == PreviewAnchor.gap)
+    #expect(PreviewAnchor.offset(isWayland: false) > 0)
+  }
 }

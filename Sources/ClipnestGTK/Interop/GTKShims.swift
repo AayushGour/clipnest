@@ -417,3 +417,13 @@ func gdk_pixbuf_loader_close(_ loader: OpaquePointer) -> Int32 {
 func gdk_pixbuf_loader_get_pixbuf(_ loader: OpaquePointer) -> OpaquePointer? {
   gdk_pixbuf_loader_get_pixbuf(gtkPointer(loader) as UnsafeMutablePointer<GdkPixbufLoader>)
 }
+
+/// `true` when GDK is running on its Wayland backend (`GdkWaylandDisplay`).
+/// Used where Wayland's xdg_popup rules differ from X11's, e.g. the hover
+/// preview's placement (`PreviewAnchor.offset(isWayland:)`).
+func gdkDisplayIsWayland() -> Bool {
+  guard let display = gdk_display_get_default() else { return false }
+  let instance = UnsafeMutableRawPointer(display).assumingMemoryBound(to: GTypeInstance.self)
+  guard let typeName = g_type_name(instance.pointee.g_class.pointee.g_type) else { return false }
+  return String(cString: typeName) == "GdkWaylandDisplay"
+}

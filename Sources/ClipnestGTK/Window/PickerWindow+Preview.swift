@@ -71,7 +71,7 @@ extension PickerWindow {
   /// the anchor never extends outside the window (xdg_positioner requirement).
   /// Keeps the previous anchor if GTK can't translate coordinates (the widgets
   /// share no common ancestor).
-  private func previewAnchor(forRow row: OpaquePointer) -> GdkRectangle? {
+  func previewAnchor(forRow row: OpaquePointer) -> GdkRectangle? {
     guard let rowOrigin = gtkTranslate((0, 0), from: row, to: listBox),
       let windowOrigin = gtkTranslate((0, 0), from: window, to: listBox),
       let viewportOrigin = gtkTranslate((0, 0), from: scrolledWindow, to: listBox)
