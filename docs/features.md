@@ -773,6 +773,21 @@ as the popover scrolls (`TextPreview`, `:110-171`), and file metadata
 (name/size/path) read off-main-thread with **no** file-system access at
 capture time (`FilePreview`, `:179-223`).
 
+**Linux preview placement.** On macOS `WindowPlacement.previewSide` picks the
+side of the picker with more room. GTK4 cannot position windows and, on
+Wayland, an app cannot know where its own window is, so the Linux picker
+(`PickerWindow+Preview.swift`, `PickerWindow+Layout.swift`) lets the
+compositor decide: the preview `GtkPopover` is set to `GTK_POS_RIGHT`, no
+arrow, with an 8 px gap (`PreviewAnchor.gap`), and pointed at a band spanning
+the whole picker window's width at the hovered row's height
+(`PreviewAnchor.band`, pure and unit-tested). That puts it just outside the
+window's right edge level with the row; when there is no room on the right the
+popup positioner's flip constraint moves it to the left. Because the window
+doesn't move while open, the side is stable for a given preview size (image and text previews differ in width). (Verified
+under X11/Xvfb + openbox: preview right of a left-edge window, left of a
+centered window on a 1440 px screen. The Wayland xdg_popup flip is the same
+GTK/GDK mechanism but was not exercised on a real compositor.)
+
 **How it works — keyboard.** `PickerView.handle(_:)`
 (`PickerView.swift:154-199`) is the single `.onKeyPress` handler for
 Esc (dismiss), Return / ⌥-Return (paste rich / paste plain), ↑/↓ (move

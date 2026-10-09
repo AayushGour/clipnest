@@ -258,10 +258,12 @@ public final class PickerWindow: @unchecked Sendable {
 
   var lastSnapshot: PickerPollSnapshot = .initial
 
-  /// The pointer position of the most recent hover-preview motion event —
-  /// where `PickerWindow+Preview.swift` anchors `previewPopover` via
-  /// `gtk_popover_set_pointing_to`. `nil` until the first hover.
-  var lastHoverPoint: GdkRectangle?
+  /// The rect (in `listBox` coordinates) of the most recently hovered row's
+  /// full-window-width band — where `PickerWindow+Preview.swift` anchors
+  /// `previewPopover` via `gtk_popover_set_pointing_to` so the popover sits
+  /// beside the window, not at the pointer (see `PreviewAnchor`). `nil`
+  /// until the first hover.
+  var lastHoverAnchor: GdkRectangle?
 
   /// Guards against `notify::is-active` firing `onDismiss` for the
   /// activation transition `show(at:)` itself causes (a freshly-presented

@@ -175,6 +175,15 @@ extension PickerWindow {
   func buildPreviewPopover() {
     gtk_widget_set_parent(previewPopover, listBox)
     gtk_popover_set_autohide(previewPopover, 0)
+    // Beside the window, like macOS (`ItemPreviewController`): the anchor is a
+    // full-window-width band (`PreviewAnchor`), so `GTK_POS_RIGHT` puts the
+    // popover just outside the window's right edge. GTK cannot know the
+    // window's screen position (Wayland), so the left/right choice is left to
+    // the compositor: popovers are xdg_popups whose positioner has flip
+    // constraints, so with no room on the right it flips to the left.
+    gtk_popover_set_position(previewPopover, GTK_POS_RIGHT)
+    gtk_popover_set_has_arrow(previewPopover, 0)
+    gtk_popover_set_offset(previewPopover, PreviewAnchor.gap, 0)
 
     let previewBox: OpaquePointer = gtk_box_new(GTK_ORIENTATION_VERTICAL, PickerWindow.outerSpacing)
     gtk_widget_set_size_request(previewImage, ThumbnailBounds.previewMaxPixelSize.gtkInt32, -1)
