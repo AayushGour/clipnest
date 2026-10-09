@@ -1,4 +1,5 @@
 import CXlib
+import ClipnestCore
 import Foundation
 import Glibc
 
@@ -83,6 +84,12 @@ public final class X11ClipboardConnection: X11SelectionConnecting, X11WindowIden
   /// `DISPLAY` set, or running in a container/CI with no X server —
   /// exactly the environment this task's own verification runs in.
   private let x11: X11State?
+
+  /// T-TERMCOPY1: owner changes and failed conversions leave a trace; before
+  /// this, a copy that never reached history was indistinguishable from one
+  /// Clipnest never saw. Metadata only — window ids, serials, atom names.
+  private static let logger = ClipnestLogger(
+    subsystem: ClipnestLog.subsystem, category: "X11ClipboardConnection")
 
   private let stateLock = NSLock()
   private let conversionCondition = NSCondition()
@@ -246,8 +253,15 @@ public final class X11ClipboardConnection: X11SelectionConnecting, X11WindowIden
       _ = conversionCondition.wait(until: Date().addingTimeInterval(remaining))
     }
     let result = pendingConversion?.resultData
+    let didFinish = pendingConversion?.isFinished == true
     pendingConversion = nil
     conversionCondition.unlock()
+    if result == nil {
+      Self.logger.notice(
+        didFinish
+          ? "conversion of \(mimeType) refused by the selection owner"
+          : "conversion of \(mimeType) timed out with no reply from the selection owner")
+    }
     return result
   }
 
@@ -302,6 +316,9 @@ public final class X11ClipboardConnection: X11SelectionConnecting, X11WindowIden
     let newSerial = serial
     stateLock.unlock()
 
+    Self.logger.info(
+      "selection owner changed: serial=\(newSerial) owner=\(fixesEvent.owner) "
+        + "subtype=\(fixesEvent.subtype) self=\(isSelfWrite)")
     onSelectionChanged?(newSerial, isSelfWrite)
   }
 
