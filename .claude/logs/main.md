@@ -13,3 +13,7 @@
 - 2026-10-09 [PR] pushed linux-1.0.1-fixes (34a147a + board/log commits) and opened draft PR #11 to main
 - 2026-10-09 [PR#11] rewrote 18 PR commits' author/committer Debarun Pal → Aayush Gour <ag14906@gmail.com> at user request (tree identical), force-pushed; repo-local git identity set to Aayush Gour
 - 2026-10-09 [T-AUTHORFIX1] rewrote main (20b3ae6→3d15dcf author Aayush Gour), main 4e6b044→3562a9a, v1.0.0 cc2055b→52f3d32, PR#11 →def7470; Release (Linux) disabled 17:37:39Z→re-enabled 17:38:50Z, no Linux run, assets unchanged
+- 2026-10-09 [PR#11] cherry-picked 7ef4146(re-authored)/d757cba/b783afe/886f35d + board/log commit onto linux-1.0.1-fixes → f73b39d (23 commits, all AayushGour), PR body updated
+- 2026-10-09 installed 1.0.1~local7 (f73b39d, PR #11 head)
+- 2026-10-09 [T-MAKE1] Makefile d5b0ce1 pushed to PR #11
+- 2026-10-09 [T-DOCS1] docs pass 41f9db2/e8f9a36; pushing to PR #11 and marking ready; then full machine cleanup per user
