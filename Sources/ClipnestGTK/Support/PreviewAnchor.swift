@@ -23,11 +23,19 @@ public enum PreviewAnchor {
   /// The anchor band in the popover parent's coordinate space. `windowLeft` is
   /// the window's left edge expressed in that space (typically <= 0: the
   /// parent sits inside the window's margins), `rowTop` the hovered row's
-  /// top. Width and height are clamped to at least 1 so GTK never receives an
-  /// empty rect (an unallocated widget reports 0).
+  /// top. The row's vertical extent is clipped to the visible viewport
+  /// (`visibleTop`/`visibleHeight`): a row partly scrolled out of view must not
+  /// push the anchor beyond the window, which xdg_positioner forbids. A row
+  /// wholly outside collapses to a 1px band at the nearest viewport edge.
+  /// Width and height are clamped to at least 1 so GTK never receives an empty
+  /// rect (an unallocated widget reports 0).
   public static func band(
-    windowLeft: Int, windowWidth: Int, rowTop: Int, rowHeight: Int
+    windowLeft: Int, windowWidth: Int, rowTop: Int, rowHeight: Int,
+    visibleTop: Int, visibleHeight: Int
   ) -> Band {
-    Band(x: windowLeft, y: rowTop, width: max(windowWidth, 1), height: max(rowHeight, 1))
+    let visibleBottom = visibleTop + max(visibleHeight, 1)
+    let top = min(max(rowTop, visibleTop), visibleBottom - 1)
+    let bottom = min(max(rowTop + rowHeight, top + 1), visibleBottom)
+    return Band(x: windowLeft, y: top, width: max(windowWidth, 1), height: bottom - top)
   }
 }

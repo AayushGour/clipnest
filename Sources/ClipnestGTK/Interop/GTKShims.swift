@@ -188,6 +188,8 @@ func gtk_widget_get_height(_ widget: OpaquePointer) -> Int32 {
 func gtkTranslate(
   _ point: (x: Double, y: Double), from source: OpaquePointer, to destination: OpaquePointer
 ) -> (x: Double, y: Double)? {
+  // Deprecated since GTK 4.12, but `gtk_widget_compute_point` needs 4.12+ and
+  // Ubuntu 22.04 (jammy) ships GTK 4.6.
   var translatedX = 0.0
   var translatedY = 0.0
   let ok = gtk_widget_translate_coordinates(

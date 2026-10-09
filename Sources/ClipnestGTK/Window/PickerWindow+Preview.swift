@@ -67,15 +67,19 @@ extension PickerWindow {
 
   /// The anchor band for `row`: the row's vertical extent, spanning the
   /// whole window's width (see `PreviewAnchor`), all in `listBox`
-  /// coordinates (the popover's parent). Keeps the previous anchor if GTK
-  /// can't translate coordinates yet (widget not realized).
+  /// coordinates (the popover's parent), clipped to the scrolled viewport so
+  /// the anchor never extends outside the window (xdg_positioner requirement).
+  /// Keeps the previous anchor if GTK can't translate coordinates (the widgets
+  /// share no common ancestor).
   private func previewAnchor(forRow row: OpaquePointer) -> GdkRectangle? {
     guard let rowOrigin = gtkTranslate((0, 0), from: row, to: listBox),
-      let windowOrigin = gtkTranslate((0, 0), from: window, to: listBox)
+      let windowOrigin = gtkTranslate((0, 0), from: window, to: listBox),
+      let viewportOrigin = gtkTranslate((0, 0), from: scrolledWindow, to: listBox)
     else { return lastHoverAnchor }
     let band = PreviewAnchor.band(
       windowLeft: Int(windowOrigin.x), windowWidth: Int(gtk_widget_get_width(window)),
-      rowTop: Int(rowOrigin.y), rowHeight: Int(gtk_widget_get_height(row)))
+      rowTop: Int(rowOrigin.y), rowHeight: Int(gtk_widget_get_height(row)),
+      visibleTop: Int(viewportOrigin.y), visibleHeight: Int(gtk_widget_get_height(scrolledWindow)))
     return GdkRectangle(
       x: band.x.gtkInt32, y: band.y.gtkInt32, width: band.width.gtkInt32,
       height: band.height.gtkInt32)

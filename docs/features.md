@@ -783,7 +783,7 @@ the whole picker window's width at the hovered row's height
 (`PreviewAnchor.band`, pure and unit-tested). That puts it just outside the
 window's right edge level with the row; when there is no room on the right the
 popup positioner's flip constraint moves it to the left. Because the window
-doesn't move while open, the side is stable for the whole session. (Verified
+doesn't move while open, the side is stable for a given preview size (image and text previews differ in width). (Verified
 under X11/Xvfb + openbox: preview right of a left-edge window, left of a
 centered window on a 1440 px screen. The Wayland xdg_popup flip is the same
 GTK/GDK mechanism but was not exercised on a real compositor.)
