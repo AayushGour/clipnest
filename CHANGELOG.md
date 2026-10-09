@@ -17,6 +17,9 @@ at any time.
   mouse cursor.
 - Linux: a clipboard owner that answered a text request with zero bytes was
   saved as a blank history row. It is now treated as "nothing to capture".
+- Linux: a text copy whose preferred text type comes back empty, refused or
+  undecodable now falls back to the owner's other advertised text types,
+  instead of being dropped.
 
 ### Added
 
