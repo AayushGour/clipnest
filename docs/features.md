@@ -832,6 +832,19 @@ under X11/Xvfb + openbox: preview right of a left-edge window, left of a
 centered window on a 1440 px screen. The Wayland xdg_popup flip is the same
 GTK/GDK mechanism but was not exercised on a real compositor.)
 
+**Row height and preview bounds (T-ROWLINES1).** A Linux row shows at most 3
+lines (`PickerLayoutLimits.rowTextMaxLines`): `RowDisplayText.collapsed` folds
+newlines/tabs/space runs into one paragraph capped at 360 characters, and the
+label wraps (`PANGO_WRAP_WORD_CHAR`), is limited to 3 lines and ellipsized at
+the end. (GTK 4.6's `lines` cap alone was not reliable across explicit
+newlines: a 200-line copy rendered every line.) Search highlighting runs on the
+collapsed text. The Snippets body line gets the same treatment. The picker is
+60 px taller than macOS (`PickerLayoutLimits.windowDefaultHeight` = 480; width
+unchanged at 560). The preview popover wraps its content in a `GtkScrolledWindow`
+capped at `previewMaxContentHeight` (400 px), so a very long copy scrolls
+inside the preview, and the preview stays open while the pointer is over it
+(`previewHoverChanged` is now fed by a motion controller on the popover).
+
 **Wayland (T-PREVIEWWL1).** mutter dismisses (`xdg_popup.popup_done`, ~30 ms
 after the first commit) a non-grabbing popup whose geometry does not overlap
 its parent window's geometry, so the 8 px gap above made the preview vanish on

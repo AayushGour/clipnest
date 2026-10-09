@@ -22,6 +22,9 @@ at any time.
 
 ### Fixed
 
+- Linux: a very long or multi-line copy no longer makes its picker row tall. Rows
+  show at most 3 lines (ellipsized), the picker window is a little taller, and
+  the hover preview is height-bounded and scrolls inside itself.
 - Linux (Wayland): the hover preview appeared nowhere on GNOME Wayland since the
   side-by-side placement change: the compositor dismissed a preview that did not
   overlap the picker window. It now overlaps the window edge by a couple of

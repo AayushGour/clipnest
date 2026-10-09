@@ -88,6 +88,27 @@ extension PickerWindow {
       height: band.height.gtkInt32)
   }
 
+  /// The pointer moving from a row ONTO the preview must keep it open so its
+  /// scrollable (T-ROWLINES1) content can be read: report enter/leave of the
+  /// popover itself to the view model (previewHoverChanged), which holds the
+  /// popover open while hovered and closes it after the grace delay on leave.
+  func connectPreviewPopoverHover() {
+    let controller: OpaquePointer = gtk_event_controller_motion_new()
+    gtkConnect(
+      controller, signal: "enter", context: self,
+      callback: unsafeBitCast(previewPopoverEnterTrampoline, to: GCallback.self))
+    gtkConnect(
+      controller, signal: "leave", context: self,
+      callback: unsafeBitCast(previewPopoverLeaveTrampoline, to: GCallback.self))
+    gtk_widget_add_controller(previewPopover, controller)
+  }
+
+  func handlePreviewPopoverHover(_ hovering: Bool) {
+    MainActor.assumeIsolated {
+      viewModel.previewHoverChanged(hovering)
+    }
+  }
+
   func handlePreviewLeave() {
     MainActor.assumeIsolated {
       viewModel.hoverItem(nil)
@@ -288,6 +309,23 @@ private let previewMotionTrampoline:
     guard let window = unretainedContext(data, as: PickerWindow.self) else { return }
     window.handlePreviewMotion(x: x, y: y)
   }
+
+/// `GtkEventControllerMotion::enter` on the preview popover.
+private let previewPopoverEnterTrampoline:
+  @convention(c) (
+    OpaquePointer?, Double, Double, UnsafeMutableRawPointer?
+  ) -> Void = { _, _, _, data in
+    guard let window = unretainedContext(data, as: PickerWindow.self) else { return }
+    window.handlePreviewPopoverHover(true)
+  }
+
+/// `GtkEventControllerMotion::leave` on the preview popover.
+private let previewPopoverLeaveTrampoline:
+  @convention(c) (OpaquePointer?, UnsafeMutableRawPointer?) ->
+    Void = { _, data in
+      guard let window = unretainedContext(data, as: PickerWindow.self) else { return }
+      window.handlePreviewPopoverHover(false)
+    }
 
 /// `GtkEventControllerMotion::leave` — `void (*)(GtkEventControllerMotion*, gpointer)`.
 private let previewLeaveTrampoline:

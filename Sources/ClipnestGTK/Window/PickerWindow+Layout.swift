@@ -225,6 +225,17 @@ extension PickerWindow {
     gtk_label_set_max_width_chars(previewOCRTextLabel, PickerWindow.previewTextMaxWidthChars)
     gtk_box_append(previewBox, previewOCRTextLabel)
 
-    gtk_popover_set_child(previewPopover, previewBox)
+    // T-ROWLINES1: bounded height. Very long text scrolls inside the preview
+    // rather than growing past the screen (where the compositor flips or jumps
+    // it). Natural size is propagated so short content stays compact.
+    let previewScroller: OpaquePointer = gtk_scrolled_window_new()
+    gtk_scrolled_window_set_policy(previewScroller, GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
+    gtk_scrolled_window_set_propagate_natural_height(previewScroller, 1)
+    gtk_scrolled_window_set_propagate_natural_width(previewScroller, 1)
+    gtk_scrolled_window_set_max_content_height(
+      previewScroller, PickerLayoutLimits.previewMaxContentHeight)
+    gtk_scrolled_window_set_child(previewScroller, previewBox)
+    gtk_popover_set_child(previewPopover, previewScroller)
+    connectPreviewPopoverHover()
   }
 }

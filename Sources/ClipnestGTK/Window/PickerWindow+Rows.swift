@@ -192,6 +192,20 @@ extension PickerWindow {
     return old.count
   }
 
+  /// T-ROWLINES1: wraps a row's text label and ellipsizes it at the end of the
+  /// `PickerLayoutLimits.rowTextMaxLines`th line, so a very long or multi-line
+  /// copy never makes the row (and the hover-preview anchor) arbitrarily tall.
+  /// Markup (search highlighting) is unaffected: the cap is a layout property
+  /// of the label, not of its text.
+  private func capRowTextLines(_ label: OpaquePointer) {
+    gtk_label_set_wrap(label, 1)
+    gtk_label_set_wrap_mode(label, PANGO_WRAP_WORD_CHAR)
+    gtk_label_set_lines(label, PickerLayoutLimits.rowTextMaxLines)
+    gtk_label_set_ellipsize(label, PANGO_ELLIPSIZE_END)
+    gtk_label_set_width_chars(label, PickerLayoutLimits.rowTextWidthChars)
+    gtk_label_set_max_width_chars(label, PickerLayoutLimits.rowTextWidthChars)
+  }
+
   /// - Parameter item: the raw model backing `content` — needed only for
   ///   `ItemRowActions.buttons(for:)`'s gating/labels and to capture into
   ///   each button's click closure (see `PickerWindow+RowActions.swift`).
@@ -207,7 +221,7 @@ extension PickerWindow {
 
     let label: OpaquePointer = gtk_label_new(nil)
     gtk_label_set_markup(label, content.markupText)
-    gtk_label_set_ellipsize(label, PANGO_ELLIPSIZE_END)
+    capRowTextLines(label)
     gtk_label_set_xalign(label, 0)
     gtk_widget_set_hexpand(label, 1)
     // Visual-parity pass: matches `ItemRow`'s unstyled (system `.body`,
@@ -263,7 +277,7 @@ extension PickerWindow {
 
     let bodyLabel: OpaquePointer = gtk_label_new(nil)
     gtk_label_set_markup(bodyLabel, content.markupBody)
-    gtk_label_set_ellipsize(bodyLabel, PANGO_ELLIPSIZE_END)
+    capRowTextLines(bodyLabel)
     gtk_label_set_xalign(bodyLabel, 0)
     gtk_widget_add_css_class(bodyLabel, "dim-label")
     // Visual-parity pass: matches `SnippetRow`'s `.caption` (~10pt) body
@@ -367,9 +381,9 @@ extension PickerWindow {
     gtk_list_box_select_row(listBox, row)
     // T-KBSCROLL1: arrow keys move the selection through the view model while
     // keyboard focus stays in the search entry, so GTK never scrolls the row
-    // into view itself. Every selection change (arrows, Home/End, PageUp/Down,
-    // wrap-around, either tab) funnels through here, so this one call covers
-    // them all.
+    // into view itself. Every selection change (arrow keys, wrap-around, a
+    // reconcile moving the selection, either tab) funnels through here, so
+    // this one call covers them all.
     if scrollRowIntoView(row) {
       // Done: a retry queued for an OLDER selection must not scroll back to it.
       pendingScrollRowIndex = nil

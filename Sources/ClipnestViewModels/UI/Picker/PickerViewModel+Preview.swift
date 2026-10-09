@@ -104,8 +104,7 @@ extension PickerViewModel {
   /// Resolves which item's popover should show, purely from hover state: a
   /// hovered, preview-worthy row wins; otherwise, while the pointer is over
   /// the popover itself, whatever is shown stays open; otherwise the popover
-  /// closes. Snippets rows are `Snippet`s (no `ClipItem` popover), so that tab
-  /// always resolves to closed.
+  /// closes.
   private func resolvePreview() {
     // A hovered row on the active tab wins (History/Pinned show the clip's
     // content, Snippets show the snippet's Body — `hoveredItemID` holds a

@@ -32,7 +32,8 @@ public struct ClipItemRowContent: Equatable, Sendable {
     id = item.id
     iconName = item.kind.gtkIconName
     markupText = PangoMarkup.markup(
-      for: SearchHighlightSegments.segments(in: item.previewText, matching: searchText))
+      for: SearchHighlightSegments.segments(
+        in: RowDisplayText.collapsed(item.previewText), matching: searchText))
     sourceAppLabel = item.sourceAppName
     isPinned = item.pinned
     hasRecognizedText = item.hasRecognizedText

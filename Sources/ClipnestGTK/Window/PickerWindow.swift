@@ -90,11 +90,12 @@ import ClipnestViewModels
 // concurrent access" guarantee `BlobStore` already documents its own
 // `nonisolated(unsafe)` with elsewhere in this codebase.
 public final class PickerWindow: @unchecked Sendable {
-  /// Matches `PickerPanel.defaultSize` (`NSSize(width: 560, height: 420)`,
-  /// `ClipnestApp/Sources/UI/Picker/PickerPanel.swift`) — the picker keeps
-  /// the same footprint on both platforms.
+  /// Width matches `PickerPanel.defaultSize` (560). Height is deliberately
+  /// taller than macOS's 420 (`PickerLayoutLimits.windowDefaultHeight`,
+  /// T-ROWLINES1) because Linux rows can be up to 3 lines high; placement
+  /// reads the window's real frame, never a hardcoded height.
   static let defaultWidth: Int32 = 560
-  static let defaultHeight: Int32 = 420
+  static let defaultHeight: Int32 = PickerLayoutLimits.windowDefaultHeight
 
   /// T-RT3: `windowToken`'s value — a stable per-ROLE constant, not a
   /// fresh UUID per instance. See this file's top "WINDOW PLACEMENT" doc

@@ -426,13 +426,13 @@ final class LinuxAppEnvironment {
       // already lost keyboard focus — write first, hide second.
       pasteDismissOrdering: .writeBeforeDismiss(
         confirmationTimeout: PasteDismissOrdering.defaultConfirmationTimeout),
+      showPreviewOnKeyboardSelection: { [settingsStore] in
+        settingsStore.showPreviewOnKeyboardSelection
+      },
       // T-RT2: lets an already-open picker re-query itself when SOMETHING
       // ELSE mutates this store — a Settings "Clear All History…", or
       // background retention — without either of those call sites needing
       // to know `pickerViewModel` exists.
-      showPreviewOnKeyboardSelection: { [settingsStore] in
-        settingsStore.showPreviewOnKeyboardSelection
-      },
       storeChanges: clipStore.changes)
     self.pickerViewModel = viewModel
 
