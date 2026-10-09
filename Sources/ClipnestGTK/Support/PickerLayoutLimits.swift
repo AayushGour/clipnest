@@ -22,9 +22,11 @@ public enum PickerLayoutLimits {
   /// content scrolls inside it instead of running off the screen.
   public static let previewMaxContentHeight: Int32 = 400
 
-  /// Minimum width (px) of the preview, so every text preview has the SAME
+  /// Minimum width (px) of the preview, so every TEXT preview has the same
   /// width. The compositor flips a popup to the other side of the picker when
   /// it does not fit; with content-dependent widths (100 to 413 px measured)
-  /// consecutive previews could land on opposite sides (T-PREVIEWJUMP1).
+  /// consecutive text previews could land on opposite sides (T-PREVIEWJUMP1).
+  /// Image previews can still be wider (about 528 px), so a switch between a
+  /// text and an image preview can change side on a screen that is tight.
   public static let previewMinContentWidth: Int32 = 420
 }

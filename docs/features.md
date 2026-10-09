@@ -853,7 +853,8 @@ could land on opposite sides. Now (1) a mapped preview is popped down first, so
 new content, size and anchor go out in one fresh `xdg_popup` with a single
 `configure` at the final position, and (2) every preview has the same minimum
 width (`PickerLayoutLimits.previewMinContentWidth`, 420 px), so the side choice
-cannot depend on the content. Measured on headless mutter 46 with a hover sweep
+does not vary between text previews (image previews, about 528 px, are wider
+and can still change side on a tight screen). Measured on headless mutter 46 with a hover sweep
 over short, 200-line and very long rows: 13 shows = 13 `get_popup` = 13
 `configure`, 0 `reposition`, 0 `popup_done`; on a 1500 px monitor every preview
 lands on the same side.

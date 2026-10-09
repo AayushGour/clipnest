@@ -278,6 +278,9 @@ public final class PickerWindow: @unchecked Sendable {
   /// beside the window, not at the pointer (see `PreviewAnchor`). `nil`
   /// until the first hover.
   var lastHoverAnchor: GdkRectangle?
+  /// Target and anchor of the preview popup currently on screen (T-PREVIEWJUMP1),
+  /// `nil` when none.
+  var shownPreviewKey: PreviewPlacementKey?
 
   /// Guards against `notify::is-active` firing `onDismiss` for the
   /// activation transition `show(at:)` itself causes (a freshly-presented

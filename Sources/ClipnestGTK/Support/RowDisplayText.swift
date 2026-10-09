@@ -13,24 +13,30 @@ public enum RowDisplayText {
   public static let maxCharacters = 360
 
   /// Collapses runs of whitespace to one space, trims, and keeps at most
-  /// maxCharacters characters; only a limited prefix of the text is scanned.
+  /// maxCharacters characters (the collapse spaces count); only a limited
+  /// prefix of the text is scanned. A running counter is used instead of
+  /// String.count, which is O(n) per call and made non-ASCII input quadratic.
   public static func collapsed(_ text: String, maxCharacters: Int = maxCharacters) -> String {
     var result = String()
+    var kept = 0
     var pendingSpace = false
     var scanned = 0
     for character in text {
       scanned += 1
       if scanned > maxCharacters * 4 { break }
-      if character.isWhitespace || character.isNewline {
-        pendingSpace = !result.isEmpty
+      if character.isWhitespace {
+        pendingSpace = kept > 0
         continue
       }
       if pendingSpace {
-        result.append(Character(Unicode.Scalar(UInt8(32))))
+        if kept + 1 >= maxCharacters { break }
+        result.append(" ")
+        kept += 1
         pendingSpace = false
       }
       result.append(character)
-      if result.count >= maxCharacters { break }
+      kept += 1
+      if kept >= maxCharacters { break }
     }
     return result
   }

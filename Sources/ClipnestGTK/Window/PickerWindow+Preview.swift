@@ -109,6 +109,24 @@ extension PickerWindow {
     }
   }
 
+  /// Pops the preview down. A popdown that the POINTER did not cause (the
+  /// target was filtered out, the tab changed, a re-map) may never be followed
+  /// by a motion "leave" from the popover, which would leave the view model's
+  /// `isHoveringPreview` stuck true and keep a later preview open after the
+  /// pointer left; so the hover flag is reset explicitly whenever a mapped popup
+  /// is closed here. If the pointer is still over a re-mapped popup, its
+  /// "enter" sets the flag again.
+  func closePreviewPopover() {
+    let wasMapped = gtk_widget_get_mapped(previewPopover) != 0
+    shownPreviewKey = nil
+    gtk_popover_popdown(previewPopover)
+    if wasMapped {
+      MainActor.assumeIsolated {
+        viewModel.previewHoverChanged(false)
+      }
+    }
+  }
+
   func handlePreviewLeave() {
     MainActor.assumeIsolated {
       viewModel.hoverItem(nil)
@@ -129,24 +147,15 @@ extension PickerWindow {
   /// plain wrapped `previewText`.
   func updatePreviewPopover(targetID: ClipItem.ID?, source: PreviewTargetSource?) {
     guard let targetID else {
-      gtk_popover_popdown(previewPopover)
+      closePreviewPopover()
       return
     }
     let isSnippetTab = MainActor.assumeIsolated { viewModel.activeTab == .snippets }
     let snippet = isSnippetTab ? renderedSnippets.first(where: { $0.id == targetID }) : nil
     let clip = isSnippetTab ? nil : renderedRows.first(where: { $0.id == targetID })
     guard snippet != nil || clip != nil else {
-      gtk_popover_popdown(previewPopover)
+      closePreviewPopover()
       return
-    }
-
-    // T-PREVIEWJUMP1: a popup that is already on screen is torn down first, so
-    // the new content, size and anchor are placed by ONE fresh xdg_popup
-    // (a single configure at the final position). Updating it in place made
-    // GTK send xdg_popup.reposition for every size/anchor change, and the
-    // compositor re-evaluated the flip side each time.
-    if gtk_widget_get_mapped(previewPopover) != 0 {
-      gtk_popover_popdown(previewPopover)
     }
 
     // T-PREVIEWSEL2: a keyboard-selection preview sits beside the SELECTED row,
@@ -164,6 +173,22 @@ extension PickerWindow {
         anchor = previewAnchor(forRow: row)
       }
     }
+
+    // T-PREVIEWJUMP1: a popup that is already on screen is torn down first when
+    // its target or anchor changed, so the new content, size and anchor are
+    // placed by ONE fresh xdg_popup (a single configure at the final position).
+    // Updating it in place made GTK send xdg_popup.reposition for every size or
+    // anchor change, and the compositor re-evaluated the flip side each time.
+    // An update that changes neither (e.g. hover -> selection on the same row)
+    // leaves the popup alone instead of blinking it.
+    let key = PreviewPlacementKey(
+      targetID: targetID, x: anchor?.x ?? 0, y: anchor?.y ?? 0, width: anchor?.width ?? 0,
+      height: anchor?.height ?? 0)
+    let shown = gtk_widget_get_mapped(previewPopover) != 0 ? shownPreviewKey : nil
+    if PreviewPlacementKey.needsRemap(shown: shown, new: key) {
+      closePreviewPopover()
+    }
+    shownPreviewKey = key
     if var rect = anchor {
       gtk_popover_set_pointing_to(previewPopover, &rect)
     }

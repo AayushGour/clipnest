@@ -38,4 +38,18 @@ struct GTKRowDisplayTextTests {
     #expect(RowDisplayText.collapsed("") == "")
     #expect(RowDisplayText.collapsed(" \n\t ") == "")
   }
+
+  @Test("The cap is never exceeded, collapse spaces included, for multi-line and emoji input")
+  func capHoldsForAllInputs() {
+    let multi = (1...500).map { "word\($0)" }.joined(separator: "\n")
+    let emoji = String(repeating: "\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467} ", count: 2000)
+    let cjk = String(repeating: "\u{6F22}\u{5B57} ", count: 5000)
+    for input in [multi, emoji, cjk] {
+      for cap in [1, 2, 7, RowDisplayText.maxCharacters] {
+        let result = RowDisplayText.collapsed(input, maxCharacters: cap)
+        #expect(result.count <= cap)
+        #expect(!result.hasSuffix(" "))
+      }
+    }
+  }
 }
