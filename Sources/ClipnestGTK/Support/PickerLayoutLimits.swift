@@ -21,4 +21,10 @@ public enum PickerLayoutLimits {
   /// The hover-preview popover never grows taller than this (px); longer
   /// content scrolls inside it instead of running off the screen.
   public static let previewMaxContentHeight: Int32 = 400
+
+  /// Minimum width (px) of the preview, so every text preview has the SAME
+  /// width. The compositor flips a popup to the other side of the picker when
+  /// it does not fit; with content-dependent widths (100 to 413 px measured)
+  /// consecutive previews could land on opposite sides (T-PREVIEWJUMP1).
+  public static let previewMinContentWidth: Int32 = 420
 }

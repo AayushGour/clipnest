@@ -140,6 +140,15 @@ extension PickerWindow {
       return
     }
 
+    // T-PREVIEWJUMP1: a popup that is already on screen is torn down first, so
+    // the new content, size and anchor are placed by ONE fresh xdg_popup
+    // (a single configure at the final position). Updating it in place made
+    // GTK send xdg_popup.reposition for every size/anchor change, and the
+    // compositor re-evaluated the flip side each time.
+    if gtk_widget_get_mapped(previewPopover) != 0 {
+      gtk_popover_popdown(previewPopover)
+    }
+
     // T-PREVIEWSEL2: a keyboard-selection preview sits beside the SELECTED row,
     // a hover preview beside the hovered one. Same band geometry, same Wayland
     // overlap offset (set once in `buildPreviewPopover`).

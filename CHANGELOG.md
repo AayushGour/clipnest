@@ -22,6 +22,9 @@ at any time.
 
 ### Fixed
 
+- Linux: the hover preview no longer visibly jumps (for example from the left of
+  the picker to the right) when it appears or changes. It is placed once at its
+  final position and all previews share one width.
 - Linux: a very long or multi-line copy no longer makes its picker row tall. Rows
   show at most 3 lines (ellipsized), the picker window is a little taller, and
   the hover preview is height-bounded and scrolls inside itself.

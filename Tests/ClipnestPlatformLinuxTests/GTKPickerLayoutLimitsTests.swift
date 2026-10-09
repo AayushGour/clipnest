@@ -24,4 +24,13 @@ struct GTKPickerLayoutLimitsTests {
     #expect(PickerLayoutLimits.previewMaxContentHeight > 0)
     #expect(PickerLayoutLimits.previewMaxContentHeight < 1080)
   }
+
+  // T-PREVIEWJUMP1
+  @Test("Every text preview shares one minimum width, at least the wrap width of its label")
+  func previewMinWidth() {
+    // 46 wrapped characters at ~9 px is ~414 px; the shared minimum must cover it so
+    // text previews never differ in width (which let the compositor flip sides).
+    #expect(PickerLayoutLimits.previewMinContentWidth >= 414)
+    #expect(PickerLayoutLimits.previewMinContentWidth <= 560)
+  }
 }

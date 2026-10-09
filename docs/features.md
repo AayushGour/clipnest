@@ -845,6 +845,19 @@ capped at `previewMaxContentHeight` (400 px), so a very long copy scrolls
 inside the preview, and the preview stays open while the pointer is over it
 (`previewHoverChanged` is now fed by a motion controller on the popover).
 
+**Single placement per preview (T-PREVIEWJUMP1).** Showing a preview used to
+update an already-open popup in place, so every size or anchor change made GTK
+send `xdg_popup.reposition` and the compositor re-evaluated which side of the
+picker the popup fits on; previews of different widths (100 to 413 px measured)
+could land on opposite sides. Now (1) a mapped preview is popped down first, so
+new content, size and anchor go out in one fresh `xdg_popup` with a single
+`configure` at the final position, and (2) every preview has the same minimum
+width (`PickerLayoutLimits.previewMinContentWidth`, 420 px), so the side choice
+cannot depend on the content. Measured on headless mutter 46 with a hover sweep
+over short, 200-line and very long rows: 13 shows = 13 `get_popup` = 13
+`configure`, 0 `reposition`, 0 `popup_done`; on a 1500 px monitor every preview
+lands on the same side.
+
 **Wayland (T-PREVIEWWL1).** mutter dismisses (`xdg_popup.popup_done`, ~30 ms
 after the first commit) a non-grabbing popup whose geometry does not overlap
 its parent window's geometry, so the 8 px gap above made the preview vanish on

@@ -259,3 +259,4 @@ Verified: macOS `swift build` clean; `swift test` exactly 615 tests/52 suites (u
 - 2026-10-09 [T-PREVIEWSEL1] review fixes: Sendable-safe onPreferenceChange, isHoveringPreview before selection fallback (+red test), doc/rename nits; swift test 1548 pass, lint clean -> reviewer
 - 2026-10-09 [T-PREVIEWSEL2] merged feat/preview-keyboard; GTK picker wired (selectionChangedForPreview on Up/Down, source-aware anchor, snippets hover preview, snapshot source diff), tests, Xvfb ON/OFF screenshots + mutter popup_done=0; 1552 tests
 - 2026-10-09 [T-ROWLINES1] rows capped at 3 lines (RowDisplayText collapse + label lines), window 480, preview scrolled/bounded + popover hover wired, review nits folded in; 1560 tests, lint clean, Xvfb screenshots
+- 2026-10-09 [T-PREVIEWJUMP1] preview placed once: popdown-before-update + shared min width (420); mutter trace 13 shows=13 configure, 0 reposition, 0 popup_done; 1561 tests, lint clean

@@ -232,6 +232,7 @@ extension PickerWindow {
     gtk_scrolled_window_set_policy(previewScroller, GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
     gtk_scrolled_window_set_propagate_natural_height(previewScroller, 1)
     gtk_scrolled_window_set_propagate_natural_width(previewScroller, 1)
+    gtk_widget_set_size_request(previewScroller, PickerLayoutLimits.previewMinContentWidth, -1)
     gtk_scrolled_window_set_max_content_height(
       previewScroller, PickerLayoutLimits.previewMaxContentHeight)
     gtk_scrolled_window_set_child(previewScroller, previewBox)

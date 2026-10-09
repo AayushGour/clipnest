@@ -177,6 +177,11 @@ func gtk_widget_set_tooltip_text(_ widget: OpaquePointer, _ text: String) {
 func gtk_widget_set_size_request(_ widget: OpaquePointer, _ width: Int32, _ height: Int32) {
   gtk_widget_set_size_request(gtkPointer(widget) as UnsafeMutablePointer<GtkWidget>, width, height)
 }
+/// Whether `widget` is currently mapped (on screen). For a popover: whether
+/// its popup surface exists right now.
+func gtk_widget_get_mapped(_ widget: OpaquePointer) -> Int32 {
+  gtk_widget_get_mapped(gtkPointer(widget) as UnsafeMutablePointer<GtkWidget>)
+}
 func gtk_widget_get_width(_ widget: OpaquePointer) -> Int32 {
   gtk_widget_get_width(gtkPointer(widget) as UnsafeMutablePointer<GtkWidget>)
 }
