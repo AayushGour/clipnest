@@ -158,7 +158,7 @@ Press **⌘⌫** (or plain Delete), click the trash icon on a row, or right-clic
 
 ### Hovering for a full preview
 
-Hover your pointer over any row (or arrow to it) and a preview panel appears beside the picker after a brief pause:
+Hover your pointer over any row and a preview panel appears beside the picker after a brief pause. To get the same preview while moving through the list with the arrow keys, turn on **"Show preview when selecting with the keyboard"** in **Settings -> General** (off by default). A row under the pointer always takes priority over the keyboard-selected one:
 
 - **Images** render at up to 40% of your screen's width — with any recognized text shown underneath, scrollable on its own, if you've turned on OCR (see [Recognizing text in screenshots](#recognizing-text-in-screenshots-optional-ocr) below).
 - **Text** (including rich text and links) shows the full content, scrollable — it loads in chunks as you scroll for very large clips, so nothing hangs.
@@ -253,7 +253,7 @@ Everything about how Clipnest behaves lives in one Settings window, opened with 
 
 | Tab | What it controls |
 | --- | --- |
-| **General** | Launch Clipnest at login, pause clipboard capture with one toggle, and turn the background update check on/off (see [What is Clipnest](#1-what-is-clipnest)). |
+| **General** | Launch Clipnest at login, pause clipboard capture with one toggle, turn the background update check on/off (see [What is Clipnest](#1-what-is-clipnest)), and choose whether the item preview also shows when you select a row with the arrow keys (off by default; see [Hovering for a full preview](#hovering-for-a-full-preview)). |
 | **History** | How much history is kept (see [How much history does Clipnest keep?](#how-much-history-does-clipnest-keep)), the "Recognize text in copied images" OCR toggle and its Fast/Accurate quality (see [Recognizing text in screenshots](#recognizing-text-in-screenshots-optional-ocr)), and **Clear All History…**. |
 | **Shortcuts** | Rebind Clipnest's two global hotkeys — **Open Clipnest** and **Expand snippet** — to whatever key combination you want. Click a shortcut, then press the new combination; it takes effect immediately, no restart needed. (This only rebinds the two *global* shortcuts — the shortcuts inside the picker itself, listed below, are fixed.) |
 | **Apps** | Exclude specific apps from capture, on top of the built-in password-manager list (always on, can't be removed — see [Privacy & exclusions](#7-privacy--exclusions)). Add an app by picking its `.app` bundle from a file picker; remove one with its **−** button. |

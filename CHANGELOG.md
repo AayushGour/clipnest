@@ -10,6 +10,13 @@ at any time.
 
 ## [Unreleased]
 
+### Added
+
+- New setting, **Settings -> General -> "Show preview when selecting with the
+  keyboard"** (off by default): when on, moving through the picker list with the
+  arrow keys also shows the item preview beside the highlighted row, not only
+  when hovering with the pointer. Hovering a row still takes priority.
+
 ### Fixed
 
 - Linux (Wayland): the hover preview appeared nowhere on GNOME Wayland since the

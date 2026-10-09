@@ -782,7 +782,20 @@ show-delay or close-grace (`previewShowDelay`/`previewCloseGrace`, `:355,
 (or, on the Snippets tab, synthesizes one from the snippet's body,
 `:117-120`), and forwards it to `viewModel.updatePreview`, a closure
 `AppEnvironment` wires to the real `ItemPreviewController.update(...)`
-(`AppEnvironment.swift:171-178`). `ItemPreviewController`
+(`AppEnvironment.swift:171-178`). **Keyboard-selection preview
+(T-PREVIEWSEL1):** `SettingsStore.showPreviewOnKeyboardSelection` (Settings ->
+General, default OFF, Linux and macOS) is passed to `PickerViewModel` as the
+required `showPreviewOnKeyboardSelection` closure (live read, no default).
+After an Up/Down move the view calls `selectionChangedForPreview()`; with the
+setting ON and no row hovered, the keyboard-selected row (History/Pinned clip
+if `isPreviewWorthy`, or the Snippet) becomes the target after the same
+show-delay. A hovered row always wins; leaving hover falls back to the
+selection; with the setting OFF selection never previews. Opening the picker,
+search-text changes and tab switches do not count as keyboard moves.
+`previewTargetSource` (`.hover`/`.selection`) tells the view which row to
+anchor to; on macOS `ItemPreviewController` centres a `.selection` preview on
+the selected row's Y (`PickerViewModel.selectedRowMidY`, reported by
+`ScrollResettingList`) instead of the pointer. `ItemPreviewController`
 (`ItemPreviewController.swift:21-139`) presents `ItemPreview` in its own
 borderless, `.nonactivatingPanel`-style-masked child `NSPanel` — same
 never-`makeKey()` technique as `PickerPanel` itself, so hovering a row can

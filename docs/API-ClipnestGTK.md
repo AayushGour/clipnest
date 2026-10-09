@@ -672,12 +672,14 @@ import ClipnestViewModels
 
 ClipnestGTKApplication.initializeGTK()
 
+let settings = SettingsStore()
 // `pasteDismissOrdering` is required: Linux writes the clipboard BEFORE hiding the picker.
+// `showPreviewOnKeyboardSelection` is required too: a live read of the setting.
 let viewModel = PickerViewModel(
   clipStore: clipStore, snippetStore: snippetStore,
   pasteDismissOrdering: .writeBeforeDismiss(
-    confirmationTimeout: PasteDismissOrdering.defaultConfirmationTimeout))
-let settings = SettingsStore()
+    confirmationTimeout: PasteDismissOrdering.defaultConfirmationTimeout),
+  showPreviewOnKeyboardSelection: { settings.showPreviewOnKeyboardSelection })
 
 let picker = PickerWindow(viewModel: viewModel) {
   // Called on Escape or focus-loss — hide it ourselves.

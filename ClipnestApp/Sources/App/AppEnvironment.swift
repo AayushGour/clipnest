@@ -286,6 +286,9 @@ final class AppEnvironment {
       frontmostAppTracker: frontmostAppTracker,
       // T-PASTEORDER1: macOS keeps hide-then-write (see `PasteDismissOrdering`).
       pasteDismissOrdering: .dismissBeforeWrite,
+      showPreviewOnKeyboardSelection: { [settingsStore] in
+        settingsStore.showPreviewOnKeyboardSelection
+      },
       // T-RT2: lets an already-open picker re-query itself when SOMETHING
       // ELSE mutates this store — Settings' "Clear All History…", or
       // background retention — without either of those call sites needing
@@ -370,10 +373,21 @@ final class AppEnvironment {
     // acceptable first-pass anchor per the task brief — the preview sits
     // beside the whole picker, Maccy-style.
     viewModel.updatePreview = { [weak panel, weak itemPreviewController, weak viewModel] item in
+      // T-PREVIEWSEL1: a `.selection` preview centres on the keyboard-selected
+      // row (its picker-window-relative Y, flipped to screen space against
+      // the borderless panel's top edge); a hover preview — and a selection
+      // preview whose row Y hasn't been reported yet — centres on the pointer.
+      var verticalCenter = NSEvent.mouseLocation.y
+      if viewModel?.previewTargetSource == .selection,
+        let panelFrame = panel?.frame, let midY = viewModel?.selectedRowMidY
+      {
+        verticalCenter = panelFrame.maxY - midY
+      }
       itemPreviewController?.update(
         item: item,
         blobStore: blobStore,
         besideAnchor: panel?.frame,
+        atVerticalCenter: verticalCenter,
         onPreviewHover: { hovering in viewModel?.previewHoverChanged(hovering) }
       )
     }

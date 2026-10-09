@@ -240,6 +240,17 @@ extension SettingsWindow {
       }
     }
 
+    // T-PREVIEWSEL1: default OFF (hover-only preview, as before). The picker
+    // reads the setting live, so no apply step is needed here.
+    addCheckButton(
+      to: box, label: "Show preview when selecting with the keyboard",
+      initialValue: settings.showPreviewOnKeyboardSelection
+    ) { [settings] isEnabled in
+      MainActor.assumeIsolated {
+        settings.showPreviewOnKeyboardSelection = isEnabled
+      }
+    }
+
     buildUpdateSection(in: box)
   }
 

@@ -59,7 +59,7 @@ Clipnest is a free, open-source, native menu-bar app for macOS and, since 1.0, L
 - **Instant search** — start typing to filter your entire copy-paste history in real time, with matches highlighted (**⌘F** to jump back to the search field).
 - **Type filters** — narrow the list to just text, images, files, or links with one click.
 - **Tabs** — **History**, **Pinned**, and **Snippets**, switchable with **⌘1** / **⌘2** / **⌘3**.
-- **Hover previews** — hover (or arrow to) an item and a popover shows the full content: the image at up to 40% of screen width (with any recognized text shown below it), the full scrollable text (loaded in chunks for huge clips), or a file's name, size, and path.
+- **Hover previews** — hover an item (or, with **Settings -> General -> Show preview when selecting with the keyboard** on, arrow to it) and a popover shows the full content: the image at up to 40% of screen width (with any recognized text shown below it), the full scrollable text (loaded in chunks for huge clips), or a file's name, size, and path.
 {: .detail-list}
 
 </div>
