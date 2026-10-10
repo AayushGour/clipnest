@@ -232,7 +232,8 @@ final class AppEnvironment {
     self.snippetExpander = SnippetExpander(
       snippetStore: snippetStore,
       selectedText: AXSelectedTextAccessor(),
-      clipboardReplacer: clipboardReplacer)
+      clipboardReplacer: clipboardReplacer,
+      isAccessibilityGranted: { PermissionsManager.isGranted })
 
     self.clipboardMonitor = ClipboardMonitor(
       store: clipStore,

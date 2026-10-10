@@ -10,6 +10,23 @@ at any time.
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-10
+
+### Fixed
+
+- macOS: only one copy of Clipnest runs at a time. A second copy (for
+  example a build output launched while the installed app runs) now quits on
+  launch instead of also registering ⌥⌘V/⌥⌘E, which made pasting work or
+  fail depending on which copy got the key.
+- macOS: snippet expansion (⌥⌘E) without Accessibility now beeps straight
+  away and logs that Accessibility is missing, instead of trying a copy/paste
+  macOS silently drops and logging a misleading `copy phase FAILED`.
+- macOS: a picker paste that can only copy because Accessibility is missing
+  now logs why, instead of failing silently.
+- macOS: Clipnest's synthesized ⌘C/⌘V now also carries the left-Command
+  device flag that a real key press sets, as other clipboard managers do, for
+  apps that check it.
+
 ## [1.2.0] - 2026-10-10
 
 ### Added
@@ -371,7 +388,8 @@ release (0.5.0, above). None of them were ever installed by a user.
 
 - `Sendable` conformance for `NSPasteboard` access, required by Swift 6.
 
-[Unreleased]: https://github.com/AayushGour/clipnest/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/AayushGour/clipnest/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/AayushGour/clipnest/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/AayushGour/clipnest/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/AayushGour/clipnest/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/AayushGour/clipnest/compare/v0.9.2...v1.0.0

@@ -322,7 +322,13 @@ public struct Paster: Sendable {
     // (including `synthesisDelay`'s sleep) — see this method's doc comment.
     await onPasteboardWrite?(pasteboard.changeCount)
 
-    guard isAccessibilityGranted() else { return }
+    guard isAccessibilityGranted() else {
+      // Still the documented clipboard-only fallback — but logged, because
+      // from the user's side it looks like "Enter just moved the clip to the
+      // top of the list" with no other clue that Accessibility is missing.
+      Self.logger.notice("Accessibility not granted: clipboard written, no paste keystroke sent")
+      return
+    }
     // T-WLPASTE-NIL1: a `nil` target used to always mean "nothing to
     // target, stop here" — now it only means that when this session CAN
     // verify a target and simply doesn't have one right now. When it can't

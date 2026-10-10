@@ -35,17 +35,24 @@ public final class SnippetExpander {
   private let selectedText: any SelectedTextAccessing
   private let clipboardReplacer: any SelectionReplacing
   private let beep: () -> Void
+  private let isAccessibilityGranted: () -> Bool
 
+  /// `isAccessibilityGranted` defaults to "granted" so every existing caller
+  /// (the Linux composition root, which has its own input-permission checks,
+  /// and the tests) keeps its behavior; the macOS composition root passes the
+  /// real `PermissionsManager.isGranted`.
   public init(
     snippetStore: any SnippetStore,
     selectedText: any SelectedTextAccessing,
     clipboardReplacer: any SelectionReplacing,
-    beep: @escaping () -> Void = PlatformDefaults.beep
+    beep: @escaping () -> Void = PlatformDefaults.beep,
+    isAccessibilityGranted: @escaping () -> Bool = { true }
   ) {
     self.snippetStore = snippetStore
     self.selectedText = selectedText
     self.clipboardReplacer = clipboardReplacer
     self.beep = beep
+    self.isAccessibilityGranted = isAccessibilityGranted
   }
 
   /// The snippet body for a given selection, or `nil` if it matches nothing —
@@ -72,6 +79,15 @@ public final class SnippetExpander {
   /// privacy rule and every existing `ClipnestLogger` call site in this
   /// codebase.
   public func expand() async {
+    // Both tiers need Accessibility: without it macOS drops the synthetic
+    // ⌘C/⌘V silently (`CGEvent.post` still "succeeds"), which used to surface
+    // as a misleading `copy phase FAILED: posted=true` instead of the cause.
+    guard isAccessibilityGranted() else {
+      Self.logger.notice("Accessibility not granted: snippet expansion skipped")
+      beep()
+      return
+    }
+
     // 1) Accessibility path — no clipboard side effect where it works.
     if let selection = selectedText.readSelectedText(),
       !selection.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

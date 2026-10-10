@@ -89,10 +89,26 @@
   ///    with an actual Command key-down before it and a Command key-up after
   ///    it (mirroring how a real Command press arrives at the HID level), so
   ///    no modifier is left asserted once this returns.
+  /// 3. Command was asserted with only the device-INDEPENDENT `.maskCommand`
+  ///    bit. A real left-Command press also sets the device-DEPENDENT
+  ///    `NX_DEVICELCMDKEYMASK` bit, and some apps key off that bit rather
+  ///    than `.maskCommand` — Microsoft Word ignored the synthetic chord
+  ///    entirely (picker paste did nothing; ⌥⌘E's copy phase logged
+  ///    `posted=true pasteboardChanged=false`). See `commandChordFlags`.
   public enum SyntheticKeystroke {
     /// Virtual keycode for the physical Command key (`kVK_Command`), from
     /// Carbon's `HIToolbox` keycode table.
     private static let commandKeyCode: CGKeyCode = 0x37
+
+    /// `NX_DEVICELCMDKEYMASK` from IOKit's `IOLLEvent.h` — "left Command key
+    /// is down". Not exported as a `CGEventFlags` member, hence the raw value.
+    static let deviceLeftCommandFlag = CGEventFlags(rawValue: 0x0000_0008)
+
+    /// Flags carried by every event while Command is held: the generic
+    /// Command bit plus the left-Command device bit, exactly what a real
+    /// left-⌘ press produces. Maccy, Clipy and Flycut set the same bit for
+    /// the same reason (apps that check left/right modifier bits).
+    static let commandChordFlags: CGEventFlags = [.maskCommand, deviceLeftCommandFlag]
 
     /// Posts, in order: Command key-down, `key` key-down, `key` key-up,
     /// Command key-up — all four events built from one `.privateState`
@@ -115,9 +131,9 @@
         return false
       }
 
-      commandDown.flags = .maskCommand
-      keyDown.flags = .maskCommand
-      keyUp.flags = .maskCommand
+      commandDown.flags = commandChordFlags
+      keyDown.flags = commandChordFlags
+      keyUp.flags = commandChordFlags
       commandUp.flags = []
 
       commandDown.post(tap: .cghidEventTap)
