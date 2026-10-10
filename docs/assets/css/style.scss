@@ -1401,3 +1401,68 @@ nav.box-grid li:hover { border-color: var(--accent); }
   color: var(--muted-strong);
 }
 .content-page blockquote p { margin: 0; color: inherit; }
+
+
+// ---- home demo carousel (pages/index.md .demo-carousel, assets/js/demo-carousel.js)
+// Replaces the static hero screenshot. Without JS every slide is stacked; the
+// script adds .is-enhanced and turns the tab row into a real tablist.
+.demo-tabs { display: none; }
+.demo-carousel.is-enhanced .demo-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
+}
+.demo-tab {
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 500;
+  padding: 6px var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease;
+}
+.demo-tab:hover { border-color: var(--accent); }
+.demo-tab[aria-selected="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.demo-slide { margin: 0; }
+.demo-slide + .demo-slide { margin-top: var(--space-5); }
+.demo-carousel.is-enhanced .demo-slide + .demo-slide { margin-top: 0; }
+.demo-video {
+  aspect-ratio: 16 / 10;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: #1b1530;
+  box-shadow: 0 6px 20px rgba(20, 16, 28, 0.28);
+}
+.demo-video video { display: block; width: 100%; height: 100%; object-fit: cover; }
+.demo-slide figcaption {
+  margin: var(--space-3) var(--space-2) 0;
+  text-align: center;
+  font-size: 0.95rem;
+  color: var(--muted-strong);
+  text-wrap: pretty;
+}
+@media (max-width: 640px) {
+  .demo-tab { font-size: 0.85rem; padding: 5px var(--space-3); }
+}
+
+// ---- Linux log-out callout (pages/download.md) ------------------------------
+// The one Linux step people miss: auto-paste needs a fresh session. Kept as a
+// distinct accent-edged box so it can't be skimmed past like body text.
+.note-linux {
+  margin: var(--space-5) 0 0;
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--lilac) 18%, var(--panel));
+}
+.note-linux p { margin: 0; }

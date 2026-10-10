@@ -5,15 +5,54 @@ description: "Clipnest is a free, open-source, native clipboard manager for macO
 permalink: /
 ---
 
-<section class="hero-visual">
-<div class="shell" markdown="1">
-
-<div class="shot-frame" markdown="1">
-
-![Clipnest's clipboard history picker, showing search and the Snippets tab]({{ "/assets/screenshot-picker.png" | relative_url }})
-
-</div>
-
+<section class="hero-visual" aria-label="See Clipnest in action">
+<div class="shell">
+  <div class="demo-carousel">
+  <div class="demo-tabs" role="tablist" aria-label="Clipnest demos">
+    <button type="button" class="demo-tab" role="tab" id="demo-tab-0" aria-controls="demo-0" aria-selected="true">Copy &amp; paste</button>
+    <button type="button" class="demo-tab" role="tab" id="demo-tab-1" aria-controls="demo-1" aria-selected="false" tabindex="-1">Text from images</button>
+    <button type="button" class="demo-tab" role="tab" id="demo-tab-2" aria-controls="demo-2" aria-selected="false" tabindex="-1">Snippets</button>
+    <button type="button" class="demo-tab" role="tab" id="demo-tab-3" aria-controls="demo-3" aria-selected="false" tabindex="-1">Settings</button>
+  </div>
+  <div class="shot-frame demo-stage">
+    <figure class="demo-slide" id="demo-0" role="tabpanel" aria-labelledby="demo-tab-0">
+      <div class="demo-video">
+        <video muted playsinline autoplay loop preload="auto" poster="{{ "/assets/demos/01-copy-paste.jpg" | relative_url }}" width="1280" height="800" aria-label="Copy &amp; paste demo">
+          <source src="{{ "/assets/demos/01-copy-paste.webm" | relative_url }}" type="video/webm">
+          <source src="{{ "/assets/demos/01-copy-paste.mp4" | relative_url }}" type="video/mp4">
+        </video>
+      </div>
+      <figcaption>Copy a few things, then press ⌥⌘V in any app and pick one to paste.</figcaption>
+    </figure>
+    <figure class="demo-slide" id="demo-1" role="tabpanel" aria-labelledby="demo-tab-1">
+      <div class="demo-video">
+        <video muted playsinline loop preload="none" poster="{{ "/assets/demos/02-ocr.jpg" | relative_url }}" width="1280" height="800" aria-label="Text from images demo">
+          <source src="{{ "/assets/demos/02-ocr.webm" | relative_url }}" type="video/webm">
+          <source src="{{ "/assets/demos/02-ocr.mp4" | relative_url }}" type="video/mp4">
+        </video>
+      </div>
+      <figcaption>Copy an image and Clipnest reads its text on-device. Press ⌥⏎ to paste the text instead of the image.</figcaption>
+    </figure>
+    <figure class="demo-slide" id="demo-2" role="tabpanel" aria-labelledby="demo-tab-2">
+      <div class="demo-video">
+        <video muted playsinline loop preload="none" poster="{{ "/assets/demos/03-snippets.jpg" | relative_url }}" width="1280" height="800" aria-label="Snippets demo">
+          <source src="{{ "/assets/demos/03-snippets.webm" | relative_url }}" type="video/webm">
+          <source src="{{ "/assets/demos/03-snippets.mp4" | relative_url }}" type="video/mp4">
+        </video>
+      </div>
+      <figcaption>Save text under a short keyword. Select the keyword anywhere and press ⌥⌘E to expand it.</figcaption>
+    </figure>
+    <figure class="demo-slide" id="demo-3" role="tabpanel" aria-labelledby="demo-tab-3">
+      <div class="demo-video">
+        <video muted playsinline loop preload="none" poster="{{ "/assets/demos/04-settings.jpg" | relative_url }}" width="1280" height="800" aria-label="Settings demo">
+          <source src="{{ "/assets/demos/04-settings.webm" | relative_url }}" type="video/webm">
+          <source src="{{ "/assets/demos/04-settings.mp4" | relative_url }}" type="video/mp4">
+        </video>
+      </div>
+      <figcaption>Press ⌘, in the picker to open Settings and turn on text recognition for images.</figcaption>
+    </figure>
+  </div>
+  </div>
 </div>
 </section>
 

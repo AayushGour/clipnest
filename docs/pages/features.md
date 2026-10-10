@@ -245,7 +245,7 @@ Everything stays on your computer — no servers, no sync, no telemetry, no acco
 </div>
 
 - **Picker position.** GNOME doesn't let apps place their own windows on Wayland, so the picker opens where GNOME puts it rather than at your cursor. The optional GNOME Shell extension restores cursor placement and showing above full-screen windows — see [Download]({{ '/contribute/#linux' | relative_url }}).
-- **Auto-paste permission.** Auto-paste needs a one-time grant that adds you to a dedicated `clipnest-input` group, which can create a virtual keyboard and nothing else. Until then Clipnest copies your choice and you press Ctrl+V yourself.
+- **Auto-paste permission.** Auto-paste needs a one-time grant that adds you to a dedicated `clipnest-input` group, which can create a virtual keyboard and nothing else. **Log out and back in once after granting it**; until then Clipnest copies your choice and you press Ctrl+V yourself.
 - **Terminals.** Pasting into GNOME Terminal and other VTE terminals uses Ctrl+Shift+V automatically.
 - **Password managers.** Copies marked as secret (`x-kde-passwordManagerHint`, used by KeePassXC and others) are never stored. On Wayland, Clipnest can't tell which app made a copy, so Settings → Apps exclusions apply only to X11/XWayland apps; the secret marker works everywhere.
 - **Ubuntu 22.04** ships GTK 4.6, which has an upstream clipboard bug that can, rarely, make Clipnest quit. It's fixed in GTK 4.10+ (Ubuntu 24.04). Your history is never affected.

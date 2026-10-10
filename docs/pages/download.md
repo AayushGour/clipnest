@@ -45,8 +45,14 @@ curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/in
 <ol class="steps">
 <li><span class="step-title">Install</span><span class="step-body">The script downloads the latest release and checks its SHA-256 before installing anything.</span></li>
 <li><span class="step-title">Open</span><span class="step-body">Press <kbd>⌥⌘V</kbd> on a Mac or <kbd>Alt+Super+V</kbd> on Linux to open the picker.</span></li>
-<li><span class="step-title">Paste</span><span class="step-body">Search or pick an item and press Return. On a Mac, allow Accessibility when asked so Clipnest can paste for you.</span></li>
+<li><span class="step-title">Paste</span><span class="step-body">Search or pick an item and press Return. Allow the one-time permission when asked so Clipnest can paste for you: Accessibility on a Mac, auto-paste on Linux.</span></li>
 </ol>
+
+<div class="note-linux" markdown="1">
+
+**Linux: log out and back in once after granting auto-paste.** The permission only takes effect in a new session. Until you do, Clipnest copies the item you pick and you press <kbd>Ctrl+V</kbd> yourself. The same applies after installing the optional GNOME Shell extension.
+
+</div>
 
 </section>
 
