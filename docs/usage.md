@@ -310,7 +310,10 @@ Either nothing is selected (make sure you've actually highlighted the Tag text b
 This means you downloaded the `.dmg` directly through a browser rather than using the one-line `curl` install — a browser download sets the quarantine flag that triggers this Gatekeeper check, but `curl` never does. See [First launch — signing, honestly](#3-install): right-click → Open once, or run `xattr -dr com.apple.quarantine /Applications/Clipnest.app`, or just switch to the recommended `curl` install and this won't come up again.
 
 **I rebuilt Clipnest from source and it's asking for Accessibility again.**
-Expected — an unsigned development build gets a new code identity on every rebuild, so macOS treats it as a "new" app each time and needs Accessibility re-granted.
+Expected — an unsigned development build gets a new code identity on every rebuild, so macOS treats it as a "new" app each time and needs Accessibility re-granted. Signing each build with one certificate (`scripts/sign.sh "<identity>"`) keeps the grant across rebuilds. If Settings shows **Not granted** right after you switched it on, the entry belongs to a different build: remove Clipnest from the Accessibility list with **−**, or run `tccutil reset Accessibility com.clipnest.app`, then add it again.
+
+**I opened a second copy of Clipnest and it quit straight away.**
+Expected. Only one copy runs at a time, because two copies would both claim ⌥⌘V and ⌥⌘E. The copy that was already running keeps going.
 
 **I don't see a Dock icon or a normal app window — is that right?**
 Yes. Clipnest is a menu-bar-only app by design; look for its icon in the menu bar, and use ⌥⌘V or that menu to reach it. (Opening Settings briefly shows a Dock icon while that window is focused — that's expected, and it goes away again once you close Settings.)

@@ -79,6 +79,23 @@ struct SnippetExpanderTests {
     #expect(beeped == false)
   }
 
+  @Test("Accessibility not granted: beeps, touches neither AX nor the clipboard")
+  func notGrantedBeepsWithoutTryingEitherTier() async throws {
+    let ax = MockSelectedText()
+    ax.selection = "sig"
+    let clipboard = MockClipboardReplacer()
+    var beeped = false
+    let expander = SnippetExpander(
+      snippetStore: try await store(), selectedText: ax, clipboardReplacer: clipboard,
+      beep: { beeped = true }, isAccessibilityGranted: { false })
+
+    await expander.expand()
+
+    #expect(ax.replacedWith == nil)
+    #expect(clipboard.wasCalled == false)
+    #expect(beeped == true)
+  }
+
   @Test("AX reads but no match: beeps, does NOT fall back to the clipboard")
   func axNoMatchBeepsWithoutClipboard() async throws {
     let ax = MockSelectedText()

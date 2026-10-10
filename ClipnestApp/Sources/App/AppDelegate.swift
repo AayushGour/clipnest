@@ -29,8 +29,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
   @Published private(set) var environment: AppEnvironment?
 
+  /// Set by XCTest in the test-host process.
+  private static let xcTestConfigurationEnvKey = "XCTestConfigurationFilePath"
+
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
+
+    // Single instance: a second copy (e.g. a build-output .app launched while
+    // the installed one runs) would register the same global hotkeys, race
+    // the first copy on every ⌥⌘V/⌥⌘E, and hold its own Accessibility grant —
+    // so paste "works" or not depending on which copy got the key. Skipped
+    // when hosting unit tests, which run inside a copy of this app and must
+    // not quit just because the user's installed Clipnest is open.
+    let isHostingTests =
+      ProcessInfo.processInfo.environment[Self.xcTestConfigurationEnvKey] != nil
+    if !isHostingTests,
+      let other = Self.otherRunningInstance(
+        bundleID: Bundle.main.bundleIdentifier,
+        ownPID: ProcessInfo.processInfo.processIdentifier,
+        running: NSWorkspace.shared.runningApplications.map {
+          (bundleID: $0.bundleIdentifier, pid: $0.processIdentifier)
+        })
+    {
+      Self.logger.notice("Another Clipnest instance is running (pid \(other)); quitting this one")
+      NSApplication.shared.terminate(nil)
+      return
+    }
 
     // T-PF1 (D1 launch-latency fix): `AppEnvironment.init` used to be a
     // plain synchronous `throws` initializer called directly here — nothing
@@ -71,6 +95,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
       Self.logger.fault("Failed to initialize AppEnvironment: \(String(describing: error))")
       NSApplication.shared.terminate(nil)
     }
+  }
+
+  /// The pid of another running process with this app's bundle ID, if any.
+  /// Pure so it is unit-testable without launching a second copy.
+  nonisolated static func otherRunningInstance(
+    bundleID: String?, ownPID: pid_t, running: [(bundleID: String?, pid: pid_t)]
+  ) -> pid_t? {
+    guard let bundleID else { return nil }
+    return running.first { $0.bundleID == bundleID && $0.pid != ownPID }?.pid
   }
 
   /// The menu bar "Open Clipnest" item's action (`ClipnestApp.swift`).
