@@ -122,6 +122,8 @@
   --content-max: 46rem;    // ~72-78ch prose measure — article/doc body copy
   --shell-max: 75rem;      // header/hero/grid section outer width
 
+  --code-bg: #221F27; // terminal ground for .install-card (dark in both appearances)
+
   --shadow-sm: 0 1px 2px rgba(34, 32, 39, 0.06), 0 1px 1px rgba(34, 32, 39, 0.04);
   --shadow-md: 0 8px 24px rgba(34, 32, 39, 0.08), 0 2px 6px rgba(34, 32, 39, 0.05);
 }
@@ -135,6 +137,8 @@
 // ---------------------------------------------------------------------------
 // @media (prefers-color-scheme: dark) {
 //   :root {
+//     color-scheme: dark;
+//     --code-bg: #0F0D14; // terminal ground, a step darker than --paper so install cards still read as a window
 //     // Dark mode RE-DERIVED from the same hue family this pass (T92) — not
 //     // the old warm-brown dark palette inverted. Same method as light mode:
 //     // hue held constant, HSL lightness walked until contrast cleared 4.5:1
@@ -254,7 +258,7 @@ a:focus-visible, button:focus-visible, input:focus-visible,
 // to <main> instead of tabbing through the nav on every page load.
 .skip-link {
   position: absolute;
-  top: -48px;
+  top: -120px;
   left: var(--space-4);
   z-index: 100;
   background: var(--accent);
@@ -501,7 +505,7 @@ main { display: block; }
     color-mix(in srgb, var(--peach) 22%, var(--paper)) 100%
   );
 }
-.hero .shell { max-width: 42rem; }
+.hero .shell { max-width: 48rem; }
 .hero-copy h1 { margin-bottom: var(--space-4); }
 .hero-copy .lead { margin: 0 auto var(--space-6); }
 .hero-cta {
@@ -548,7 +552,7 @@ main { display: block; }
 .hero-visual img { width: 100%; }
 
 // ---- section rhythm -------------------------------------------------------
-.section { padding: var(--space-8) 0; }
+.section { padding: var(--space-7) 0; }
 // T95 (ux-designer) — research-first craft pass, fixing "How it compares"
 // faults the user screenshotted, then the same underlying rhythm/measure/
 // alignment issues everywhere else .section-head is reused.
@@ -682,9 +686,6 @@ main { display: block; }
 // margin for scrollbar-width variance across browsers/OSes) so it never
 // fires at 3-column tablet width, where a 3+2 wrap is already balanced
 // and needs no help.
-@media (min-width: 1080px) {
-  .box-grid li:last-child { grid-column: 2 / span 2; }
-}
 
 // ---- CTA strip (home "Get it" — moved directly under the hero, T94) -----
 // Was a bordered/panel `.cta-band` card sitting further down the page,
@@ -730,7 +731,7 @@ main { display: block; }
   // using it as this card's background would invert to a light terminal
   // with light code text on top in dark mode. This stays a dark terminal
   // in both modes on purpose — verified 13.9:1 against the code color below.
-  background: #221F27;
+  background: var(--code-bg);
   margin: var(--space-4) 0;
 }
 .install-card .terminal-bar {
@@ -1150,3 +1151,318 @@ hr { border: none; border-top: 1px solid var(--line); margin: var(--space-6) 0; 
 @media (prefers-reduced-motion: reduce) {
   .copy-btn { transition: none; }
 }
+
+// =============================================================================
+// T105 — site redesign pass. Patterns adapted (re-implemented in plain
+// HTML/CSS, no React/Tailwind) from Watermelon UI (ui.watermelon.sh):
+//   announcement pill  -> .pill        (blocks: announcement-*)
+//   hero + screenshot  -> .hero / .shot-frame (blocks: hero-*)
+//   OS tabs / chips    -> .os-chips    (animated-components: discrete-tabs)
+//   copy-confirm       -> .copy-btn    (animated-components: copy-confirm; copy-command.js)
+//   stepper            -> .steps       (blocks: feature-*)
+//   bento grid         -> .bento       (blocks: bento-01 / bento-02)
+//   CTA band           -> .cta-band    (blocks: cta-*)
+//   nav with CTA       -> .nav-cta     (blocks: navigation-*)
+// All colours come from the tokens above; light + dark both verified.
+// =============================================================================
+
+kbd {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 0.88em;
+  padding: 0.1em 0.5em;
+  border-radius: 6px;
+  background: var(--panel);
+  border: 1px solid var(--border-strong);
+  border-bottom-width: 2px;
+  white-space: nowrap;
+}
+
+// ---- header CTA ----------------------------------------------------------
+.nav-links .nav-cta a.btn { min-height: 40px; padding: 0.4em 1.1em; margin-left: var(--space-2); color: var(--on-accent); }
+.nav-links .nav-cta a.btn[aria-current="page"] { text-decoration: none; }
+@media (max-width: 760px) {
+  .nav-links .nav-cta { padding: var(--space-2) var(--space-2) var(--space-1); }
+  .nav-links .nav-cta a.btn { margin-left: 0; width: 100%; min-height: 48px; }
+}
+
+// ---- hero ----------------------------------------------------------------
+.hero { padding: var(--space-7) 0 var(--space-6); }
+.hero-copy h1 { font-size: clamp(2rem, 5.2vw, 2.9rem); text-wrap: balance; }
+.hero-copy .lead { text-wrap: pretty; }
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 4px var(--space-3) 4px 4px;
+  margin-bottom: var(--space-5);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+  color: var(--ink);
+  font-size: 0.9rem;
+  font-weight: 500;
+  text-decoration: none;
+  box-shadow: var(--shadow-sm);
+  transition: border-color 150ms ease, transform 150ms ease;
+}
+.pill:hover { border-color: var(--accent); opacity: 1; }
+.pill:hover .pill-arrow, .pill:hover span[aria-hidden] { transform: translateX(2px); }
+.pill span[aria-hidden] { display: inline-block; color: var(--accent); transition: transform 150ms ease; }
+.pill-tag {
+  padding: 2px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+.hero-meta {
+  margin: var(--space-5) 0 0;
+  font-size: 0.9rem;
+  color: var(--muted-strong);
+}
+.hero-visual { padding-bottom: var(--space-7); }
+
+// ---- terminal label + OS chips --------------------------------------------
+.install-card .terminal-bar span { flex: none; }
+.terminal-label {
+  margin-left: var(--space-2);
+  font-size: 0.78rem;
+  font-weight: 500;
+  color: #B9B4C6;                 // 7.7:1 on both terminal grounds
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.os-chips { display: flex; gap: var(--space-2); margin: 0 0 var(--space-3); }
+.os-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 var(--space-4);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+// ---- Download page -----------------------------------------------------------
+.install-hero {
+  background: color-mix(in srgb, var(--lilac) 18%, var(--panel));
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-5) var(--space-5) var(--space-5);
+  margin: var(--space-6) 0 var(--space-7);
+  box-shadow: var(--shadow-sm);
+}
+.install-hero h2 { margin: 0 0 var(--space-3); }
+.install-hero .install-card { margin: 0 0 var(--space-4); }
+.req-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--space-3);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.req-grid li {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3) var(--space-4);
+  font-size: 0.95rem;
+  color: var(--ink);
+}
+.req-grid strong { display: block; color: var(--accent); font-size: 0.8rem; letter-spacing: 0.06em; text-transform: uppercase; }
+.steps-section { margin: 0 0 var(--space-7); }
+.steps-section h2 { margin-top: 0; }
+
+.steps {
+  counter-reset: step;
+  list-style: none;
+  margin: var(--space-4) 0 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+.steps li {
+  counter-increment: step;
+  position: relative;
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  padding: var(--space-4) var(--space-4) var(--space-4) calc(var(--space-4) + 44px);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+}
+.steps li::before {
+  content: counter(step);
+  position: absolute;
+  left: var(--space-4);
+  top: var(--space-4);
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+.step-title { font-family: Georgia, "New York", "Times New Roman", serif; font-weight: 600; font-size: 1.1rem; }
+.step-body { color: var(--muted-strong); }
+@media (min-width: 820px) {
+  .content-page:has(.steps) { max-width: 48rem; }
+  .steps { grid-template-columns: repeat(3, 1fr); }
+  .steps li { padding: calc(var(--space-4) + 40px) var(--space-4) var(--space-4); }
+}
+
+// ---- Bento (home "What's in the box") ----------------------------------------
+.bento h2 { margin-top: 0; }
+.bento ul {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-4);
+  list-style: none;
+  padding: 0;
+  margin: var(--space-5) 0 0;
+}
+.bento li {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: var(--space-5);
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+.bento li:hover { border-color: var(--accent); box-shadow: var(--shadow-sm); }
+.bento li:nth-child(1) { background: color-mix(in srgb, var(--lilac) 22%, var(--panel)); }
+.bento li:nth-child(4) { background: color-mix(in srgb, var(--peach) 20%, var(--panel)); }
+.bento li h3 { margin: var(--space-3) 0 var(--space-2); font-size: 1.15rem; }
+.bento li p:last-child { margin-bottom: 0; }
+.bento .box-grid-icon { background: color-mix(in srgb, var(--lilac) 40%, var(--panel)); }
+.bento li:nth-child(4) .box-grid-icon { background: color-mix(in srgb, var(--peach) 45%, var(--panel)); }
+@media (min-width: 640px) {
+  .bento ul { grid-template-columns: repeat(2, 1fr); }
+}
+@media (min-width: 960px) {
+  .bento ul { grid-template-columns: repeat(6, 1fr); }
+  .bento li { grid-column: span 2; }
+  .bento li:nth-child(1), .bento li:nth-child(2) { grid-column: span 3; }
+}
+
+// ---- CTA band ------------------------------------------------------------------
+.cta-band {
+  margin-top: var(--space-6);
+  padding: var(--space-8) 0;
+  text-align: center;
+  border-top: 1px solid var(--line);
+  background: linear-gradient(
+    180deg,
+    var(--paper) 0%,
+    color-mix(in srgb, var(--lilac) 30%, var(--paper)) 100%
+  );
+}
+.cta-band .shell { max-width: 40rem; }
+.cta-band h2 { margin-top: 0; }
+.cta-links { margin: var(--space-5) 0 0; font-size: 0.95rem; color: var(--muted-strong); }
+main:has(.cta-band) + .site-footer { margin-top: 0; }
+
+// ---- consistency / rhythm fixes ------------------------------------------------
+.cta-strip { padding: var(--space-6) 0 var(--space-7); }
+.cta-strip p { max-width: 46ch; }
+.feature-grid { margin: var(--space-5) 0 0; }
+.content-page .lead { margin-top: 0; }
+.content-page h2 { scroll-margin-top: 80px; }
+.content-page [id] { scroll-margin-top: 80px; }
+// Bare markdown tables in article pages (usage.md shortcuts reference) scroll
+// inside themselves instead of widening the page on a phone. Tables already
+// wrapped in .table-scroll are not direct children, so they keep their own wrapper.
+.content-page > table { display: block; max-width: 100%; overflow-x: auto; }
+.content-page p code, .content-page li code { overflow-wrap: anywhere; }
+
+// On-this-page navs (usage, contribute): compact link chips, not big cards.
+nav.box-grid { margin: var(--space-5) 0 var(--space-6); }
+nav.box-grid .eyebrow { margin: 0 0 var(--space-3); }
+nav.box-grid ul { display: flex; flex-wrap: wrap; gap: var(--space-2); margin: 0; }
+nav.box-grid li { padding: 0; border-radius: var(--radius-pill); }
+nav.box-grid li a { display: inline-flex; align-items: center; min-height: 40px; padding: 0 var(--space-4); text-decoration: none; }
+nav.box-grid li:hover { border-color: var(--accent); }
+.content-page > h1 { margin-bottom: var(--space-4); }
+.content-page > h1 + .faq-item { margin-top: var(--space-5); }
+.content-page blockquote {
+  margin: 0 0 var(--space-5);
+  padding: var(--space-2) var(--space-4);
+  border-left: 3px solid var(--border-strong);
+  color: var(--muted-strong);
+}
+.content-page blockquote p { margin: 0; color: inherit; }
+
+
+// ---- home demo carousel (pages/index.md .demo-carousel, assets/js/demo-carousel.js)
+// Replaces the static hero screenshot. Without JS every slide is stacked; the
+// script adds .is-enhanced and turns the tab row into a real tablist.
+.demo-tabs { display: none; }
+.demo-carousel.is-enhanced .demo-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-4);
+}
+.demo-tab {
+  font: inherit;
+  font-size: 0.92rem;
+  font-weight: 500;
+  padding: 6px var(--space-4);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--panel);
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color 150ms ease, background-color 150ms ease, color 150ms ease;
+}
+.demo-tab:hover { border-color: var(--accent); }
+.demo-tab[aria-selected="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--on-accent);
+}
+.demo-slide { margin: 0; }
+.demo-slide + .demo-slide { margin-top: var(--space-5); }
+.demo-carousel.is-enhanced .demo-slide + .demo-slide { margin-top: 0; }
+.demo-video {
+  aspect-ratio: 16 / 10;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: #1b1530;
+  box-shadow: 0 6px 20px rgba(20, 16, 28, 0.28);
+}
+.demo-video video { display: block; width: 100%; height: 100%; object-fit: cover; }
+.demo-slide figcaption {
+  margin: var(--space-3) var(--space-2) 0;
+  text-align: center;
+  font-size: 0.95rem;
+  color: var(--muted-strong);
+  text-wrap: pretty;
+}
+@media (max-width: 640px) {
+  .demo-tab { font-size: 0.85rem; padding: 5px var(--space-3); }
+}
+
+// ---- Linux log-out callout (pages/download.md) ------------------------------
+// The one Linux step people miss: auto-paste needs a fresh session. Kept as a
+// distinct accent-edged box so it can't be skimmed past like body text.
+.note-linux {
+  margin: var(--space-5) 0 0;
+  padding: var(--space-4) var(--space-5);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--accent);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--lilac) 18%, var(--panel));
+}
+.note-linux p { margin: 0; }

@@ -79,7 +79,7 @@ No — that's the point of how Clipnest is signed. Every Clipnest release is sig
 
 <div class="faq-answer" markdown="1">
 
-Clipnest is **not** notarized with a paid Apple Developer ID, and if you download its `.dmg` straight from a browser, macOS's Gatekeeper will show the "unidentified developer" warning. The supported install path avoids this entirely: `scripts/install.sh` (the one-line curl command on the [Download page]({{ "/download/" | relative_url }})) downloads over `curl`, which never sets the quarantine flag that triggers that Gatekeeper check in the first place — instead, the script verifies the `.dmg` against a published SHA-256 checksum before ever mounting it. Every release is still signed, just with one long-lived, self-signed certificate rather than a Developer ID — enough to keep your Accessibility grant stable across updates (see above), but not enough on its own to satisfy notarization. Clipnest is still a young project; if you'd rather wait for a fully notarized, Gatekeeper-clean build, that's on the roadmap but not shipped yet.
+Clipnest is **not** notarized with a paid Apple Developer ID, and if you download its `.dmg` straight from a browser, macOS's Gatekeeper will show the "unidentified developer" warning. The supported install path avoids this entirely: `scripts/install.sh` (the one-line curl command on the [Download page]({{ "/download/" | relative_url }})) downloads over `curl`, which never sets the quarantine flag that triggers that Gatekeeper check in the first place — instead, the script verifies the `.dmg` against a published SHA-256 checksum before ever mounting it. Every release is still signed, just with one long-lived, self-signed certificate rather than a Developer ID — enough to keep your Accessibility grant stable across updates (see above), but not enough on its own to satisfy notarization. Clipnest is still a young project; if you'd rather wait for a fully notarized, Gatekeeper-clean build, that's on the roadmap but not shipped yet. The full explanation is in [Signing, honestly]({{ '/contribute/#signing-honestly' | relative_url }}).
 
 </div>
 
@@ -145,7 +145,7 @@ Clipnest can optionally read the text inside a copied screenshot, entirely on yo
 
 **Mac:** macOS 14 (Sonoma) or later, on both Apple Silicon and Intel Macs.
 
-**Linux:** Ubuntu 22.04 and 24.04 with GNOME, on X11 or Wayland, for amd64 and arm64. The Linux version is a native GTK 4 app built from the same Swift core, with the same history, search, pinned items, snippets with keyword expansion, on-device OCR and Settings. The same one-line install command as on the Mac works; see the [Download page]({{ "/download/" | relative_url }}#linux).
+**Linux:** Ubuntu 22.04 and 24.04 with GNOME, on X11 or Wayland, for amd64 and arm64. The Linux version is a native GTK 4 app built from the same Swift core, with the same history, search, pinned items, snippets with keyword expansion, on-device OCR and Settings. The same one-line install command as on the Mac works; see the [Download page]({{ "/download/" | relative_url }}) (and the [Linux details]({{ "/contribute/" | relative_url }}#linux)).
 
 </div>
 

@@ -35,7 +35,7 @@ Clipnest is a free, open-source, native menu-bar app for macOS and, since 1.0, L
 
 - **Full clipboard history** — automatically captures everything you copy: plain text, rich text, URLs, images, and files.
 - **Smart de-duplication** — copy the same thing twice and it won't clutter your history.
-- **Accessibility permission survives updates (Mac)** — update Clipnest and you don't have to re-grant Accessibility: your permission survives, because every release is signed with the same certificate. See [Signing, honestly]({{ '/download/#signing-honestly' | relative_url }}) for how.
+- **Accessibility permission survives updates (Mac)** — update Clipnest and you don't have to re-grant Accessibility: your permission survives, because every release is signed with the same certificate. See [Signing, honestly]({{ '/contribute/#signing-honestly' | relative_url }}) for how.
 {: .detail-list}
 
 </div>
@@ -244,8 +244,8 @@ Everything stays on your computer — no servers, no sync, no telemetry, no acco
 
 </div>
 
-- **Picker position.** GNOME doesn't let apps place their own windows on Wayland, so the picker opens where GNOME puts it rather than at your cursor. The optional GNOME Shell extension restores cursor placement and showing above full-screen windows — see [Download]({{ '/download/#linux' | relative_url }}).
-- **Auto-paste permission.** Auto-paste needs a one-time grant that adds you to a dedicated `clipnest-input` group, which can create a virtual keyboard and nothing else. Until then Clipnest copies your choice and you press Ctrl+V yourself.
+- **Picker position.** GNOME doesn't let apps place their own windows on Wayland, so the picker opens where GNOME puts it rather than at your cursor. The optional GNOME Shell extension restores cursor placement and showing above full-screen windows — see [Download]({{ '/contribute/#linux' | relative_url }}).
+- **Auto-paste permission.** Auto-paste needs a one-time grant that adds you to a dedicated `clipnest-input` group, which can create a virtual keyboard and nothing else. **Log out and back in once after granting it**; until then Clipnest copies your choice and you press Ctrl+V yourself.
 - **Terminals.** Pasting into GNOME Terminal and other VTE terminals uses Ctrl+Shift+V automatically.
 - **Password managers.** Copies marked as secret (`x-kde-passwordManagerHint`, used by KeePassXC and others) are never stored. On Wayland, Clipnest can't tell which app made a copy, so Settings → Apps exclusions apply only to X11/XWayland apps; the secret marker works everywhere.
 - **Ubuntu 22.04** ships GTK 4.6, which has an upstream clipboard bug that can, rarely, make Clipnest quit. It's fixed in GTK 4.10+ (Ubuntu 24.04). Your history is never affected.

@@ -5,9 +5,10 @@
 // context, where navigator.clipboard is undefined) sees the plain, selectable
 // command exactly as before rather than a button that silently does nothing.
 //
-// This is the site's only script. Everything else — the mobile nav, the FAQ
-// accordions — is deliberately zero-JS, so keep it that way unless there's a
-// reason as good as "a clipboard manager's site should let you copy things".
+// One of only two scripts (the other is demo-carousel.js, home page only).
+// Everything else — the mobile nav, the FAQ accordions — is deliberately
+// zero-JS, so keep it that way unless there's a reason as good as "a clipboard
+// manager's site should let you copy things".
 (function () {
   "use strict";
 

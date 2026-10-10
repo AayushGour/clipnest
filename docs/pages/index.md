@@ -5,26 +5,65 @@ description: "Clipnest is a free, open-source, native clipboard manager for macO
 permalink: /
 ---
 
-<section class="hero-visual">
-<div class="shell" markdown="1">
-
-<div class="shot-frame" markdown="1">
-
-![Clipnest's clipboard history picker, showing search and the Snippets tab]({{ "/assets/screenshot-picker.png" | relative_url }})
-
-</div>
-
+<section class="hero-visual" aria-label="See Clipnest in action">
+<div class="shell">
+  <div class="demo-carousel">
+  <div class="demo-tabs" role="tablist" aria-label="Clipnest demos">
+    <button type="button" class="demo-tab" role="tab" id="demo-tab-0" aria-controls="demo-0" aria-selected="true">Copy &amp; paste</button>
+    <button type="button" class="demo-tab" role="tab" id="demo-tab-1" aria-controls="demo-1" aria-selected="false" tabindex="-1">Text from images</button>
+    <button type="button" class="demo-tab" role="tab" id="demo-tab-2" aria-controls="demo-2" aria-selected="false" tabindex="-1">Snippets</button>
+    <button type="button" class="demo-tab" role="tab" id="demo-tab-3" aria-controls="demo-3" aria-selected="false" tabindex="-1">Settings</button>
+  </div>
+  <div class="shot-frame demo-stage">
+    <figure class="demo-slide" id="demo-0" role="tabpanel" aria-labelledby="demo-tab-0">
+      <div class="demo-video">
+        <video muted playsinline autoplay loop preload="auto" poster="{{ "/assets/demos/01-copy-paste.jpg" | relative_url }}" width="1280" height="800" aria-label="Copy &amp; paste demo">
+          <source src="{{ "/assets/demos/01-copy-paste.webm" | relative_url }}" type="video/webm">
+          <source src="{{ "/assets/demos/01-copy-paste.mp4" | relative_url }}" type="video/mp4">
+        </video>
+      </div>
+      <figcaption>Copy a few things, then press ⌥⌘V in any app and pick one to paste.</figcaption>
+    </figure>
+    <figure class="demo-slide" id="demo-1" role="tabpanel" aria-labelledby="demo-tab-1">
+      <div class="demo-video">
+        <video muted playsinline loop preload="none" poster="{{ "/assets/demos/02-ocr.jpg" | relative_url }}" width="1280" height="800" aria-label="Text from images demo">
+          <source src="{{ "/assets/demos/02-ocr.webm" | relative_url }}" type="video/webm">
+          <source src="{{ "/assets/demos/02-ocr.mp4" | relative_url }}" type="video/mp4">
+        </video>
+      </div>
+      <figcaption>Copy an image and Clipnest reads its text on-device. Press ⌥⏎ to paste the text instead of the image.</figcaption>
+    </figure>
+    <figure class="demo-slide" id="demo-2" role="tabpanel" aria-labelledby="demo-tab-2">
+      <div class="demo-video">
+        <video muted playsinline loop preload="none" poster="{{ "/assets/demos/03-snippets.jpg" | relative_url }}" width="1280" height="800" aria-label="Snippets demo">
+          <source src="{{ "/assets/demos/03-snippets.webm" | relative_url }}" type="video/webm">
+          <source src="{{ "/assets/demos/03-snippets.mp4" | relative_url }}" type="video/mp4">
+        </video>
+      </div>
+      <figcaption>Save text under a short keyword. Select the keyword anywhere and press ⌥⌘E to expand it.</figcaption>
+    </figure>
+    <figure class="demo-slide" id="demo-3" role="tabpanel" aria-labelledby="demo-tab-3">
+      <div class="demo-video">
+        <video muted playsinline loop preload="none" poster="{{ "/assets/demos/04-settings.jpg" | relative_url }}" width="1280" height="800" aria-label="Settings demo">
+          <source src="{{ "/assets/demos/04-settings.webm" | relative_url }}" type="video/webm">
+          <source src="{{ "/assets/demos/04-settings.mp4" | relative_url }}" type="video/mp4">
+        </video>
+      </div>
+      <figcaption>Press ⌘, in the picker to open Settings and turn on text recognition for images.</figcaption>
+    </figure>
+  </div>
+  </div>
 </div>
 </section>
 
 <section class="cta-strip">
 <div class="shell" markdown="1">
 
-## Get it
+## Install in one line
 
 <div class="install-card" markdown="1">
 
-<div class="terminal-bar"><span></span><span></span><span></span></div>
+<div class="terminal-bar"><span></span><span></span><span></span><b class="terminal-label">macOS · Linux</b></div>
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash
@@ -32,7 +71,7 @@ curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/in
 
 </div>
 
-**Mac:** macOS 14 (Sonoma) or later. **Linux:** Ubuntu 22.04 or 24.04 with GNOME (X11 or Wayland), amd64 or arm64 — the same command works (run it as your normal user; it asks for `sudo` to install the packages). Full steps for both, and the honest Mac signing story, are on the [Download page]({{ "/download/" | relative_url }}).
+**Mac:** macOS 14 (Sonoma) or later. **Linux:** Ubuntu 22.04 or 24.04 with GNOME (X11 or Wayland), amd64 or arm64. Run it as your normal user; on Linux it asks for `sudo` to install the packages. More on the [Download page]({{ "/download/" | relative_url }}).
 
 </div>
 </section>
@@ -81,7 +120,7 @@ Save a signature, a boilerplate reply, or a command as a **snippet**, give it a 
 </div>
 </section>
 
-<section class="section box-grid">
+<section class="section bento">
 <div class="shell" markdown="1">
 
 ## What's in the box
@@ -173,15 +212,19 @@ Sources: [p0deje/Maccy](https://github.com/p0deje/Maccy) and its [README](https:
 </div>
 </section>
 
-<section class="section learn-grid">
+<section class="cta-band">
 <div class="shell" markdown="1">
 
-## Learn more
+## Ready to try Clipnest?
 
-- [Features]({{ "/features/" | relative_url }}) — everything Clipnest does, in detail.
-- [FAQ]({{ "/faq/" | relative_url }}) — pricing, privacy, permissions, and more.
-- [Privacy]({{ "/privacy/" | relative_url }}) — exactly what stays on your computer.
-- [Changelog](https://github.com/AayushGour/clipnest/blob/main/CHANGELOG.md) — what changed in every release.
+Free, open source, and a single command away on your Mac or Linux PC.
+
+<div class="hero-cta">
+<a class="btn btn-primary" href="{{ "/download/" | relative_url }}">Download Clipnest</a>
+<a class="btn btn-secondary" href="{{ "/features/" | relative_url }}">See all features</a>
+</div>
+
+<p class="cta-links"><a href="{{ "/faq/" | relative_url }}">FAQ</a> · <a href="{{ "/privacy/" | relative_url }}">Privacy</a> · <a href="{{ "/contribute/" | relative_url }}">Contribute</a> · <a href="https://github.com/AayushGour/clipnest/blob/main/CHANGELOG.md">Changelog</a></p>
 
 </div>
 </section>
