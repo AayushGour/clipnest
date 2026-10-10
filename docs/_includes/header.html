@@ -34,7 +34,7 @@
       </label>
 
       <ul class="nav-links" id="site-nav-links">
-        {%- assign nav_items = "Features|/features/,Download|/download/,Usage|/usage/,Privacy|/privacy/,FAQ|/faq/" | split: "," -%}
+        {%- assign nav_items = "Features|/features/,Usage|/usage/,Privacy|/privacy/,FAQ|/faq/,Contribute|/contribute/" | split: "," -%}
         {%- for item in nav_items -%}
           {%- assign parts = item | split: "|" -%}
           {%- assign label = parts[0] -%}
@@ -43,6 +43,9 @@
             <a href="{{ path | relative_url }}"{% if page.url == path %} aria-current="page"{% endif %}>{{ label }}</a>
           </li>
         {%- endfor -%}
+        <li class="nav-cta">
+          <a class="btn btn-primary" href="{{ "/download/" | relative_url }}"{% if page.url == "/download/" %} aria-current="page"{% endif %}>Download</a>
+        </li>
       </ul>
     </nav>
   </div>

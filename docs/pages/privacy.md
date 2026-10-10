@@ -28,7 +28,7 @@ Your clipboard is some of the most sensitive data on your machine — passwords,
 
 Nothing you copy, paste, or save as a snippet is ever sent anywhere — no servers, no sync, no analytics, no telemetry, no account.
 
-The *only* network traffic Clipnest ever makes is a background check against GitHub's public Releases API, once a day, to see whether a newer version exists. You can turn it off in **Settings → General**. That check sends nothing about you or your clipboard — just an anonymous request for the latest release tag — and nothing downloads or installs automatically because of it; updating stays a separate step you choose to run yourself (on Linux, after you confirm **Install Update…**). See [Update on Mac]({{ '/download/#update-on-mac' | relative_url }}) and [Update and uninstall on Linux]({{ '/download/#update-and-uninstall-on-linux' | relative_url }}) for those flows.
+The *only* network traffic Clipnest ever makes is a background check against GitHub's public Releases API, once a day, to see whether a newer version exists. You can turn it off in **Settings → General**. That check sends nothing about you or your clipboard — just an anonymous request for the latest release tag — and nothing downloads or installs automatically because of it; updating stays a separate step you choose to run yourself (on Linux, after you confirm **Install Update…**). See [Update on Mac]({{ '/contribute/#updating' | relative_url }}) and [Update and uninstall on Linux]({{ '/contribute/#updating' | relative_url }}) for those flows.
 
 Your history and snippets are stored only on your own disk: on the Mac in `~/Library/Application Support/Clipnest`, on Linux in `~/.local/share/Clipnest` (or `$XDG_DATA_HOME/Clipnest` if you set that).
 

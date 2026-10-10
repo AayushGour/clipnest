@@ -20,11 +20,11 @@ permalink: /
 <section class="cta-strip">
 <div class="shell" markdown="1">
 
-## Get it
+## Install in one line
 
 <div class="install-card" markdown="1">
 
-<div class="terminal-bar"><span></span><span></span><span></span></div>
+<div class="terminal-bar"><span></span><span></span><span></span><b class="terminal-label">macOS · Linux</b></div>
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash
@@ -32,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/in
 
 </div>
 
-**Mac:** macOS 14 (Sonoma) or later. **Linux:** Ubuntu 22.04 or 24.04 with GNOME (X11 or Wayland), amd64 or arm64 — the same command works (run it as your normal user; it asks for `sudo` to install the packages). Full steps for both, and the honest Mac signing story, are on the [Download page]({{ "/download/" | relative_url }}).
+**Mac:** macOS 14 (Sonoma) or later. **Linux:** Ubuntu 22.04 or 24.04 with GNOME (X11 or Wayland), amd64 or arm64. Run it as your normal user; on Linux it asks for `sudo` to install the packages. More on the [Download page]({{ "/download/" | relative_url }}).
 
 </div>
 </section>
@@ -81,7 +81,7 @@ Save a signature, a boilerplate reply, or a command as a **snippet**, give it a 
 </div>
 </section>
 
-<section class="section box-grid">
+<section class="section bento">
 <div class="shell" markdown="1">
 
 ## What's in the box
@@ -173,15 +173,19 @@ Sources: [p0deje/Maccy](https://github.com/p0deje/Maccy) and its [README](https:
 </div>
 </section>
 
-<section class="section learn-grid">
+<section class="cta-band">
 <div class="shell" markdown="1">
 
-## Learn more
+## Ready to try Clipnest?
 
-- [Features]({{ "/features/" | relative_url }}) — everything Clipnest does, in detail.
-- [FAQ]({{ "/faq/" | relative_url }}) — pricing, privacy, permissions, and more.
-- [Privacy]({{ "/privacy/" | relative_url }}) — exactly what stays on your computer.
-- [Changelog](https://github.com/AayushGour/clipnest/blob/main/CHANGELOG.md) — what changed in every release.
+Free, open source, and a single command away on your Mac or Linux PC.
+
+<div class="hero-cta">
+<a class="btn btn-primary" href="{{ "/download/" | relative_url }}">Download Clipnest</a>
+<a class="btn btn-secondary" href="{{ "/features/" | relative_url }}">See all features</a>
+</div>
+
+<p class="cta-links"><a href="{{ "/faq/" | relative_url }}">FAQ</a> · <a href="{{ "/privacy/" | relative_url }}">Privacy</a> · <a href="{{ "/contribute/" | relative_url }}">Contribute</a> · <a href="https://github.com/AayushGour/clipnest/blob/main/CHANGELOG.md">Changelog</a></p>
 
 </div>
 </section>
