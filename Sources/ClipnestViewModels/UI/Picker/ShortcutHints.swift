@@ -34,10 +34,18 @@
 // text + separator (~56-57pt) is enough on its own — re-measured, every
 // tab/OCR-state combination now fits with a positive margin (worst case at
 // the time: Snippets tab, OCR-bearing row highlighted, update dot showing —
-// 484pt against 493pt available, +9pt margin). Do not re-add `esc close`
-// without re-running this same measurement — the budget is tight enough
-// that any further growth elsewhere in the bar (a longer version string, a
-// new shortcut) needs the same width check.
+// 484pt against 493pt available, +9pt margin). `esc close` must NOT be
+// re-added to the single-line string `text(for:capabilities:)` builds — the
+// budget is tight enough that any further growth in that line (a longer
+// version string, a new shortcut) needs the same width check.
+//
+// T-CLOSEBTN1 (the picker had no visible way to close): instead of putting
+// `esc close` back in the footer, the picker header gains a trailing close (x)
+// button labelled "Close (esc)" (`PickerCloseAffordance.buttonLabel`: the
+// hover-revealed title of macOS's `ExpandingIconButton`, a tooltip on Linux);
+// it calls the same `dismiss` path Esc uses. The footer is untouched, so the
+// one-line width budget above still holds. Both platforms read the string
+// from `PickerCloseAffordance` (below).
 //
 // T-SET4 (user bug report: ⌘S popped the save-as-snippet form for a
 // highlighted `.image` row, which the row's own UI never offers — the key
@@ -314,10 +322,9 @@ public enum ShortcutHints {
   ///     neither macOS's `PickerView` nor Linux's `PickerWindow+Reconcile`
   ///     call site needs to pass this explicitly or change at all (T-BUG2).
   ///
-  /// Deliberately omits an `esc close` hint (see this file's top doc
-  /// comment for the width budget that forced it) — Esc-to-close remains
-  /// fully functional (`PickerView`'s `.onKeyPress(.escape)`), it's just no
-  /// longer spelled out in the footer.
+  /// Deliberately omits `esc close` (see this file's top doc comment for the
+  /// width budget that forced it) — the header's close button tooltip
+  /// (`PickerCloseAffordance.buttonLabel`) names Esc instead.
   ///
   /// T-SET5: `⌘, settings` is appended last, for every tab/capability state
   /// on platforms that have it (`vocabulary.settings != nil`) — it's a
@@ -361,4 +368,12 @@ public enum ShortcutHints {
     }
     return parts.joined(separator: " · ")
   }
+}
+
+/// T-CLOSEBTN1: the string for the picker's visible close affordance — the
+/// header's trailing close (x) button. One shared place for both platforms
+/// (`PickerView` on macOS, `PickerWindow+Layout` on Linux).
+public enum PickerCloseAffordance {
+  /// Tooltip + accessibility label of the header close button.
+  public static let buttonLabel = "Close (esc)"
 }

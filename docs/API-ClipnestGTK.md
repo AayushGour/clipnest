@@ -90,7 +90,7 @@ the human-readable list also shown in Settings → Shortcuts):
 | ↑ / ↓ | Move selection |
 | Enter | Paste highlighted item — reads "copy" instead when `isAutoPasteAvailable` is `false`, see below |
 | Alt+Enter | Paste as plain/recognized text |
-| Escape | Dismiss (via `onDismiss`) |
+| Escape | Dismiss (via `onDismiss`). The header's trailing close (x) button (tooltip `PickerCloseAffordance.buttonLabel`) calls the same `dismiss()` |
 | Ctrl+F | Focus the search field |
 | Ctrl+P | Toggle pin |
 | Delete (Ctrl+Delete also accepted) | Delete highlighted item, EXCEPT when the search field has focus and pressing Delete would actually edit its content (a selection, or a character after the caret) — then the key edits the search text instead, same as macOS. See below. |
