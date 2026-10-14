@@ -336,12 +336,23 @@ struct PickerView: View {
       if viewModel.activeTab != .snippets {
         typeFilterChips
       }
+      closeButton
     }
     .padding(.horizontal, 10)
     .frame(height: Self.headerHeight)
   }
 
   private static let headerHeight: CGFloat = 40
+  /// T-CLOSEBTN1: visible close (x) at the header's trailing edge — the
+  /// picker previously closed only via Esc/focus loss. The same
+  /// `ExpandingIconButton` the type chips and row actions use: icon-only at
+  /// rest, "Close (esc)" slides in on hover. Calls the same
+  /// `viewModel.dismiss()` the `.escape` key case uses.
+  private var closeButton: some View {
+    ExpandingIconButton(
+      systemName: "xmark", title: PickerCloseAffordance.buttonLabel,
+      action: { viewModel.dismiss() })
+  }
 
   private var searchField: some View {
     HStack(spacing: 8) {
@@ -478,8 +489,9 @@ struct PickerView: View {
   // comment, which also has the full width-budget measurement): (1) the
   // hint is contextual instead of permanently longer; (2) that alone still
   // didn't fit every tab/state, so `esc close` (the least informative item,
-  // and Esc-to-close needs no reminder) was dropped from the bar entirely —
-  // Esc still closes the picker, it's just not spelled out here anymore.
+  // and Esc-to-close needs no reminder) was dropped from the bar — T-CLOSEBTN1
+  // later added a header close button (hover label "Close (esc)") instead, leaving
+  // this line's width budget untouched.
   //
   // T-SET4 (bug fix + re-audit): `⌘S save` used to show unconditionally on
   // History/Pinned regardless of the highlighted row's kind (the reported

@@ -13,7 +13,9 @@
 // Tree:
 //   window
 //     └─ outerBox (vertical)
-//          ├─ searchEntry
+//          ├─ headerBox (horizontal — T-CLOSEBTN1)
+//          │    ├─ searchEntry          (hexpand)
+//          │    └─ closeButton          (trailing, same dismiss path as Esc)
 //          ├─ chipsBox (horizontal — type-filter chips)
 //          ├─ tabsBox (horizontal — History/Pinned/Snippets)
 //          ├─ scrolledWindow
@@ -46,6 +48,7 @@
 //                    box is built fresh per right-click, not built once
 //                    here — see PickerWindow+ContextMenu.swift)
 import CGtk4
+import ClipnestViewModels
 
 extension PickerWindow {
   static let outerSpacing: Int32 = 8
@@ -69,7 +72,14 @@ extension PickerWindow {
     gtk_widget_add_css_class(chipsBox, "picker-header-row")
     gtk_widget_add_css_class(tabsBox, "picker-tab-row")
 
-    gtk_box_append(outerBox, searchEntry)
+    // T-CLOSEBTN1: search entry + trailing close button share one row,
+    // mirroring `PickerView.header`'s trailing `closeButton`.
+    let headerBox: OpaquePointer = gtk_box_new(
+      GTK_ORIENTATION_HORIZONTAL, PickerWindow.chipSpacing)
+    gtk_widget_set_hexpand(searchEntry, 1)
+    gtk_box_append(headerBox, searchEntry)
+    gtk_box_append(headerBox, makeCloseButton())
+    gtk_box_append(outerBox, headerBox)
     gtk_box_append(outerBox, chipsBox)
     gtk_box_append(outerBox, tabsBox)
 
@@ -236,3 +246,32 @@ extension PickerWindow {
     connectPreviewPopoverHover()
   }
 }
+
+extension PickerWindow {
+  /// T-CLOSEBTN1: the header's visible close (x) button. Clicking runs the
+  /// same `dismiss()` the Esc key's `.dismiss` action runs
+  /// (`PickerWindow+Keyboard.swift`). The tooltip doubles as the accessible
+  /// name (GTK4 derives an icon-only button's AT name from it).
+  func makeCloseButton() -> OpaquePointer {
+    let button: OpaquePointer = gtk_button_new_from_icon_name("window-close-symbolic")
+    gtk_widget_add_css_class(button, "flat")
+    gtk_widget_add_css_class(button, "picker-close")
+    gtk_widget_set_tooltip_text(button, PickerCloseAffordance.buttonLabel)
+    gtkConnect(
+      button, signal: "clicked", context: self,
+      callback: unsafeBitCast(closeButtonClickedTrampoline, to: GCallback.self))
+    return button
+  }
+
+  func handleCloseButtonClicked() {
+    dismiss()
+  }
+}
+
+/// `GtkButton::clicked` (`makeCloseButton()`) — `void (*)(GtkButton*, gpointer)`.
+private let closeButtonClickedTrampoline:
+  @convention(c) (OpaquePointer?, UnsafeMutableRawPointer?) ->
+    Void = { _, data in
+      guard let window = unretainedContext(data, as: PickerWindow.self) else { return }
+      window.handleCloseButtonClicked()
+    }

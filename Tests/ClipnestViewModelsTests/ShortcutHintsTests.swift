@@ -9,7 +9,9 @@
 // truncation-regression matrix.
 //
 // T-SET2 round 2: also locks down that `esc close` never comes back as a
-// literal substring — it was dropped as the width-budget lever (see
+// literal substring of the ONE-LINE hint string (T-CLOSEBTN1 uses the header
+// close button's "Close (esc)" tooltip via `PickerCloseAffordance` instead) —
+// it was dropped as the width-budget lever (see
 // `ShortcutHints.swift`'s top doc comment for the measured numbers); a
 // future edit re-adding it without re-checking the width budget would
 // silently reintroduce the truncation this suite exists to prevent.
@@ -201,7 +203,7 @@ struct ItemKindCapabilityTests {
 
     // MARK: - `esc close` stays dropped (the width-budget lever, round 2)
 
-    @Test("`esc close` never appears — dropped as the width-budget lever, every tab/capability")
+    @Test("`esc close` never appears in the one-line text, every tab/capability")
     func neverContainsEscClose() {
       for tab in PickerTab.allCases {
         for testCase in Self.capabilityCases {
@@ -209,6 +211,13 @@ struct ItemKindCapabilityTests {
           #expect(!hints.contains("esc close"))
         }
       }
+    }
+
+    // MARK: - T-CLOSEBTN1: close affordance strings (shared by macOS + GTK)
+
+    @Test("close button tooltip names esc")
+    func closeAffordanceStrings() {
+      #expect(PickerCloseAffordance.buttonLabel == "Close (esc)")
     }
 
     // MARK: - Every tab/capability still ends with the tabs hint, unclipped

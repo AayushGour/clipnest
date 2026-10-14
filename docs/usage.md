@@ -286,7 +286,7 @@ Opening Settings briefly shows a Dock icon while that window is focused — Clip
 | Switch to Pinned tab | `⌘2` | `Ctrl+2` |
 | Switch to Snippets tab | `⌘3` | `Ctrl+3` |
 | Open Settings | `⌘,` | `Ctrl+,` |
-| Close the picker | `Esc` | `Esc` |
+| Close the picker | `Esc` (or the × button at the right of the header) | `Esc` (or the × button) |
 
 The two **global** shortcuts above — **Open/toggle the picker** and **Expand a snippet by Tag** — are rebindable from **Settings → Shortcuts** (**⌘,**): click a shortcut field and press your preferred key combination; it takes effect immediately (see [Settings window](#8-settings-window)). The shortcuts *inside* the picker (search, pin, delete, switch tabs, and so on, listed in the table above) are fixed and aren't currently customizable.
 

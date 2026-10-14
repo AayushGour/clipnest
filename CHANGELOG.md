@@ -10,6 +10,15 @@ at any time.
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-10-14
+
+### Added
+
+- The picker now has a visible close (x) button at the right of its header
+  (macOS: the same hover-expanding icon button as the type chips, revealing
+  "Close (esc)"; Linux: tooltip "Close (esc)"). Previously Esc was the only way
+  to close it, and nothing said so.
+
 ## [1.2.1] - 2026-10-10
 
 ### Fixed
@@ -388,7 +397,8 @@ release (0.5.0, above). None of them were ever installed by a user.
 
 - `Sendable` conformance for `NSPasteboard` access, required by Swift 6.
 
-[Unreleased]: https://github.com/AayushGour/clipnest/compare/v1.2.1...HEAD
+[Unreleased]: https://github.com/AayushGour/clipnest/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/AayushGour/clipnest/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/AayushGour/clipnest/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/AayushGour/clipnest/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/AayushGour/clipnest/compare/v1.0.0...v1.1.0

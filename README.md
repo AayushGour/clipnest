@@ -278,7 +278,7 @@ Targets refuse with a clear error on the wrong OS. Only `install-linux` and `uni
 | Delete entry | `⌘⌫` |
 | Switch tabs (History / Pinned / Snippets) | `⌘1` / `⌘2` / `⌘3` |
 | Open Settings *(picker or Settings window focused — not global)* | `⌘,` |
-| Close | `Esc` |
+| Close | `Esc`, or the × button at the right of the picker header |
 
 Both the picker hotkey and the snippet-expansion hotkey are rebindable in Settings → Shortcuts; ⌥⌘V / ⌥⌘E above are just the defaults. **⌥Return** only behaves differently from plain **Return** where there's actually something to strip: on **rich text** items it pastes the plain-text form instead of the formatted one, and on an **image row with recognized text** (OCR — see [Settings](#settings)) it pastes that text instead of the image, falling back to pasting the image itself if nothing was recognized. On plain text, links, files, and images with no recognized text, ⌥Return pastes exactly what Return does — there's no richer form to strip. An image also gets a "Copy Recognized Text" action in its right-click menu when it has recognized text, alongside a small badge on its thumbnail. **⌘S** saves a highlighted text or link item as a snippet; it's a no-op on image, rich-text, and file rows, matching those rows' own UI, which never offers a "Save as Snippet" action there. **⌘,** opens Settings while the picker is focused (closing the picker first, then opening and focusing Settings) or while the Settings window itself is already focused — it's deliberately not a global hotkey, so pressing it from any other app does nothing and never steals that app's own ⌘, shortcut.
 

@@ -253,6 +253,13 @@ enum PickerStyleSheet {
       color: @accent_bg_color;
     }
 
+    /* ===== Close (x) button (T-CLOSEBTN1). */
+    button.picker-close {
+      min-width: 24px;
+      min-height: 24px;
+      padding: 0;
+    }
+
     /* ===== Empty state — PickerView.emptyState: `.callout` (~12pt). */
     label.picker-empty {
       font-size: 12pt;
