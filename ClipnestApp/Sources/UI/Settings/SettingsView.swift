@@ -43,7 +43,7 @@ struct SettingsView: View {
         settings: settings, clipStore: clipStore, ocrBackfillViewModel: ocrBackfillViewModel
       )
       .tabItem { Label("History", systemImage: "clock") }
-        .tag(SettingsTab.history)
+      .tag(SettingsTab.history)
 
       ShortcutsSettingsView(accessibilityWatcher: accessibilityWatcher)
         .tabItem { Label("Shortcuts", systemImage: "command") }
