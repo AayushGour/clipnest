@@ -22,12 +22,6 @@ public enum XDGRuntimeDirectories {
   static let stateHomeFallbackRelativePath = ".local/state"
   private static let appDirectoryName = "clipnest"
 
-  /// POSIX mode (owner read/write/execute only) applied to every directory
-  /// this app creates that can hold clipboard content — mirrors
-  /// `BlobStore`'s own non-Apple blob-directory permission and the
-  /// project's "clipboard content is inherently sensitive" privacy must.
-  static let ownerOnlyPosixPermissions: Int16 = 0o700
-
   /// `$XDG_DATA_HOME/clipnest` (via `BlobStore.defaultBaseDirectory()`) —
   /// where `blobs/` and the two SQLite store files live.
   public static func dataDirectory(
@@ -55,7 +49,7 @@ public enum XDGRuntimeDirectories {
   }
 
   /// Creates `directory` (and any missing intermediates) if needed, then
-  /// unconditionally tightens its permissions to `ownerOnlyPosixPermissions`
+  /// tightens it to `PrivateDataPermissions.directoryMode` (0700)
   /// — idempotent, so calling this on a directory `SQLiteClipStore.init`
   /// (out of this task's scope, in `ClipnestSQLite`) is ABOUT to also
   /// `createDirectory` into is exactly what fixes that call's missing
@@ -73,9 +67,7 @@ public enum XDGRuntimeDirectories {
   public static func prepare(
     _ directory: URL, fileManager: FileManager = .default
   ) throws -> URL {
-    try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-    try fileManager.setAttributes(
-      [.posixPermissions: ownerOnlyPosixPermissions], ofItemAtPath: directory.path)
+    try PrivateDataPermissions.secureDirectory(directory, fileManager: fileManager)
     return directory
   }
 }

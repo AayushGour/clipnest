@@ -17,6 +17,7 @@
 
 import AppKit
 import ClipnestCore
+import ClipnestViewModels
 import SwiftUI
 
 @main
@@ -66,6 +67,10 @@ private struct MenuBarContent: View {
     }
     Button("Settings…") {
       openSettingsAndFocus()
+    }
+    // T-WELCOME1: reopens the first-run welcome; never touches the seen flag.
+    Button(WelcomeCopy.menuItemTitle) {
+      appDelegate.showWelcome()
     }
     Divider()
     Button("Quit") {

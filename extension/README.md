@@ -3,6 +3,40 @@
 Optional. Clipnest works without it — but on a Wayland session it supplies the
 capabilities a Wayland client structurally cannot have on its own.
 
+## How it gets installed
+
+The `clipnest` package ships both builds under
+`/usr/share/clipnest/gnome-shell-extension/{esm,legacy}`. The app itself
+(`Sources/ClipnestLinuxAppKit/GnomeExtension/GnomeExtensionInstaller.swift`)
+installs it **per user** on every launch, off the UI thread:
+
+- Skips non-GNOME desktops (`XDG_CURRENT_DESKTOP` has no `GNOME` component).
+- Picks the variant whose `metadata.json` `shell-version` lists the running
+  `gnome-shell --version` major (`legacy` for 42-44, `esm` for 45+).
+- Copies it to `~/.local/share/gnome-shell/extensions/clipnest@clipnest.app/`
+  (via a temporary sibling dir + rename) when missing or when `metadata.json`
+  `version` differs. **Bump `version` in `src/metadata-*.json` whenever the
+  extension changes**, or existing users will not get the new code.
+- Appends the uuid to `org.gnome.shell enabled-extensions` (existing entries
+  kept) unless it is in `disabled-extensions`, `disable-user-extensions` is
+  true (reported, never flipped), or Clipnest enabled it before and it has since
+  been removed (the user turned it off; remembered in
+  `$XDG_STATE_HOME/clipnest/gnome-extension-enabled`).
+- Wayland cannot load a new extension (or new code) without a log out, so the
+  status is `GnomeExtensionStatus.installedNeedsRelogin` until
+  `app.clipnest.ShellHelper` appears on the bus, then `.active`. The first-run
+  welcome window reads `LinuxAppEnvironment.gnomeExtensionStatus`.
+
+A symlinked extension directory (a developer's checkout) is never replaced. The
+marker means a user who turned the extension off keeps it off, even across a
+package remove/purge and reinstall (dpkg cannot reach per-user state); to let
+Clipnest enable it again, delete the marker (or run `scripts/uninstall.sh`).
+If the installed copy doesn't support the running Shell (e.g. legacy after a
+42 -> 46 upgrade) it is replaced with the matching variant.
+
+`scripts/uninstall.sh` removes the per-user copy, the `enabled-extensions` entry
+and the marker.
+
 ## Why it exists
 
 | Capability | Without the extension | With it |

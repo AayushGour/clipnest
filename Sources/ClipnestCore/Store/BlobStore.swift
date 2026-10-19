@@ -38,22 +38,11 @@ public struct BlobStore: Sendable {
   /// so callers (e.g. Settings' storage-usage display, plan task T28) can
   /// compute the same path without duplicating the literal string.
   public static let blobsDirectoryName = "blobs"
+  /// Name prefix of in-flight temp files in `blobs/` (`writePrivately`); a
+  /// crash can leave them behind, see `BlobPermissionsMigration.sweepStaleTemporaryFiles`.
+  public static let temporaryFilePrefix = ".tmp-"
 
   private static let appDirectoryName = "Clipnest"
-
-  /// POSIX mode (owner read/write/execute only) applied to the blob
-  /// directory — and any intermediate directories `write(_:)` has to create
-  /// along the way — on EVERY platform. Clipboard contents are inherently
-  /// sensitive (coding-standards.md's Privacy/security musts): the plain
-  /// `createDirectory` default is driven by the process umask, measured as
-  /// 0755 on macOS under the standard 022 umask, which lets every other
-  /// local account on a shared machine list blob filenames (content
-  /// hashes) and read blob bytes.
-  ///
-  /// T-SEC2: this was originally applied on non-Apple platforms only,
-  /// leaving `~/Library/Application Support/Clipnest/blobs/` world-readable
-  /// on every Mac. It now applies unconditionally.
-  private static let blobDirectoryPosixPermissions = 0o700
 
   /// T-PF8 (P0 safety fix): name of the environment variable that, when set
   /// to a non-empty value, overrides the directory `defaultBaseDirectory()`
@@ -250,6 +239,10 @@ public struct BlobStore: Sendable {
     SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
   }
 
+  /// The `blobs/` directory — public for the one-time permissions pass
+  /// (`BlobPermissionsMigration`) and storage-usage callers.
+  public var blobsDirectoryURL: URL { blobsDirectory }
+
   private var blobsDirectory: URL {
     baseDirectory.appendingPathComponent(Self.blobsDirectoryName, isDirectory: true)
   }
@@ -261,10 +254,12 @@ public struct BlobStore: Sendable {
   /// Writes `data` to a content-addressed path and returns the resulting
   /// relative `blobPath` (rooted at `"blobs/"`) to store on a `ClipItem`.
   ///
-  /// The directory-creation step below passes
-  /// `blobDirectoryPosixPermissions` (0700) so the blob directory — and any
-  /// intermediate directories created along with it — are never world- or
-  /// group-readable, on every platform.
+  /// The directory-creation step below goes through
+  /// `PrivateDataPermissions.secureDirectory` (0700) so the blob directory —
+  /// and any intermediate directories created along with it — are never
+  /// world- or group-readable, on every platform. The blob file itself is
+  /// written via a 0600 temp file renamed into place (`writePrivately`), so
+  /// it is owner-only from creation.
   ///
   /// The explicit `setAttributes` after it is NOT redundant, and is the
   /// half that protects existing users: `createDirectory`'s `attributes:`
@@ -284,18 +279,42 @@ public struct BlobStore: Sendable {
     }
 
     do {
-      try fileManager.createDirectory(
-        at: blobsDirectory, withIntermediateDirectories: true,
-        attributes: [.posixPermissions: Self.blobDirectoryPosixPermissions])
-      try fileManager.setAttributes(
-        [.posixPermissions: Self.blobDirectoryPosixPermissions],
-        ofItemAtPath: blobsDirectory.path)
-      try data.write(to: destination, options: .atomic)
+      try PrivateDataPermissions.secureDirectory(baseDirectory, fileManager: fileManager)
+      try PrivateDataPermissions.secureDirectory(blobsDirectory, fileManager: fileManager)
+      try writePrivately(data, to: destination)
     } catch {
       throw BlobStoreError.ioFailure(underlying: String(describing: error))
     }
 
     return blobPath
+  }
+
+  /// Atomic write whose file is owner-only (0600) from creation: the bytes go
+  /// to a sibling temp file created with `PrivateDataPermissions.fileMode`
+  /// (Foundation's own `.atomic` write leaves the umask-derived 0644), then
+  /// the temp file is renamed into place. If another writer won the race for
+  /// the same content-addressed path, the temp file is discarded — identical
+  /// bytes, so nothing is lost.
+  private func writePrivately(_ data: Data, to destination: URL) throws {
+    let temp = destination.deletingLastPathComponent()
+      .appendingPathComponent("\(Self.temporaryFilePrefix)\(UUID().uuidString)")
+    guard
+      fileManager.createFile(
+        atPath: temp.path, contents: data,
+        attributes: [.posixPermissions: PrivateDataPermissions.fileMode])
+    else {
+      throw BlobStoreError.ioFailure(underlying: "could not create \(temp.lastPathComponent)")
+    }
+    do {
+      // createFile's attributes are subject to umask on some platforms; pin it.
+      try fileManager.setAttributes(
+        [.posixPermissions: PrivateDataPermissions.fileMode], ofItemAtPath: temp.path)
+      try fileManager.moveItem(at: temp, to: destination)
+    } catch {
+      try? fileManager.removeItem(at: temp)
+      if fileManager.fileExists(atPath: destination.path) { return }
+      throw error
+    }
   }
 
   /// Reads the bytes at `blobPath`.

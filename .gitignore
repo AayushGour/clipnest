@@ -43,3 +43,12 @@ extension/test/core/
 # Python bytecode from local skill scripts
 __pycache__/
 *.pyc
+
+# Local build/release artifacts (CI and scripts/ produce these; never tracked)
+/dist/
+/deb-out/
+/trial2.log
+
+# Local agent-org internals and MCP config (CLAUDE.md stays tracked)
+/.claude/
+/.mcp.json

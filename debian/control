@@ -33,10 +33,13 @@ Description: clipboard history, snippets, and on-device OCR
  Clipnest watches the clipboard, keeps a searchable history, lets you save
  reusable text snippets, and expand them by keyword anywhere. Clipboard
  history and search work fully on their own, on X11 and Wayland alike. An
- optional GNOME Shell extension (installed per-user by the app itself, not by
- this package — see /usr/share/clipnest/gnome-shell-extension/) adds a picker
- positioned at the pointer and able to appear above fullscreen windows, which
- GTK4 cannot do on its own, plus a compositor-level hotkey.
+ optional GNOME Shell extension adds a picker positioned at the pointer and
+ able to appear above fullscreen windows, which GTK4 cannot do on its own,
+ plus a compositor-level hotkey. This package ships the extension under
+ /usr/share/clipnest/gnome-shell-extension/; the app itself installs it into
+ each user's ~/.local/share/gnome-shell/extensions/ on first launch and
+ enables it (the user logs out and back in once to finish). It is never
+ installed system-wide, and one the user turned off is left off.
  .
  100% local: there is no account, no sync, and no analytics. The only
  network traffic this package ever makes is an optional, once-a-day check

@@ -65,7 +65,7 @@ public final class SettingsStore {
     static let retentionDays = "settings.retentionDays"
     static let userExcludedBundleIDs = "settings.userExcludedBundleIDs"
     static let hasRequestedAccessibility = "settings.hasRequestedAccessibility"
-    static let hasShownAutoPasteStartupPrompt = "settings.hasShownAutoPasteStartupPrompt"
+    static let hasSeenWelcome = "settings.hasSeenWelcome"
     static let automaticallyCheckForUpdates = "settings.automaticallyCheckForUpdates"
     static let isTextRecognitionEnabled = "settings.isTextRecognitionEnabled"
     static let textRecognitionQuality = "settings.textRecognitionQuality"
@@ -105,21 +105,15 @@ public final class SettingsStore {
     didSet { defaults.set(hasRequestedAccessibility, forKey: Key.hasRequestedAccessibility) }
   }
 
-  /// The Linux analogue of `hasRequestedAccessibility` above: whether
-  /// `AutoPasteStartupPrompt.showIfNeeded` (`ClipnestGTK`) has ever shown
-  /// its one-time "Set Up Auto-Paste?" startup nudge. Same "never nag"
-  /// contract — set the instant the prompt is shown, not gated on which
-  /// button (if any) the user pressed, so a dismissed/ignored/killed prompt
-  /// never re-appears on the next launch. Unused on macOS (there is no
-  /// uinput-style grant to prompt for there), same as `hasRequestedAccessibility`
-  /// sits unused on Linux — this store is shared cross-platform, and a
-  /// platform-specific one-shot flag simply goes untouched on the platform
-  /// that doesn't apply to it, matching that property's own precedent
-  /// rather than `#if os(...)`-gating the declaration.
-  public var hasShownAutoPasteStartupPrompt: Bool {
-    didSet {
-      defaults.set(hasShownAutoPasteStartupPrompt, forKey: Key.hasShownAutoPasteStartupPrompt)
-    }
+  /// Whether the first-run welcome window has been shown (and so must never
+  /// be auto-presented again). ONE flag for both fresh installs and
+  /// upgraders: a key that was never written reads `false`, so an existing
+  /// user upgrading sees the welcome exactly once too. Set the instant the
+  /// window is presented (see `WelcomeGate`), not on close, so a crash or
+  /// force-quit mid-window never re-shows it. UserDefaults/JSON-backed like
+  /// every other key here, so the SwiftData migration rule does not apply.
+  public var hasSeenWelcome: Bool {
+    didSet { defaults.set(hasSeenWelcome, forKey: Key.hasSeenWelcome) }
   }
 
   /// Approved feature: whether `UpdateChecker` runs its 24h background
@@ -199,8 +193,9 @@ public final class SettingsStore {
     self.retentionDays = defaults.object(forKey: Key.retentionDays) as? Int ?? Self.defaultDays
     self.userExcludedBundleIDs = defaults.stringArray(forKey: Key.userExcludedBundleIDs) ?? []
     self.hasRequestedAccessibility = defaults.bool(forKey: Key.hasRequestedAccessibility)
-    self.hasShownAutoPasteStartupPrompt = defaults.bool(
-      forKey: Key.hasShownAutoPasteStartupPrompt)
+    // `bool(forKey:)` is correct: absent -> false, which IS the default
+    // (upgraders have no key, so they see the welcome once).
+    self.hasSeenWelcome = defaults.bool(forKey: Key.hasSeenWelcome)
     // `object(forKey:) as? Bool` distinguishes "absent" (-> default true)
     // from an explicitly-stored false, same reasoning as `isCaptureEnabled`.
     self.automaticallyCheckForUpdates =

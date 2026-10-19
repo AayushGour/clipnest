@@ -16,6 +16,7 @@
 // stale-grant callout below is the only place a user is told that removing
 // and re-adding the entry — not toggling it — is the fix.
 
+import ClipnestViewModels
 import SwiftUI
 
 struct PermissionsSettingsView: View {
@@ -56,16 +57,11 @@ struct PermissionsSettingsView: View {
 
       if !watcher.isGranted {
         Section("Already switched on but still not working?") {
+          // Shared with the welcome window's step 2 (T-WELCOME1) so the
+          // stale-entry guidance is never forked.
           Text(
-            """
-            Clipnest is signed locally, so macOS ties the permission to this \
-            exact build. After Clipnest is updated or rebuilt, the old entry \
-            stays in the list but no longer matches.
-
-            Select Clipnest in System Settings › Privacy & Security › \
-            Accessibility, remove it with the − button, then add it again. \
-            Turning the switch off and on again does not fix it.
-            """
+            AccessibilityPermissionCopy.staleEntryExplanation + "\n\n"
+              + AccessibilityPermissionCopy.staleEntryRemedy
           )
           .font(.caption)
           .foregroundStyle(.secondary)

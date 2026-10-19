@@ -10,6 +10,7 @@
 
 import AppKit
 import ClipnestCore
+import ClipnestViewModels
 import Combine
 import os
 
@@ -29,8 +30,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
   @Published private(set) var environment: AppEnvironment?
 
+  /// T-WELCOME1: the first-run welcome window. Created lazily with the
+  /// environment; also reachable from the menu bar's "Getting Started…".
+  private var welcomeController: WelcomeWindowController?
+
   /// Set by XCTest in the test-host process.
   private static let xcTestConfigurationEnvKey = "XCTestConfigurationFilePath"
+
+  /// True when this process is the hosted unit-test run. The welcome window
+  /// must not appear (or flip the real `hasSeenWelcome` flag) there.
+  private var isHostingTests = false
 
   func applicationDidFinishLaunching(_ notification: Notification) {
     NSApp.setActivationPolicy(.accessory)
@@ -41,7 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
     // so paste "works" or not depending on which copy got the key. Skipped
     // when hosting unit tests, which run inside a copy of this app and must
     // not quit just because the user's installed Clipnest is open.
-    let isHostingTests =
+    isHostingTests =
       ProcessInfo.processInfo.environment[Self.xcTestConfigurationEnvKey] != nil
     if !isHostingTests,
       let other = Self.otherRunningInstance(
@@ -76,25 +85,84 @@ final class AppDelegate: NSObject, NSApplicationDelegate, ObservableObject {
 
   private func launchEnvironment() async {
     do {
-      let environment = try await AppEnvironment()
-      self.environment = environment
-      environment.startCapture()
-      environment.registerHotkey()
-      environment.startUpdateChecking()
-      environment.enforceRetentionNow()
+      start(try await AppEnvironment())
+    } catch {
+      // The persistence layer already self-heals a corrupt store once
+      // (`ModelContainerRecovery`), so reaching here is a real failure. Log
+      // metadata only (never clipboard content), then tell the user instead
+      // of vanishing silently (T-STOREALERT1).
+      Self.logger.fault("Failed to initialize AppEnvironment: \(String(describing: error))")
+      await recoverFromLaunchFailure(error)
+    }
+  }
+
+  /// - Parameter welcomeSuppressed: `true` on the store-failure recovery
+  ///   relaunch inside the same process — that alert owned this launch, so
+  ///   the welcome (and the Accessibility prompt it replaces) waits until the
+  ///   next normal launch.
+  private func start(_ environment: AppEnvironment, welcomeSuppressed: Bool = false) {
+    self.environment = environment
+    environment.startCapture()
+    environment.registerHotkey()
+    environment.startUpdateChecking()
+    environment.enforceRetentionNow()
+    presentWelcomeOrRequestAccessibility(environment, suppressed: welcomeSuppressed)
+  }
+
+  /// T-WELCOME1: while the welcome is unseen it owns the Accessibility ask
+  /// (step 1, on a button press), so the old launch-time system prompt must
+  /// not stack on top of it. Once seen, the original once-ever nudge applies
+  /// unchanged. Read the flag BEFORE `WelcomeGate` flips it.
+  private func presentWelcomeOrRequestAccessibility(
+    _ environment: AppEnvironment, suppressed: Bool
+  ) {
+    guard !isHostingTests else {
+      environment.requestAccessibilityOnceIfNeeded()
+      return
+    }
+    let settings = environment.settingsStore
+    let suppressPrompt = WelcomeGate.suppressesLaunchAccessibilityPrompt(
+      hasSeenWelcome: settings.hasSeenWelcome)
+    if WelcomeGate.presentIfNeeded(settings: settings, isSuppressed: suppressed) {
+      showWelcome()
+    } else if !suppressPrompt {
       // Checks first, prompts at most once ever, and only if actually
       // missing — see the method's doc comment. The picker hotkey needs
       // Accessibility as of the ⌥⌘V pass-through fix, so a first-run user
       // has to be told something.
       environment.requestAccessibilityOnceIfNeeded()
-    } catch {
-      // No safe in-app fallback if the on-disk persistence layer itself
-      // can't come up (see `AppEnvironment.init()`'s doc comment) — log
-      // metadata only (never clipboard content, which isn't in scope here
-      // anyway) and quit rather than run half-initialized.
-      Self.logger.fault("Failed to initialize AppEnvironment: \(String(describing: error))")
-      NSApplication.shared.terminate(nil)
     }
+  }
+
+  /// Opens (or re-fronts) the welcome window. Does not touch the seen flag, so
+  /// "Getting Started…" can call it freely.
+  func showWelcome() {
+    guard let environment else { return }
+    let controller = welcomeController ?? WelcomeWindowController(environment: environment)
+    welcomeController = controller
+    controller.show()
+  }
+
+  /// Alert -> optional reset (move aside, never delete) -> one retry -> quit.
+  private func recoverFromLaunchFailure(_ error: Error) async {
+    switch StoreOpenFailureAlert.ask(error: error) {
+    case .quit:
+      break
+    case .showInFinder:
+      StoreOpenFailureAlert.revealDataFolder()
+    case .resetHistory:
+      var backup: URL?
+      do {
+        backup = try StoreOpenFailureRecovery.moveStoresAside(
+          in: BlobStore.defaultBaseDirectory())
+        start(try await AppEnvironment(), welcomeSuppressed: true)
+        return
+      } catch {
+        Self.logger.fault("Reset-and-retry failed: \(String(describing: error))")
+        StoreOpenFailureAlert.showFinalFailure(error: error, backupFolder: backup)
+      }
+    }
+    NSApplication.shared.terminate(nil)
   }
 
   /// The pid of another running process with this app's bundle ID, if any.

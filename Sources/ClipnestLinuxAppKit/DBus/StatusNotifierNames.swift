@@ -99,6 +99,7 @@ enum DBusMenuItemID {
   static let openSettings: Int32 = 2
   static let quit: Int32 = 3
   static let pauseCapture: Int32 = 4
+  static let gettingStarted: Int32 = 5
 }
 
 /// `org.freedesktop.DBus.Introspectable` — every D-Bus object should answer

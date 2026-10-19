@@ -64,6 +64,7 @@ public enum GlobalHotkeyAccelerator {
   public static func current(_ key: Key) -> String? {
     guard schemaIsInstalled() else { return nil }
     guard let settings = schemaID.withCString({ g_settings_new($0) }) else { return nil }
+    defer { g_object_unref(settings) }  // g_settings_new returns a full reference
     guard
       let cArray = key.settingsKeyName.withCString({ g_settings_get_strv(settings, $0) })
     else {
@@ -86,6 +87,7 @@ public enum GlobalHotkeyAccelerator {
     guard !accelerator.isEmpty else { return false }
     guard schemaIsInstalled() else { return false }
     guard let settings = schemaID.withCString({ g_settings_new($0) }) else { return false }
+    defer { g_object_unref(settings) }  // g_settings_new returns a full reference
 
     #if canImport(Glibc)
       var cStrings: [UnsafeMutablePointer<CChar>?] = [Glibc.strdup(accelerator)]

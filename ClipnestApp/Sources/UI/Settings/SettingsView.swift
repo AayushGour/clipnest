@@ -30,25 +30,44 @@ struct SettingsView: View {
     self.updateChecker = updateChecker
   }
 
+  @State private var selection: SettingsTab = .general
+  private let navigator = SettingsNavigator.shared
+
   var body: some View {
-    TabView {
+    TabView(selection: $selection) {
       GeneralSettingsView(settings: settings, updateChecker: updateChecker)
         .tabItem { Label("General", systemImage: "gearshape") }
+        .tag(SettingsTab.general)
 
       HistorySettingsView(
         settings: settings, clipStore: clipStore, ocrBackfillViewModel: ocrBackfillViewModel
       )
       .tabItem { Label("History", systemImage: "clock") }
+        .tag(SettingsTab.history)
 
       ShortcutsSettingsView(accessibilityWatcher: accessibilityWatcher)
         .tabItem { Label("Shortcuts", systemImage: "command") }
+        .tag(SettingsTab.shortcuts)
 
       AppsSettingsView(settings: settings)
         .tabItem { Label("Apps", systemImage: "app.badge") }
+        .tag(SettingsTab.apps)
 
       PermissionsSettingsView(watcher: accessibilityWatcher)
         .tabItem { Label("Permissions", systemImage: "lock.shield") }
+        .tag(SettingsTab.permissions)
     }
     .frame(width: 460, height: 340)
+    // T-WELCOME1: honour a "show this tab" request (welcome window's
+    // "Change in Settings…"), both when it arrives before the window first
+    // appears and while it is already open.
+    .onAppear(perform: consumeRequestedTab)
+    .onChange(of: navigator.requestedTab) { consumeRequestedTab() }
+  }
+
+  private func consumeRequestedTab() {
+    guard let tab = navigator.requestedTab else { return }
+    selection = tab
+    navigator.requestedTab = nil
   }
 }

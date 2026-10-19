@@ -17,7 +17,6 @@
 tar-ignore = .git
 tar-ignore = .build
 tar-ignore = .swiftpm
-tar-ignore = .code-review-graph
 tar-ignore = .superpowers
 tar-ignore = .DS_Store
 tar-ignore = ClipnestApp/*.xcodeproj

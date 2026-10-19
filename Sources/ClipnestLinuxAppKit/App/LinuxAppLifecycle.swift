@@ -114,6 +114,9 @@ public enum LinuxAppLifecycle {
   private static var controlService: ClipnestControlService?
   private static var shellHelperClient: ShellHelperClient?
   private static var tray: StatusNotifierTray?
+  /// Process-lifetime owner of the welcome window's coordinator (it holds the
+  /// environment callbacks).
+  private static var welcomeCoordinator: WelcomeCoordinator?
 
   // MARK: - T-P10I: live, retried hotkey-backend resolution
   //
@@ -274,26 +277,22 @@ public enum LinuxAppLifecycle {
     environment.startCapture()
     environment.startUpdateChecking()
     environment.enforceRetentionNow()
+    // Per-user GNOME Shell extension: installed/refreshed/enabled off the
+    // GTK thread on every launch; the result is `environment
+    // .gnomeExtensionStatus`. Needs no session bus, so it sits before the
+    // bus guard below.
+    environment.startGnomeExtensionSetup()
 
-    // Routed follow-up: proactively prompt for the auto-paste (uinput)
-    // permission at first run, the way macOS's `requestAccessibilityOnceIfNeeded()`
-    // shows its Accessibility prompt — rather than only ever explaining the
-    // gap passively in Settings > Permissions after a user has already hit
-    // it. `AutoPasteStartupPrompt.showIfNeeded` (`ClipnestGTK`) is the ONE
-    // place that decides whether to show it (gated on the resolved paste
-    // backend, not the raw uinput capability — see that type's own doc
-    // comment) and persists "shown" through `environment.settingsStore`, so
-    // this call is unconditional here; called before the initial-command
-    // switch below so a fresh install invoked as `clipnest --toggle-picker`
-    // still gets the one-time nudge (the prompt is modal, so it simply
-    // takes focus first).
-    AutoPasteStartupPrompt.showIfNeeded(
-      isAutoPasteAvailable: environment.eventSynthesizerKind != .clipboardOnly,
-      settings: environment.settingsStore,
-      requestUInputGrant: { completion in
-        GrantInputHelperClient.requestGrant(completion: completion)
-      }
-    )
+    // T-WELCOME1-LX: the first-run welcome window replaces the old one-off
+    // auto-paste prompt. Gated once per launch by `WelcomeGate` (shared
+    // `hasSeenWelcome` flag; upgraders see it once). Called before the
+    // initial-command switch so `clipnest --toggle-picker` on a fresh install
+    // still gets it.
+    let welcome = WelcomeCoordinator(environment: environment)
+    Self.welcomeCoordinator = welcome
+    // `defer`: runs after the tray exists (or after the no-session-bus early
+    // return), per design.md "show after the menu-bar item exists".
+    defer { welcome.presentAtLaunchIfNeeded() }
 
     switch initialCommand {
     case .togglePicker: environment.togglePicker()
@@ -328,6 +327,7 @@ public enum LinuxAppLifecycle {
     // wired below.
     Self.shellHelperClient = shellHelperClient
     wireShellHelper(shellHelperClient, environment: environment)
+    environment.setShellHelperPresent(shellHelperClient?.currentCapabilities.isPresent ?? false)
 
     startTray(sessionBusAddress: sessionBusAddress, environment: environment)
 
@@ -414,6 +414,7 @@ public enum LinuxAppLifecycle {
         logger.info(
           "shell-helper capabilities changed: present=\(capabilities.isPresent) canDeliverShortcuts=\(capabilities.canDeliverShortcuts)"
         )
+        environment.setShellHelperPresent(capabilities.isPresent)
         reconcileHotkeyBackend(shellHelperClient: client)
       }
     }
@@ -461,6 +462,7 @@ public enum LinuxAppLifecycle {
     let tray = StatusNotifierTray(ownConnection: ownConnection, watchConnection: watchConnection)
     tray.onOpenClipnest = { Task { @MainActor in environment.togglePicker() } }
     tray.onOpenSettings = { Task { @MainActor in environment.openSettings() } }
+    tray.onOpenGettingStarted = { Task { @MainActor in welcomeCoordinator?.show() } }
     // Synchronous hops (the tray's receive thread blocks until the GTK
     // thread's main-queue pump runs them) so the menu reads back the state
     // the user just set — an async `Task` would let the next `GetLayout`

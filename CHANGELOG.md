@@ -10,6 +10,56 @@ at any time.
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-10-19
+
+### Added
+
+- macOS: a one-time Welcome window on first launch, and once for existing users
+  after updating. Two steps: an optional Accessibility grant that now happens here instead of
+  as a surprise system dialog at launch, then *Try your hotkey* (your live
+  hotkey, a shortcut to Settings → Shortcuts, and a check that confirms the
+  hotkey opens the picker). Fully keyboard and VoiceOver accessible; closes with Esc or
+  ⌘W and never reappears on its own. Reopen it from the menu bar via
+  *Getting Started…*. The platform-neutral gate, step model and copy live in
+  `ClipnestViewModels` and are shared with Linux.
+- Linux: the same two-step Welcome window (GTK 4), shown on first launch and
+  once for existing users after updating. Step 1 combines *Keyboard access*
+  (the `clipnest-input` grant, with a *Try Again* button on failure) and the
+  GNOME extension status (*Turn On* / *Try Again* / "Log out once to finish
+  setup"). It replaces the old one-off "Set Up Auto-Paste?" dialog (removed;
+  its text now lives in one shared place used by Settings → Permissions too).
+  Step 2 is *Try your hotkey*. Non-modal, Esc or Ctrl+W closes it, Return activates Continue/Done. Reopen
+  it from the tray menu via *Getting Started…*.
+- Linux: Clipnest now installs its GNOME Shell extension for your user on first
+  launch and enables it, refreshing it on later launches when an update ships a
+  newer version (GNOME 42-44 and 45+ both supported). Log out and back in once
+  to finish setup. It never installs on non-GNOME desktops, never re-enables an
+  extension you turned off, and respects GNOME's "disable user extensions"
+  switch. `scripts/uninstall.sh` now removes it too.
+
+### Security
+
+- Clipboard history and snippets are no longer readable by other local user
+  accounts. On macOS the data folder (`~/Library/Application Support/Clipnest`)
+  was world-listable (0755) and the history/snippet database files were
+  world-readable (0644). The folder is now owner-only (0700) and the database
+  files (including `-wal`/`-shm`) owner-only (0600); existing installs are
+  corrected on the next launch. Linux already used an owner-only data folder;
+  its database files are now also tightened to 0600. Copied images and other
+  large clips (the `blobs/` folder) are now written owner-only (0600) too, and
+  existing blob files from earlier versions are tightened once, in the
+  background, shortly after launch (retried on the next launch if it can't
+  finish; never delays startup).
+
+### Fixed
+
+- macOS: if Clipnest can't open its history database at launch, it now shows an
+  alert instead of silently quitting (the menu-bar icon just vanishing). The
+  alert offers **Reset History…** (after a confirmation, sets aside both the
+  clipboard history and snippets stores into a timestamped backup folder in
+  `~/Library/Application Support/Clipnest` — nothing is deleted — and retries),
+  **Show in Finder**, or **Quit**.
+
 ## [1.3.0] - 2026-10-14
 
 ### Added
@@ -397,7 +447,8 @@ release (0.5.0, above). None of them were ever installed by a user.
 
 - `Sendable` conformance for `NSPasteboard` access, required by Swift 6.
 
-[Unreleased]: https://github.com/AayushGour/clipnest/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/AayushGour/clipnest/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/AayushGour/clipnest/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/AayushGour/clipnest/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/AayushGour/clipnest/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/AayushGour/clipnest/compare/v1.1.0...v1.2.0

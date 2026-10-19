@@ -61,18 +61,26 @@ Ctrl+V to paste. Auto-paste isn't set up on this session — see Settings →
 Permissions." Either way the item is copied to the clipboard; the difference
 is only whether Clipnest can also synthesize the paste keystroke for you.
 
-**First-run "Set Up Auto-Paste?" prompt.** On a session where no auto-paste
-backend is available at all (the same condition as "Enter copy" above),
-Clipnest now proactively asks about this at startup instead of only
-explaining it after you've already hit it — a modal dialog with **Grant
-Access…** (runs the same `pkexec clipnest-grant-input` flow as Settings →
-Permissions, right from the dialog) and **Not Now**. It explains what
-auto-paste unlocks, states plainly that it needs a logout/login to take
-effect, and is honest that Clipnest works fine without it. Shown at most
-once ever (persisted in `~/.config/clipnest/settings.json`) — dismissing it
-either way never shows it again; grant it later from Settings → Permissions
-if you skip it here. It never appears at all on a session that already has
-auto-paste (X11 via XTEST, or uinput already granted).
+**First-run Welcome window.** Shown once at startup (and once for users
+upgrading from a version without it), replacing the old "Set Up Auto-Paste?"
+dialog. Two steps in one non-modal window: (1) *Paste straight
+into apps* with two sub-rows, *Keyboard access* (**Grant Access…** runs the
+same `pkexec clipnest-grant-input` flow as Settings → Permissions; on failure
+the button becomes **Try Again**; a dismissed or unavailable polkit dialog
+shows "Authorization was cancelled or not available…" with the manual
+`pkexec` command, the raw pkexec text only goes to the log) and *Hotkey everywhere* (the GNOME extension
+status: on, "Log out once to finish setup", **Turn On**, **Try Again**, or a
+plain note on non-GNOME desktops), (2) *Try your hotkey* (your live hotkey as
+key caps, a *Change in Settings…* button that opens Settings → Shortcuts, and
+a status that flips to "It works" when the
+picker opens; a hint appears after 15 s; while the GNOME extension still needs
+a log-out it says the hotkey works after logging back in and to use the tray
+icon instead). The step list scrolls inside a ~420 px window. Return = Continue/Done, Esc or
+Ctrl+W close it. "Seen" is stored (`hasSeenWelcome` in
+`~/.config/clipnest/settings.json`) the moment it is shown, so closing it any
+way, or killing the app, never re-shows it. Reopen it from the tray menu
+(*Getting Started…*); that never touches the flag. To re-test, delete the
+`settings.hasSeenWelcome` key.
 
 Every row also has pin / save-as-snippet / delete buttons, and a right-click menu.
 
@@ -123,7 +131,12 @@ login until you open the picker once. Turn it on in Settings → General.
 ### Still untested on real hardware
 
 1. **GNOME Shell extension** (optional, unlocks cursor placement and
-   above-fullscreen):
+   above-fullscreen). **Clipnest now installs and enables this itself** into
+   `~/.local/share/gnome-shell/extensions/clipnest@clipnest.app/` on every launch
+   (refreshing it when the bundled `version` changes; picks `legacy` on GNOME
+   42-44, `esm` on 45+; skips non-GNOME desktops; leaves it alone if you disabled
+   it). Just launch Clipnest and log out/in once. The manual steps below are
+   only for testing the install by hand or from a source build with no package:
    ```bash
    gnome-extensions install --force /usr/share/clipnest/gnome-shell-extension/esm      # GNOME 45+
    gnome-extensions install --force /usr/share/clipnest/gnome-shell-extension/legacy   # GNOME 42-44
@@ -133,8 +146,9 @@ login until you open the picker once. Turn it on in Settings → General.
    With it, the hotkey should report `shellExtensionKeybinding`
    (`journalctl --user -t clipnest | grep "hotkey backend resolved"`) and the
    picker should open at the cursor.
-2. **The first-run "Set Up Auto-Paste?" prompt.** This machine already had
-   the `clipnest-input` grant, so the prompt never showed.
+2. **The Welcome window's live GTK behaviour** (focus order, Orca labels,
+   grant dialog, extension buttons). Covered by unit tests of the pure logic
+   only; needs a manual pass on a real GNOME session.
 3. **X11 sessions, multi-monitor, fractional scaling.**
 
 ---
