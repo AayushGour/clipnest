@@ -40,7 +40,7 @@ enum SettingsFocusCoordinator {
 
   /// The one `SettingsActivator` Clipnest runs — see that type's doc comment
   /// for the full root-cause story and the alternatives it rejects.
-  private static let activator = SettingsActivator.live()
+  static let activator = SettingsActivator.live()
 
   /// Call immediately after invoking the `openSettings()` environment action.
   ///
@@ -90,13 +90,34 @@ enum SettingsFocusCoordinator {
   /// panels or the snippet editor" so a future SwiftUI rename degrades to
   /// still-correct behavior instead of silently doing nothing.
   private static func settingsWindow() -> NSWindow? {
-    if let match = NSApp.windows.first(where: {
-      $0.frameAutosaveName == settingsWindowAutosaveName
-    }) {
+    let windows = NSApp.windows
+    let index = settingsWindowIndex(
+      in: windows.map {
+        SettingsWindowCandidate(
+          autosaveName: $0.frameAutosaveName, isVisible: $0.isVisible,
+          isOwnAuxiliaryWindow: $0 is NSPanel || $0 is SnippetEditorWindow
+            || $0 is WelcomeWindow)
+      })
+    return index.map { windows[$0] }
+  }
+
+  /// What `settingsWindowIndex` needs to know about a window. A value so the
+  /// selection is unit-testable without a window server.
+  struct SettingsWindowCandidate: Equatable {
+    var autosaveName: String
+    var isVisible: Bool
+    /// Clipnest's own non-Settings windows: panels, snippet editor, welcome.
+    var isOwnAuxiliaryWindow: Bool
+  }
+
+  /// Picks the Settings window: the one with SwiftUI's frame-autosave name,
+  /// else the first visible ordinary window that is none of Clipnest's own
+  /// auxiliary windows. (T-WELCOME1: the welcome window is excluded, or
+  /// "Change in Settings…" would raise it instead of Settings.)
+  static func settingsWindowIndex(in candidates: [SettingsWindowCandidate]) -> Int? {
+    if let match = candidates.firstIndex(where: { $0.autosaveName == settingsWindowAutosaveName }) {
       return match
     }
-    return NSApp.windows.first {
-      $0.isVisible && !($0 is NSPanel) && !($0 is SnippetEditorWindow)
-    }
+    return candidates.firstIndex { $0.isVisible && !$0.isOwnAuxiliaryWindow }
   }
 }

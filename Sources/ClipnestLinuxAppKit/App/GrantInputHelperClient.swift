@@ -1,4 +1,6 @@
+import ClipnestCore
 import ClipnestGTK
+import ClipnestViewModels
 import Foundation
 
 /// T-OPT3: the ONE call site that invokes the existing, already-scoped
@@ -16,7 +18,7 @@ public enum GrantInputHelperClient {
   /// script's own top doc comment: "installed to
   /// /usr/libexec/clipnest/clipnest-grant-input"). Named here as the one
   /// Swift-side reference to it (coding-standards.md: no magic strings).
-  public static let helperPath = "/usr/libexec/clipnest/clipnest-grant-input"
+  public static let helperPath = LinuxInputPermissionCopy.helperPath
 
   /// `pkexec` itself — a standard, fixed system path on every distribution
   /// this package targets (it's a hard `Depends:` in `debian/control`).
@@ -36,6 +38,9 @@ public enum GrantInputHelperClient {
     [helperPath]
   }
 
+  private static let logger = ClipnestLogger(
+    subsystem: ClipnestLog.subsystem, category: "GrantInputHelperClient")
+
   private static let processQueue = DispatchQueue(
     label: "com.clipnest.grantinputhelperclient.processQueue", qos: .userInitiated)
 
@@ -52,13 +57,12 @@ public enum GrantInputHelperClient {
   /// identical off-main-thread `Process` pattern (same reason: a blocking
   /// `Process.run()`/`waitUntilExit()` must never run on the GTK thread).
   ///
-  /// `pkexec`'s own exit codes (per `pkexec(1)`): 0 success, 1 the helper
-  /// itself failed, 2 the user dismissed/cancelled the authentication
-  /// dialog, 3 polkit denied the request (not authorized), 127 `pkexec`
-  /// itself could not be found or run. This client does not give each of
-  /// those its own bespoke message — `pkexec`'s/the helper's own captured
-  /// stderr text is already the more specific, correct explanation in
-  /// every case; the exit code only decides success vs. failure.
+  /// `pkexec`'s exit codes (per `pkexec(1)`): 0 success, 126 the dialog was
+  /// dismissed or the user is not authorized, 127 authorization could not be
+  /// obtained (no agent) or pkexec errored. Those two map to friendly copy
+  /// (`LinuxInputPermissionCopy.failureMessage`); pkexec's raw stderr
+  /// ("... This incident has been reported.") is logged, not shown. Any other
+  /// failure (the helper's own non-zero exit) surfaces the helper's stderr.
   public static func requestGrant(completion: @escaping @Sendable (UInputGrantOutcome) -> Void) {
     processQueue.async {
       let process = Process()
@@ -89,11 +93,12 @@ public enum GrantInputHelperClient {
       if process.terminationStatus == 0 {
         completion(.succeeded(message: outputText.isEmpty ? "Access granted." : outputText))
       } else {
-        let reason =
-          errorText.isEmpty
-          ? "pkexec exited with status \(process.terminationStatus)."
-          : errorText
-        completion(.failed(message: reason))
+        logger.error(
+          "pkexec grant failed: status \(process.terminationStatus), stderr: \(errorText)")
+        completion(
+          .failed(
+            message: LinuxInputPermissionCopy.failureMessage(
+              exitStatus: process.terminationStatus, rawDetail: errorText)))
       }
     }
   }

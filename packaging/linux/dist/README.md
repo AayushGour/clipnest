@@ -60,13 +60,10 @@ this project's source repository.
    auto-paste working (e.g. X11 via XTEST) — nothing to grant there.
 2. **The GNOME Shell extension is optional.** Clipnest works without it.
    With it, the picker can open at your cursor and appear above
-   fullscreen windows:
-   ```sh
-   gnome-extensions install --force \
-     /usr/share/clipnest/gnome-shell-extension/<variant>
-   ```
-   Pick `esm` for GNOME 45+, `legacy` for GNOME 42-44. Then log out and
-   back in.
+   fullscreen windows. Clipnest installs and enables it for your user the
+   first time you launch it (the right variant for GNOME 42-44 or 45+), so
+   just log out and back in once. It leaves it off if you disable it in the
+   Extensions app.
 3. **Snippet expansion (select text, press the expand-snippet shortcut) has
    its own Wayland delivery path, separate from picker auto-paste above.**
    Where possible it inserts the replacement through your input method

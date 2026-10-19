@@ -72,9 +72,9 @@ Two things worth knowing:
    Without it, Clipnest still copies to your clipboard; you paste manually.
 
 2. The GNOME Shell extension is optional. Clipnest works without it. With it,
-   the picker can open at your cursor and appear above fullscreen windows:
-     gnome-extensions install --force \
-       /usr/share/clipnest/gnome-shell-extension/<variant>
-   Pick "esm" for GNOME 45+, "legacy" for GNOME 42-44. Then log out and in.
+   the picker can open at your cursor and appear above fullscreen windows.
+   Clipnest installs and enables it for your user the first time you launch it
+   (right variant for GNOME 42-44 or 45+); just log out and back in once. It
+   leaves it off if you disable it in the Extensions app.
 
 DONE

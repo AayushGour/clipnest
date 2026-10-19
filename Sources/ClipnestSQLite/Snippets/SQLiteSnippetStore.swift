@@ -22,14 +22,14 @@ public actor SQLiteSnippetStore: SnippetStore {
   ///   temp directory.
   public init(baseDirectory: URL) throws {
     do {
-      try FileManager.default.createDirectory(
-        at: baseDirectory, withIntermediateDirectories: true)
+      try PrivateDataPermissions.secureDirectory(baseDirectory)
       let storeURL = baseDirectory.appendingPathComponent(Self.storeFileName)
       self.connection = try StoreFileRecovery.openWithRecovery(
         storeURL: storeURL,
         log: { Self.logger.error($0) },
         makeStore: { try SnippetsSchema.open(atPath: storeURL.path) }
       )
+      PrivateDataPermissions.tightenContents(of: baseDirectory)
     } catch {
       throw SnippetStoreError.ioFailure(underlying: String(describing: error))
     }

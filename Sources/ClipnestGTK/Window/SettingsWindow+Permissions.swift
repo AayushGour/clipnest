@@ -33,6 +33,7 @@
 // once already). A required parameter turns that class of mistake into a
 // build error here too.
 import CGtk4
+import ClipnestViewModels
 
 /// The uinput auto-paste grant's CURRENT, freshly-read state — two
 /// independent booleans, not one combined flag, because they can and do
@@ -59,14 +60,11 @@ public struct UInputPermissionStatus: Equatable, Sendable {
 /// The result of one `pkexec clipnest-grant-input` attempt (see
 /// `GrantInputHelperClient`, `ClipnestLinuxAppKit`) — surfaced to the tab so
 /// a failure or a cancelled polkit authentication dialog is shown to the
-/// user rather than swallowed. Deliberately not a richer enum distinguishing
-/// "cancelled" from "denied" from "helper failed": `pkexec`'s own exit codes
-/// don't reliably distinguish those either (1/2/3/127 per `pkexec(1)`, and
-/// this project's own container verification confirms an unattended
-/// environment with no polkit authentication agent fails before even
-/// reaching that distinction) — `message` carries whatever `pkexec`/the
-/// helper actually said on stderr (or stdout on success), which is already
-/// the more specific and honest text in every case.
+/// user rather than swallowed. Deliberately not a richer enum: `message` is
+/// already user-ready — `GrantInputHelperClient` maps pkexec's 126/127
+/// (dismissed / not authorized / no agent) to friendly copy via
+/// `LinuxInputPermissionCopy.failureMessage` and otherwise passes the
+/// helper's stderr (or stdout on success) through.
 /// Completion handed to `SettingsWindow.requestUInputGrant`.
 ///
 /// Named rather than spelled inline because the inline form pushed
@@ -163,16 +161,6 @@ public enum PermissionsTabPresentation {
     + "focused on, right after you pick it. Without this, Clipnest still copies the "
     + "item to your clipboard — you paste it yourself (Ctrl+V), same as most "
     + "clipboard managers on Linux. That's the normal, expected state, not an error."
-
-  public static let securityExplanationText =
-    "Auto-paste needs access to /dev/uinput to simulate a keystroke. Granting it adds "
-    + "you to a dedicated \"clipnest-input\" group that can only create a virtual "
-    + "input device — not the broader \"input\" group some similar tools use, which "
-    + "also grants read access to every real keystroke and mouse movement on the "
-    + "machine."
-
-  public static let grantButtonLabel = "Grant Access…"
-  public static let grantInFlightStatusText = "Waiting for authentication…"
 }
 
 extension SettingsWindow {
@@ -198,7 +186,7 @@ extension SettingsWindow {
     permissionsSetupBannerLabel = bannerLabel
 
     addWrappedLabel(to: box, text: PermissionsTabPresentation.explanationText)
-    addWrappedLabel(to: box, text: PermissionsTabPresentation.securityExplanationText)
+    addWrappedLabel(to: box, text: LinuxInputPermissionCopy.securityExplanationText)
 
     let uinputStatusLabel: OpaquePointer = gtk_label_new(nil)
     gtk_label_set_xalign(uinputStatusLabel, 0)
@@ -225,7 +213,7 @@ extension SettingsWindow {
     let resultLabel = addStatusLabel(to: box)
     permissionsResultLabel = resultLabel
 
-    let grantButton = addButton(to: box, label: PermissionsTabPresentation.grantButtonLabel) {
+    let grantButton = addButton(to: box, label: LinuxInputPermissionCopy.grantButtonLabel) {
       [weak self] in
       MainActor.assumeIsolated {
         self?.requestUInputGrantFromUI()
@@ -371,7 +359,7 @@ extension SettingsWindow {
     }
     if let permissionsResultLabel {
       setStatusLabel(
-        permissionsResultLabel, text: PermissionsTabPresentation.grantInFlightStatusText)
+        permissionsResultLabel, text: LinuxInputPermissionCopy.grantInFlightStatusText)
     }
 
     // `requestUInputGrant`'s own doc comment: `completion` may run on any
@@ -398,7 +386,8 @@ extension SettingsWindow {
       case .succeeded(let message):
         setStatusLabel(permissionsResultLabel, text: message)
       case .failed(let message):
-        setStatusLabel(permissionsResultLabel, text: "Couldn't grant access: \(message)")
+        setStatusLabel(
+          permissionsResultLabel, text: LinuxInputPermissionCopy.failedPrefixText(message: message))
       }
     }
     // Refresh from the real, current state rather than trusting `outcome`

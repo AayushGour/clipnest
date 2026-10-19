@@ -201,6 +201,15 @@ final class AppEnvironment {
     // directly.
     let clipStore = NotifyingClipStore(wrapping: rawClipStore)
 
+    // T-PERM2: one-time, low-priority background pass tightening legacy 0644
+    // blob files to 0600. Fire-and-forget off the main thread; does not
+    // delay store readiness (stores are already prepared above). Marker in
+    // UserDefaults, set only on a clean complete pass.
+    BlobPermissionsMigration.start(
+      blobStore: blobStore,
+      isDone: { UserDefaults.standard.bool(forKey: $0) },
+      markDone: { UserDefaults.standard.set(true, forKey: $0) })
+
     self.blobStore = blobStore
     self.privacyFilter = privacyFilter
     self.settingsStore = settingsStore
@@ -567,8 +576,23 @@ final class AppEnvironment {
   /// trigger time rather than lazily at select time.
   func showPicker() {
     frontmostAppTracker.record()
+    // T-WELCOME1: with the welcome window in front, Clipnest itself would be
+    // recorded as the paste target and the pick would type ⌘V into the
+    // welcome window. Dropping the target degrades to the documented
+    // clipboard-only fallback.
+    if isOwnWindowFrontmost() { _ = frontmostAppTracker.consume() }
     pickerPanel.show()
+    onPickerShown?()
   }
+
+  /// T-WELCOME1: notified every time `showPicker()` runs (menu item and
+  /// hotkey share it); the welcome window's "Try it" step listens.
+  var onPickerShown: (() -> Void)?
+
+  /// T-WELCOME1: true while a Clipnest window that must never receive a
+  /// synthesized paste (the welcome window) is key. macOS-only seam, set by
+  /// `WelcomeWindowController`.
+  var isOwnWindowFrontmost: () -> Bool = { false }
 
   /// Trims history down to the user's configured cap once, now — called at
   /// launch (a debounced pass also runs after each capture, via

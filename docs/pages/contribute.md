@@ -176,18 +176,8 @@ Clipnest runs on **Ubuntu 22.04 and 24.04 with GNOME**, on X11 or Wayland, for a
 - **Shortcuts.** Open the picker with **Alt+Super+V**; expand a snippet with **Alt+Super+E**. Both are rebindable in Settings → Shortcuts.
 - **Auto-paste** needs a one-time permission. Clipnest offers it on first launch, or use Settings → Permissions. It adds you to a dedicated `clipnest-input` group that can create a virtual keyboard and nothing else (not the `input` group, which could read your keystrokes). Log out and back in afterwards. Until then Clipnest copies your choice and you press Ctrl+V yourself.
 - **Start at login** is off by default. Nothing is captured while Clipnest isn't running, so turn on Settings → General → *Launch Clipnest at login*.
-- **Optional GNOME Shell extension.** GNOME doesn't let apps place their own windows on Wayland, so the picker opens where GNOME puts it. The extension restores opening at your cursor and above full-screen windows (GNOME 45+; use `legacy` instead of `esm` on 42–44), then log out and back in:
+- **Optional GNOME Shell extension.** GNOME doesn't let apps place their own windows on Wayland, so the picker opens where GNOME puts it. Clipnest's extension restores opening at your cursor and above full-screen windows. The app installs and enables it for your user on first launch (the right variant for GNOME 42–44 or 45+), so you only log out and back in once. If you turn it off in the Extensions app, Clipnest leaves it off.
 {: .detail-list}
-
-<div class="install-card" markdown="1">
-
-<div class="terminal-bar"><span></span><span></span><span></span><b class="terminal-label">Terminal · Linux</b></div>
-
-```bash
-gnome-extensions install --force /usr/share/clipnest/gnome-shell-extension/esm
-```
-
-</div>
 
 Logs: `journalctl --user -t app.clipnest.Clipnest` follows the app's log.
 

@@ -6,7 +6,10 @@
 # a system package purge must not destroy personal clipboard history, and
 # dpkg has no supported mechanism to reach into every user's home directory
 # anyway. Manual cleanup is documented in clipnest(1)'s UNINSTALLING
-# section instead.
+# section instead. That includes the GNOME Shell extension Clipnest installs
+# per user (~/.local/share/gnome-shell/extensions/clipnest@clipnest.app) and its
+# opt-out marker ($XDG_STATE_HOME/clipnest/gnome-extension-enabled): remove
+# them with scripts/uninstall.sh.
 set -e
 
 case "$1" in

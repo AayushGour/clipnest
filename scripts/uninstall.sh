@@ -34,6 +34,7 @@ MAC_DATA_RELPATHS=(
 LINUX_PACKAGES=(clipnest clipnest-ocr clipnest-ocr-data)
 LINUX_EXTENSION_UUID="clipnest@clipnest.app"
 LINUX_AUTOSTART_FILE="clipnest.desktop"
+LINUX_EXTENSION_MARKER="gnome-extension-enabled"
 
 die() {
   echo "error: $*" >&2
@@ -119,6 +120,21 @@ safe_rm_abs_app() {
   fi
 }
 
+# remove_uuid_from_gsettings_list KEY: drop Clipnest's uuid from
+# org.gnome.shell KEY (enabled-extensions or disabled-extensions), keeping
+# every other entry. Best effort (needs gsettings and a reachable dconf).
+remove_uuid_from_gsettings_list() {
+  local key="$1"
+  command -v gsettings >/dev/null 2>&1 || return 0
+  local current
+  current="$(gsettings get org.gnome.shell "${key}" 2>/dev/null)" || return 0
+  case "${current}" in *"'${LINUX_EXTENSION_UUID}'"*) ;; *) return 0 ;; esac
+  local updated
+  updated="$(printf '%s' "${current}" | sed -e "s/'${LINUX_EXTENSION_UUID}'//g" \
+    -e 's/@as //' -e 's/\[ *, */[/' -e 's/, *,/,/g' -e 's/, *\]/]/' -e 's/\[ *\]/[]/')"
+  run gsettings set org.gnome.shell "${key}" "${updated}" || true
+}
+
 uninstall_linux() {
   echo "==> Linux detected."
   if [ "$(id -u)" -eq 0 ]; then
@@ -155,13 +171,20 @@ uninstall_linux() {
   local data_home="${XDG_DATA_HOME:-${HOME}/.local/share}"
   safe_rm "${config_home}/autostart/${LINUX_AUTOSTART_FILE}"
 
+  local state_home="${XDG_STATE_HOME:-${HOME}/.local/state}"
   local ext_dir="${data_home}/gnome-shell/extensions/${LINUX_EXTENSION_UUID}"
-  if [ -e "${ext_dir}" ]; then
+  local ext_marker="${state_home}/clipnest/${LINUX_EXTENSION_MARKER}"
+  if [ -e "${ext_dir}" ] || [ -e "${ext_marker}" ]; then
     echo "==> Removing the per-user GNOME Shell extension…"
-    if command -v gnome-extensions >/dev/null 2>&1; then
-      run gnome-extensions disable "${LINUX_EXTENSION_UUID}" || true
-    fi
+    # Not `gnome-extensions disable`: on Shell 46 it ADDS the uuid to
+    # disabled-extensions and never removes it, so a reinstall would read as
+    # "disabled by the user" and never be enabled.
+    remove_uuid_from_gsettings_list enabled-extensions
+    remove_uuid_from_gsettings_list disabled-extensions
     safe_rm "${ext_dir}"
+    # The app's "I already enabled it once" marker; without removing it a
+    # later reinstall would treat the extension as user-disabled.
+    safe_rm "${ext_marker}"
   fi
 
   if [ "${PURGE}" = "1" ]; then

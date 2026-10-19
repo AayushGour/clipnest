@@ -81,6 +81,9 @@ final class SettingsActivator {
   /// the guard behavior directly; production code never reads it.
   private(set) var isTemporarilyRegular = false
 
+  /// Windows currently holding the app `.regular` (see `activate`).
+  private var observedWindowIDs: Set<ObjectIdentifier> = []
+
   init(
     setActivationPolicy: @escaping (NSApplication.ActivationPolicy) -> Void,
     activateApp: @escaping () -> Void,
@@ -163,6 +166,14 @@ final class SettingsActivator {
     if !isTemporarilyRegular {
       isTemporarilyRegular = true
       setActivationPolicy(.regular)
+    }
+    // T-WELCOME1: more than one Clipnest window (Settings, the welcome
+    // window) can hold the app `.regular` at once, so the restore happens only
+    // when the LAST observed window closes — not when whichever closes first.
+    // Observing is still once per window per open: a repeat call for a
+    // window already observed registers nothing new.
+    let windowID = ObjectIdentifier(window)
+    if observedWindowIDs.insert(windowID).inserted {
       observeWindowClose(window) { [weak self] in
         // `observeWindowClose`'s handler is `@Sendable` (it has to be, to
         // be capturable by `NotificationCenter`'s own `@Sendable`
@@ -174,19 +185,20 @@ final class SettingsActivator {
         // for the identical "`NotificationCenter` callback on
         // `queue: .main`, calling back into `@MainActor` state" shape.
         MainActor.assumeIsolated {
-          self?.restoreAccessory()
+          self?.windowDidClose(windowID)
         }
       }
     }
     activateApp()
   }
 
-  /// Restores `.accessory`. Guarded so firing twice (which can't happen
-  /// through the one-shot observer above, but is cheap to protect against
-  /// regardless) is a no-op rather than a redundant `setActivationPolicy`
-  /// call.
-  private func restoreAccessory() {
-    guard isTemporarilyRegular else { return }
+  /// Restores `.accessory` once no observed window remains open. Guarded so
+  /// firing twice (which can't happen through the one-shot observer above,
+  /// but is cheap to protect against regardless) is a no-op rather than a
+  /// redundant `setActivationPolicy` call.
+  private func windowDidClose(_ windowID: ObjectIdentifier) {
+    observedWindowIDs.remove(windowID)
+    guard observedWindowIDs.isEmpty, isTemporarilyRegular else { return }
     isTemporarilyRegular = false
     setActivationPolicy(.accessory)
   }

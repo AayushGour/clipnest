@@ -68,7 +68,7 @@ The integrity rules below (single-writer board, evidence-gated done, security tr
 .claude/design.md             flows, states, components, accessibility AC                 (ux-designer; optional — only UI projects)
 .claude/logs/<agent>.md       one log file per agent, that agent appends only             (each agent, own file only)
 ```
-"Analyze the code" = query the **code brain** (`mcp__code-review-graph__*`) first for structure/impact/callers, then Grep / Glob / Read the specific files it points to. Reuse before you write — no duplicates.
+"Analyze the code" = Grep / Glob for structure/impact/callers first, then Read only the specific files that turn up. Reuse before you write — no duplicates.
 
 **On-demand expertise (skills — progressive disclosure, ~zero context cost until triggered):** `security-review` (reviewer/devops; hard-trigger on auth/secrets/PII/user input/external I/O) · `differential-review` (reviewer; the hard-trigger's deep pass — git-history regressions, blast radius, attacker modeling) · `data-modeling` (architect/senior-dev; any schema/migration change) · `tdd` + `diagnosing-bugs` (devs; test-first build, hard-bug loop) · `webapp-testing` + `property-based-testing` (tester; browser evidence, domain-wide properties) · `prd` (business-analyst; M/L asks) · `ui-ux-pro-max` (ux-designer). When a trigger fires, Read that skill's `SKILL.md` directly from `.claude/skills/<name>/`. Each vendored skill's `SOURCE.md` records origin + license.
 
@@ -77,13 +77,6 @@ The integrity rules below (single-writer board, evidence-gated done, security tr
 **Context tiering (keep reads cheap):** `project-context.md` holds *stable* facts (goal, design, decisions) — not running commentary. `logs/*.md` are append-only ledgers: **grep them, don't load them wholesale**. For a deep subsystem, prefer a short `CONTEXT.md` next to that code, read only when working in that domain.
 
 **User-facing docs** are split three ways by who knows it best: **architect** → overview + getting-started/setup; **senior-dev** → API/usage reference for what they built; **tester** → verified how-to/user guide (only steps they ran and saw pass). One voice, no overlap — keep the three coherent.
-
-## The code brain (code-review-graph)
-A persistent, per-project **knowledge graph of the codebase** — the team's structural memory. Tree-sitter parses the code into a graph (functions, classes, calls, imports, tests) queried via the **`mcp__code-review-graph__*`** MCP tools. It auto-builds/updates in the background at session start (SessionStart hook) and is gitignored (`.code-review-graph/`).
-- **Query it before you Grep/Read.** For any code-analysis step, hit the brain first — impact/blast-radius before editing shared code, callers/callees before changing a contract, review-context before reviewing, architecture-overview when planning — then read only the files it points to. This is how the team avoids re-reading the whole codebase (~82× fewer tokens).
-- **Find by meaning** when you don't know the name: `semantic_search_nodes_tool`.
-- **Stale/missing?** Call `build_or_update_graph_tool` (the lazy net) — don't assume it's fresh if you just changed a lot of files.
-- Needs `uv` (provides `uvx`); the graph is local (SQLite), no API keys, code stays on the machine.
 
 ## Logging — one file per agent (no shared file, no lock)
 Each agent writes **only** its own `.claude/logs/<agent>.md` — e.g. senior-dev → `.claude/logs/senior-dev.md`. The `logs/` dir isn't shipped; create your file on first write (a Write makes parent dirs). Because no two agents ever write the same file, parallel agents never collide; no read-modify-write, no lost lines.

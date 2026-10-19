@@ -152,4 +152,53 @@ struct SettingsActivatorTests {
     #expect(spy.observedWindows.count == 2)
     #expect(spy.observedWindows.last === secondWindow)
   }
+
+  @Test("T-WELCOME1: with two windows open, .accessory returns only after the last one closes")
+  func restoresOnlyAfterLastWindowCloses() {
+    let spy = Spy()
+    let activator = spy.makeActivator()
+    let welcome = makeWindow()
+    let settings = makeWindow()
+
+    activator.activate(observing: welcome)
+    activator.activate(observing: settings)
+    #expect(spy.policyChanges == [.regular])
+    #expect(spy.observedWindows.count == 2)
+
+    spy.closeHandlers[0]()
+    #expect(activator.isTemporarilyRegular)
+    #expect(spy.policyChanges == [.regular])
+
+    spy.closeHandlers[1]()
+    #expect(!activator.isTemporarilyRegular)
+    #expect(spy.policyChanges == [.regular, .accessory])
+  }
+}
+
+@MainActor
+@Suite("SettingsFocusCoordinator window selection")
+struct SettingsWindowSelectionTests {
+  typealias Candidate = SettingsFocusCoordinator.SettingsWindowCandidate
+  private let autosave = "com_apple_SwiftUI_Settings_window"
+
+  @Test("the autosave-named window wins even if another is listed first")
+  func autosaveWins() {
+    let list = [
+      Candidate(autosaveName: "", isVisible: true, isOwnAuxiliaryWindow: false),
+      Candidate(autosaveName: autosave, isVisible: false, isOwnAuxiliaryWindow: false),
+    ]
+    #expect(SettingsFocusCoordinator.settingsWindowIndex(in: list) == 1)
+  }
+
+  @Test("fallback never returns the welcome window or other own windows")
+  func fallbackSkipsOwnWindows() {
+    let list = [
+      Candidate(autosaveName: "", isVisible: true, isOwnAuxiliaryWindow: true),
+      Candidate(autosaveName: "", isVisible: true, isOwnAuxiliaryWindow: false),
+    ]
+    #expect(SettingsFocusCoordinator.settingsWindowIndex(in: list) == 1)
+    #expect(
+      SettingsFocusCoordinator.settingsWindowIndex(
+        in: [Candidate(autosaveName: "", isVisible: true, isOwnAuxiliaryWindow: true)]) == nil)
+  }
 }

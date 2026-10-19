@@ -144,7 +144,7 @@
 
     // MARK: - Production container
 
-    private static let storeFileName = "ClipItems.store"
+    public static let storeFileName = "ClipItems.store"
 
     /// The production on-disk container: `~/Library/Application
     /// Support/Clipnest/ClipItems.store` — the same base-directory family as
@@ -169,17 +169,23 @@
     public static func makeProductionContainer() throws -> ModelContainer {
       let baseDirectory = BlobStore.defaultBaseDirectory()
       do {
-        try FileManager.default.createDirectory(
-          at: baseDirectory, withIntermediateDirectories: true)
+        try PrivateDataPermissions.secureDirectory(baseDirectory)
       } catch {
         throw ClipStoreError.ioFailure(underlying: String(describing: error))
       }
       let storeURL = baseDirectory.appendingPathComponent(storeFileName)
       do {
-        return try ModelContainerRecovery.openWithRecovery(storeURL: storeURL, logger: logger) {
+        let container = try ModelContainerRecovery.openWithRecovery(
+          storeURL: storeURL, logger: logger
+        ) {
           let configuration = ModelConfiguration(url: storeURL)
           return try ModelContainer(for: ClipItemRecord.self, configurations: configuration)
         }
+        // The store files exist only once the container is open; tighten
+        // them (and any -wal/-shm) every launch so pre-existing 0644 installs
+        // are fixed (T-PERM1).
+        PrivateDataPermissions.tightenContents(of: baseDirectory)
+        return container
       } catch {
         throw ClipStoreError.ioFailure(underlying: String(describing: error))
       }

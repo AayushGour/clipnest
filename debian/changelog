@@ -1,3 +1,21 @@
+clipnest (1.4.0) jammy; urgency=medium
+
+  * security: clipboard history, snippets and copied images are no longer
+    readable by other local accounts. Database files and blobs are now
+    owner-only (0600) in an owner-only (0700) folder; existing installs are
+    corrected on launch (blobs once, in the background).
+  * feat: a two-step Welcome window on first launch (and once after
+    updating): Keyboard access + GNOME extension status, then "Try your
+    hotkey". Replaces the old "Set Up Auto-Paste?" dialog. Reopen it from
+    the tray menu via "Getting Started...".
+  * feat: Clipnest installs and enables its GNOME Shell extension for your
+    user on first launch (GNOME 42-50). Log out and back in once to finish
+    setup. Never re-enables an extension you turned off.
+  * fix: scripts/uninstall.sh removes the extension from both GNOME
+    extension lists.
+
+ -- Aayush Gour <ag14906@gmail.com>  Mon, 19 Oct 2026 00:00:00 +0000
+
 clipnest (1.3.0) jammy; urgency=medium
 
   * feat: the picker now has a visible close (x) button at the right of its

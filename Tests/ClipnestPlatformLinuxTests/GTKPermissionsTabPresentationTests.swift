@@ -1,3 +1,4 @@
+import ClipnestViewModels
 import Testing
 
 @testable import ClipnestGTK
@@ -65,7 +66,7 @@ struct GTKPermissionsTabPresentationTests {
 
   @Test("The security-narrowing explanation names clipnest-input, not input, without overclaiming")
   func securityExplanationNamesTheNarrowerGroup() {
-    let text = PermissionsTabPresentation.securityExplanationText
+    let text = LinuxInputPermissionCopy.securityExplanationText
     #expect(text.contains("clipnest-input"))
     #expect(text.contains("broader \"input\" group"))
     #expect(text.contains("/dev/uinput"))

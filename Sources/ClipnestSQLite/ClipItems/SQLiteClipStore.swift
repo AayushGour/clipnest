@@ -47,14 +47,14 @@ public actor SQLiteClipStore: ClipStore {
   ///     `SwiftDataClipStore`'s `blobStore` parameter.
   public init(baseDirectory: URL, blobStore: BlobStore) throws {
     do {
-      try FileManager.default.createDirectory(
-        at: baseDirectory, withIntermediateDirectories: true)
+      try PrivateDataPermissions.secureDirectory(baseDirectory)
       let storeURL = baseDirectory.appendingPathComponent(Self.storeFileName)
       self.connection = try StoreFileRecovery.openWithRecovery(
         storeURL: storeURL,
         log: { Self.logger.error($0) },
         makeStore: { try ClipItemsSchema.open(atPath: storeURL.path) }
       )
+      PrivateDataPermissions.tightenContents(of: baseDirectory)
     } catch {
       throw ClipStoreError.ioFailure(underlying: String(describing: error))
     }

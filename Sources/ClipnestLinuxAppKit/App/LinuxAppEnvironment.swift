@@ -125,7 +125,7 @@ final class LinuxAppEnvironment {
   /// second reader, in `ClipnestLinuxAppKit` alongside this file — the
   /// existing source of truth, so `--version` never grows a second
   /// hardcoded copy of the version string.
-  nonisolated static let installedVersion = "1.3.0"
+  nonisolated static let installedVersion = "1.4.0"
 
   /// Resolves this process's own absolute executable path for
   /// `AutostartDesktopFile.setEnabled(_:executablePath:)`'s `.desktop`
@@ -286,6 +286,14 @@ final class LinuxAppEnvironment {
     // Every consumer below receives THIS wrapped value via the `clipStore`
     // local — never `rawClipStore` directly.
     let clipStore = NotifyingClipStore(wrapping: rawClipStore)
+
+    // T-PERM2: one-time, low-priority background pass tightening legacy 0644
+    // blob files to 0600; marker in the shared key-value store, set only on a
+    // clean complete pass. Off the GTK thread; does not delay readiness.
+    BlobPermissionsMigration.start(
+      blobStore: blobStore,
+      isDone: { keyValueStore.bool(forKey: $0) },
+      markDone: { keyValueStore.set(true, forKey: $0) })
 
     self.blobStore = blobStore
     self.privacyFilter = privacyFilter
@@ -734,6 +742,82 @@ final class LinuxAppEnvironment {
     updateChecker.start(settings: settingsStore)
   }
 
+  // MARK: - GNOME Shell extension (per-user install)
+
+  /// Where the per-user GNOME Shell extension stands — the welcome window's
+  /// input. `.checking` until `startGnomeExtensionSetup()` finishes.
+  /// Re-derived whenever the install result or live Shell presence changes;
+  /// observe via `onGnomeExtensionStatusChanged`.
+  private(set) var gnomeExtensionStatus: GnomeExtensionStatus = .checking
+
+  /// Fires on the main actor each time `gnomeExtensionStatus` changes.
+  var onGnomeExtensionStatusChanged: ((GnomeExtensionStatus) -> Void)?
+
+  private var gnomeExtensionInstallResult: GnomeExtensionInstallResult?
+  private var isShellHelperPresent = false
+  /// Bumped per install/re-run so a slow, stale background run can't overwrite
+  /// the result of a newer one (detached tasks finish in any order).
+  private var gnomeExtensionRunGeneration = 0
+
+  /// Installs/refreshes and enables the bundled GNOME Shell extension on a
+  /// background thread (it spawns `gsettings`/`gnome-shell` and copies
+  /// files), then publishes the result. Call once per launch.
+  func startGnomeExtensionSetup(
+    installer: GnomeExtensionInstaller = .makeDefault()
+  ) {
+    gnomeExtensionRunGeneration += 1
+    let generation = gnomeExtensionRunGeneration
+    Task.detached(priority: .utility) { [weak self] in
+      let result = installer.run()
+      await self?.applyGnomeExtensionInstallResult(result, generation: generation)
+    }
+  }
+
+  /// The welcome window's "Try Again" / "Turn On" buttons and its
+  /// refresh-on-focus: re-runs the install off the GTK thread and publishes
+  /// the result. `resetToChecking` first publishes `.checking` so the UI shows
+  /// a transition even when the outcome is identical to the previous one;
+  /// `turnOn` additionally lifts a user opt-out (`GnomeExtensionTurnOn`).
+  func rerunGnomeExtensionSetup(
+    turnOn: Bool = false, resetToChecking: Bool = true,
+    installer: GnomeExtensionInstaller = .makeDefault()
+  ) {
+    if resetToChecking {
+      gnomeExtensionInstallResult = nil
+      recomputeGnomeExtensionStatus()
+    }
+    gnomeExtensionRunGeneration += 1
+    let generation = gnomeExtensionRunGeneration
+    Task.detached(priority: .utility) { [weak self] in
+      let result = turnOn ? GnomeExtensionTurnOn.run(installer: installer) : installer.run()
+      await self?.applyGnomeExtensionInstallResult(result, generation: generation)
+    }
+  }
+
+  /// Fed by `LinuxAppLifecycle` from `ShellHelperClient` (initial refresh and
+  /// every `onCapabilitiesChanged`), so `.installedNeedsRelogin` flips to
+  /// `.active` live once the user has logged back in.
+  func setShellHelperPresent(_ present: Bool) {
+    isShellHelperPresent = present
+    recomputeGnomeExtensionStatus()
+  }
+
+  private func applyGnomeExtensionInstallResult(
+    _ result: GnomeExtensionInstallResult, generation: Int
+  ) {
+    guard generation == gnomeExtensionRunGeneration else { return }
+    gnomeExtensionInstallResult = result
+    recomputeGnomeExtensionStatus()
+  }
+
+  private func recomputeGnomeExtensionStatus() {
+    let status = GnomeExtensionStatus.resolve(
+      install: gnomeExtensionInstallResult, shellHelperPresent: isShellHelperPresent)
+    guard status != gnomeExtensionStatus else { return }
+    gnomeExtensionStatus = status
+    onGnomeExtensionStatusChanged?(status)
+  }
+
   /// **Reviewer fix (data-loss bug, T-IBUS-CRASHWIRE follow-up):**
   /// `LinuxAppLifecycle`'s quit path (`restoreIBusEngineBeforeQuit()`) used
   /// to construct its OWN fresh `PlatformDefaults.keyValueStore()` — a
@@ -794,11 +878,16 @@ final class LinuxAppEnvironment {
     pasteTargetIsTerminalBox.value = isFocusedObjectTerminal()
     pickerViewModel.willShow()
     pickerWindow.show(at: point)
+    onPickerShown?()
     if let point {
       placeWindowHandler(pickerWindow.windowToken, point.x, point.y)
     }
     isPickerVisible = true
   }
+
+  /// Fires on the main actor each time the picker is shown (the welcome
+  /// window's "Try it" step listens; set by `LinuxAppLifecycle`).
+  var onPickerShown: (() -> Void)?
 
   func hidePicker() {
     pickerWindow.hide()
@@ -820,8 +909,12 @@ final class LinuxAppEnvironment {
     }
   }
 
-  func openSettings() {
-    settingsWindow.show()
+  func openSettings(tab: SettingsWindow.Tab? = nil) {
+    if let tab {
+      settingsWindow.show(tab: tab)
+    } else {
+      settingsWindow.show()
+    }
   }
 
   /// The tray's "Pause Capture" toggle — the inverse of Settings → General

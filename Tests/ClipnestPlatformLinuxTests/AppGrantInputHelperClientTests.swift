@@ -3,6 +3,7 @@ import Testing
 
 @testable import ClipnestGTK
 @testable import ClipnestLinuxAppKit
+@testable import ClipnestViewModels
 
 /// T-OPT3: `GrantInputHelperClient` is the ONE call site that invokes the
 /// existing, already-scoped privileged helper via `pkexec` — see that
@@ -26,6 +27,7 @@ struct AppGrantInputHelperClientTests {
   @Test("The shipped constants match the packaging scripts/policy")
   func constantsMatchPackaging() {
     #expect(GrantInputHelperClient.helperPath == "/usr/libexec/clipnest/clipnest-grant-input")
+    #expect(GrantInputHelperClient.helperPath == LinuxInputPermissionCopy.helperPath)
     #expect(GrantInputHelperClient.pkexecExecutablePath == "/usr/bin/pkexec")
   }
 

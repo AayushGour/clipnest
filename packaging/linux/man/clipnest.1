@@ -84,6 +84,21 @@ if
 .B $XDG_DATA_HOME
 is unset).
 .TP
+.I ~/.local/share/gnome-shell/extensions/clipnest@clipnest.app/
+Clipnest's GNOME Shell extension, installed into your own account by the app on
+launch (copied from
+.I /usr/share/clipnest/gnome-shell-extension/
+and added to
+.B org.gnome.shell enabled-extensions
+unless you disabled it). Log out and back in once after the first install.
+Not created on non-GNOME desktops. If you turn it off, Clipnest remembers
+that in
+.I ~/.local/state/clipnest/gnome-extension-enabled
+(kept across package removal and reinstall); delete that file to let Clipnest
+enable the extension again. Remove it with
+.IR scripts/uninstall.sh ,
+or turn it off in the Extensions app and Clipnest will leave it off.
+.TP
 .I ~/.config/autostart/clipnest.desktop
 Present only if you have enabled "Launch at login" in Clipnest's own
 Settings. Clipnest manages this file itself; it is not installed by the

@@ -312,6 +312,23 @@ public final class SettingsWindow: @unchecked Sendable {
     gtk_window_present(window)
   }
 
+  /// The notebook's tabs in `init`'s build order (the raw value is the page
+  /// index). Lets another window (the welcome window's "Change in
+  /// Settings…") open Settings on a specific tab.
+  public enum Tab: Int32, Sendable {
+    case general = 0
+    case history
+    case apps
+    case shortcuts
+    case permissions
+  }
+
+  /// `show()`, then switches to `tab`.
+  public func show(tab: Tab) {
+    show()
+    gtk_notebook_set_current_page(notebook, tab.rawValue)
+  }
+
   static let defaultWidth: Int32 = 480
   static let defaultHeight: Int32 = 420
   static let tabMargin: Int32 = 12
