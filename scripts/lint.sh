@@ -32,8 +32,8 @@
 #      never fall back to trusting an unpinned local swift-format.
 #
 # Usage:
-#   scripts/lint.sh                              # lints Sources Tests (ci.yml's set)
-#   scripts/lint.sh Sources Tests                 # explicit, same thing
+#   scripts/lint.sh                              # lints Sources Tests ClipnestApp/Sources (ci.yml + release.yml)
+#   scripts/lint.sh Sources Tests                 # explicit subset (ci.yml Linux job)
 #   LINT_IMAGE=swift:6.0-noble scripts/lint.sh    # cross-check ci.yml's other
 #                                                   # matrix leg
 #
@@ -81,7 +81,8 @@ fail() {
 
 LINT_PATHS=("$@")
 if [ "${#LINT_PATHS[@]}" -eq 0 ]; then
-	LINT_PATHS=(Sources Tests)
+	# Same paths CI lints (release.yml also checks ClipnestApp/Sources).
+	LINT_PATHS=(Sources Tests ClipnestApp/Sources)
 fi
 
 command -v swift >/dev/null 2>&1 || fail "swift not found on PATH — install a Swift toolchain first"
