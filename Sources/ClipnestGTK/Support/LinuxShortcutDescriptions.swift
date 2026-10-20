@@ -30,17 +30,11 @@ public enum LinuxShortcutDescriptions {
     public let description: String
   }
 
-  // T-BB6 fix: this used to say "Ctrl+Delete  Delete the highlighted item"
-  // while the picker's own footer (`ShortcutHints.swift`'s Linux
-  // `platformDefault`) says "Delete delete" — two in-app surfaces
-  // disagreeing about the same shortcut, found by black-box testing. Bare
-  // Delete is `KeyEventMapping`'s canonical binding (Ctrl+Delete still
-  // works too, kept as an alias — see that file's `Keyval.delete` doc
-  // comment), so this entry now leads with the same chord the footer
-  // advertises. The description also states the exception explicitly (Delete
-  // sometimes edits the search box instead of the list) — omitting that here
-  // would repeat the same kind of misleading-but-technically-true wording
-  // that caused the original contradiction.
+  // T-BB6 / T-BKSPDEL1: this entry and the picker footer (`ShortcutHints.swift`'s
+  // Linux `platformDefault`) must name the same chord. Deleting requires
+  // Ctrl+Delete (parity with macOS's ⌘⌫); bare Delete and Backspace never
+  // delete an item. The description states the remaining exception (Ctrl+Delete
+  // can still edit the search box when the entry has something to delete).
   //
   // T-KBPARITY3: the exception's exact condition changed from "the search
   // box has focus AND non-empty text" to "the search entry has focus AND
@@ -70,12 +64,14 @@ public enum LinuxShortcutDescriptions {
     Entry(combo: "Ctrl+P", description: "Pin or unpin the highlighted item"),
     Entry(combo: "Ctrl+S", description: "Save the highlighted item as a snippet"),
     Entry(
-      combo: "Delete",
+      combo: "Ctrl+Delete",
       description:
-        "Delete the highlighted item (unless it would edit the search box instead; also works via Ctrl+Delete)"
+        "Delete the highlighted item (unless it would edit the search box instead). Bare Delete and Backspace never delete an item"
     ),
     Entry(combo: "Ctrl+N", description: "New snippet (Snippets tab)"),
     Entry(combo: "Ctrl+Shift+E", description: "Edit the highlighted snippet (Snippets tab)"),
+    Entry(combo: "Ctrl+] / Ctrl+[", description: "Next / previous type filter (History, Pinned)"),
+    Entry(combo: "Ctrl+Y", description: "Show or hide the preview of the highlighted item"),
     Entry(combo: "Ctrl+1 / 2 / 3", description: "Switch to History / Pinned / Snippets"),
     Entry(combo: "Ctrl+,", description: "Open Settings"),
   ]

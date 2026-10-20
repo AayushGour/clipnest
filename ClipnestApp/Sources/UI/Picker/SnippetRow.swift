@@ -23,6 +23,7 @@
 // either action).
 
 import ClipnestCore
+import ClipnestViewModels
 import SwiftUI
 
 /// Renders one `Snippet`: its title (the "Tag" field) with search matches
@@ -43,6 +44,8 @@ struct SnippetRow: View {
   /// Reports pointer hover to `PickerViewModel.hoverItem(_:)` — drives the
   /// snippet's Body preview popover, mirroring `ItemRow`'s hover behavior.
   let onHover: (Bool) -> Void
+  /// T-AUD-VO: whether this is the picker's highlighted row (selected trait).
+  let isSelected: Bool
 
   var body: some View {
     HStack(spacing: 10) {
@@ -73,6 +76,15 @@ struct SnippetRow: View {
       Button("Edit", systemImage: "pencil", action: onEdit)
       Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
     }
+    .modifier(
+      RowAccessibilityModifier(
+        label: RowAccessibility.snippetLabel(for: snippet),
+        isSelected: isSelected,
+        onDefaultAction: onSelect,
+        actions: [
+          .init(name: RowAccessibility.ActionName.edit, perform: onEdit),
+          .init(name: RowAccessibility.ActionName.delete, perform: onDelete),
+        ]))
   }
 
   private var rowActions: some View {

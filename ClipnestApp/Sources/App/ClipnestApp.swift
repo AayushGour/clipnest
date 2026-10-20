@@ -68,6 +68,11 @@ private struct MenuBarContent: View {
     Button("Settings…") {
       openSettingsAndFocus()
     }
+    if let checker = appDelegate.environment?.updateChecker {
+      Button(UpdateCheckFeedback.menuItemTitle) {
+        UpdateCheckAlert.run(checker: checker)
+      }
+    }
     // T-WELCOME1: reopens the first-run welcome; never touches the seen flag.
     Button(WelcomeCopy.menuItemTitle) {
       appDelegate.showWelcome()

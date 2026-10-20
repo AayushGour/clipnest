@@ -21,6 +21,7 @@ struct WelcomeView: View {
   /// button - never Skip (design.md "Welcome window").
   private enum FocusTarget: Hashable {
     case allowAction
+    case launchAtLoginToggle
     case primaryButton
   }
 
@@ -45,6 +46,7 @@ struct WelcomeView: View {
       ScrollView(.vertical) {
         VStack(alignment: .leading, spacing: Layout.rowSpacing) {
           permissionRow
+          openAtLoginRow
           tryItRow
         }
         .padding(Layout.padding)
@@ -59,7 +61,7 @@ struct WelcomeView: View {
     // focus to the primary button instead of leaving it on nothing.
     .onChange(of: viewModel.activeStep) { refocus() }
     .onChange(of: session.accessibilityState) {
-      // Only the permission step's own button can vanish here; on step 2 a grant
+      // Only the permission step's own button can vanish here; on later steps a grant
       // must not pull focus off whatever the user tabbed to.
       if viewModel.activeStep == .permission, focus != .primaryButton { refocus() }
     }
@@ -68,9 +70,11 @@ struct WelcomeView: View {
   private func refocus() {
     let actionAvailable =
       WelcomeAccessibilityPresentation.content(for: session.accessibilityState).actionTitle != nil
-    focus =
-      viewModel.focusTarget(permissionActionAvailable: actionAvailable) == .permissionAction
-      ? .allowAction : .primaryButton
+    switch viewModel.focusTarget(permissionActionAvailable: actionAvailable) {
+    case .permissionAction: focus = .allowAction
+    case .launchAtLoginToggle: focus = .launchAtLoginToggle
+    case .primaryButton: focus = .primaryButton
+    }
   }
 
   // MARK: Header / footer
@@ -135,6 +139,29 @@ struct WelcomeView: View {
     }
   }
 
+  private var openAtLoginRow: some View {
+    StepRow(viewModel: viewModel, step: .openAtLogin) {
+      EmptyView()
+    } detail: {
+      Text(viewModel.openAtLoginBodyText).fixedSize(horizontal: false, vertical: true)
+      Toggle(
+        WelcomeCopy.openAtLoginToggleTitle,
+        isOn: Binding(
+          get: { viewModel.wantsLaunchAtLogin },
+          set: { viewModel.setWantsLaunchAtLogin($0) })
+      )
+      .focused($focus, equals: .launchAtLoginToggle)
+      Text(WelcomeCopy.openAtLoginRecommended).font(.caption).foregroundStyle(.secondary)
+        .fixedSize(horizontal: false, vertical: true)
+      if let error = viewModel.launchAtLoginError {
+        Text(error).font(.caption).foregroundStyle(.red)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    } actions: {
+      EmptyView()
+    }
+  }
+
   private var tryItRow: some View {
     StepRow(viewModel: viewModel, step: .tryIt) {
       EmptyView()
@@ -161,9 +188,9 @@ struct WelcomeView: View {
 
 // MARK: - Step row
 
-/// One of the two stacked rows: badge + heading (+ trailing accessory), the
+/// One of the three stacked rows: badge + heading (+ trailing accessory), the
 /// detail body while the step is active, and its action buttons. The whole row
-/// is one accessibility group "Step N of 2: heading, state".
+/// is one accessibility group "Step N of 3: heading, state".
 private struct StepRow<Accessory: View, Detail: View, Actions: View>: View {
   @ObservedObject var viewModel: WelcomeViewModel
   let step: WelcomeStep
@@ -173,7 +200,7 @@ private struct StepRow<Accessory: View, Detail: View, Actions: View>: View {
 
   var body: some View {
     let state = viewModel.state(of: step)
-    // Expansion follows the ACTIVE step (step 2 stays open after success).
+    // Expansion follows the ACTIVE step (step 3 stays open after success).
     let isActive = viewModel.activeStep == step
     HStack(alignment: .top, spacing: 12) {
       StepBadge(number: step.number, state: state)

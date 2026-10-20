@@ -240,16 +240,28 @@ public final class UpdateChecker {
   /// (the `defer` below), so a persistently-offline machine still only
   /// polls once per 24h instead of hammering on every timer tick.
   public func checkNow() async {
+    _ = await checkNowReportingOutcome()
+  }
+
+  /// The user-initiated ("Check for Updates…") variant of `checkNow()`: the
+  /// SAME fetch/compare/state-publish path (network stays off-main inside
+  /// `fetchLatestReleaseJSON`), but returns what happened so the caller can
+  /// show feedback. Works regardless of `automaticallyCheckForUpdates` — that
+  /// setting only gates the background timer, never a manual check.
+  @discardableResult
+  public func checkNowReportingOutcome() async -> UpdateCheckOutcome {
     defer { lastCheckedAt = Date() }
     guard let data = await Self.fetchLatestReleaseJSON(),
       let tag = Self.parseTagName(fromReleaseJSON: data)
-    else { return }
+    else { return .failed }
 
-    let available = Self.isUpdateAvailable(installed: installedVersion(), latestTag: tag)
+    let installed = installedVersion()
+    let available = Self.isUpdateAvailable(installed: installed, latestTag: tag)
     let normalized = Self.normalizedVersion(fromTag: tag)
     isUpdateAvailable = available
     latestVersion = normalized
     onStateChanged(available, normalized)
+    return available ? .updateAvailable(latest: normalized) : .upToDate(installed: installed)
   }
 
   // MARK: - Pure logic (unit-tested directly — no `Process` spawn involved)

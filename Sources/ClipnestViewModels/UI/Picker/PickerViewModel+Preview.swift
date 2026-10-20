@@ -78,6 +78,22 @@ extension PickerViewModel {
     scheduleResolve(delay: Self.previewShowDelay)
   }
 
+  /// T-AUD-KBD: explicit preview toggle for the highlighted row (⌘Y on macOS,
+  /// Ctrl+Y on Linux; Space can't be used — it types in the search field).
+  /// If a keyboard-selection preview is showing, closes it; otherwise opens
+  /// it for the highlighted row regardless of the "show preview on keyboard
+  /// selection" setting. While open it follows arrow-key moves like the
+  /// automatic preview does.
+  public func togglePreviewForHighlighted() {
+    if previewTargetSource == .selection {
+      selectionPreviewArmed = false
+      scheduleResolve(delay: Self.previewShowDelay)
+      return
+    }
+    selectionPreviewForced = true
+    selectionChangedForPreview()
+  }
+
   /// Clears the "an explicit keyboard move happened" gate and closes a
   /// selection-sourced preview that was showing. Used by search-text
   /// changes.
@@ -144,7 +160,8 @@ extension PickerViewModel {
   /// keyboard move armed it, the setting is ON, and the row is
   /// preview-worthy (History/Pinned clip) or exists (Snippet).
   private func keyboardSelectionPreviewID() -> ClipItem.ID? {
-    guard selectionPreviewArmed, showPreviewOnKeyboardSelection() else { return nil }
+    guard selectionPreviewArmed, selectionPreviewForced || showPreviewOnKeyboardSelection()
+    else { return nil }
     switch activeTab {
     case .history, .pinned:
       guard let item = highlightedItem, item.isPreviewWorthy else { return nil }

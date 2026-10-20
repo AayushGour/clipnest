@@ -243,6 +243,10 @@ public final class PickerWindow: @unchecked Sendable {
   /// (`kindFilter == nil`), the rest index-aligned with `ItemKind.allCases`
   /// (index `i + 1`) — see `PickerWindow+Chips.swift`.
   var chipButtons: [OpaquePointer] = []
+  /// The filter each entry of `chipButtons` selects (same order; `nil` = All).
+  var chipKinds: [ItemKind?] = []
+  /// Text beside the icon-only chips naming the ACTIVE filter (T-AUD-KBD).
+  let activeFilterLabel: OpaquePointer = gtk_label_new("")
 
   /// The rows/snippets currently rendered — kept in the same order as
   /// `listBox`'s children so a `GtkListBoxRow`'s `gtk_list_box_row_get_index`

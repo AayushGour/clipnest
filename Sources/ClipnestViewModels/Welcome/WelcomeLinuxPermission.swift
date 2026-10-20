@@ -109,7 +109,7 @@ public struct WelcomeKeyboardAccess: Equatable, Sendable {
 }
 
 /// Both sub-rows together: step 1's completion, the combined log-out line and
-/// whether step 2 must warn that the hotkey is not live yet.
+/// whether step 3 must warn that the hotkey is not live yet.
 public struct WelcomeLinuxPermission: Equatable, Sendable {
   public var keyboard: WelcomeKeyboardAccess
   public var extensionStatus: GnomeExtensionStatus

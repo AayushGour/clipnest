@@ -32,7 +32,15 @@ struct PermissionStepWidgets {
   let combinedLine: OpaquePointer
 }
 
-/// Step 2: try your hotkey (body, key caps, status, hint, Change in Settings…).
+/// Step 2: open at login (body, switch, recommendation note, error).
+struct OpenAtLoginStepWidgets {
+  let body: OpaquePointer
+  let toggle: OpaquePointer
+  let note: OpaquePointer
+  let error: OpaquePointer
+}
+
+/// Step 3: try your hotkey (body, key caps, status, hint, Change in Settings…).
 struct TryItStepWidgets {
   let body: OpaquePointer
   let keyCaps: OpaquePointer
@@ -169,6 +177,7 @@ extension WelcomeWindow {
     gtk_widget_set_margin_start(details, 30)
     switch step {
     case .permission: buildPermissionStep(into: details)
+    case .openAtLogin: buildOpenAtLoginStep(into: details)
     case .tryIt: buildTryItStep(into: details)
     }
     gtk_box_append(content, details)
@@ -219,6 +228,22 @@ extension WelcomeWindow {
       body: body, plainLine: plain, keyboard: keyboard, keyboardSecurityNote: security,
       keyboardReloginNote: relogin, extensionRow: extensionRow, extensionFallbackNote: fallback,
       combinedLine: combined)
+  }
+
+  private func buildOpenAtLoginStep(into box: OpaquePointer) {
+    let body = makeLabel()
+    let toggle: OpaquePointer = gtk_check_button_new_with_label(WelcomeCopy.openAtLoginToggleTitle)
+    let onToggled: @MainActor (Bool) -> Void = { [weak self] isOn in
+      self?.launchAtLoginToggled(isOn)
+    }
+    gtkConnect(
+      toggle, signal: "toggled",
+      context: ClosureContext<Bool> { isOn in MainActor.assumeIsolated { onToggled(isOn) } },
+      callback: unsafeBitCast(welcomeToggleTrampoline, to: GCallback.self))
+    let note = makeLabel(WelcomeCopy.openAtLoginRecommended, cssClasses: ["dim-label"])
+    let error = makeLabel(cssClasses: ["error"])
+    for widget in [body, toggle, note, error] { gtk_box_append(box, widget) }
+    openAtLoginStep = OpenAtLoginStepWidgets(body: body, toggle: toggle, note: note, error: error)
   }
 
   private func buildTryItStep(into box: OpaquePointer) {
@@ -287,6 +312,7 @@ extension WelcomeWindow {
       }
     }
     renderPermissionStep()
+    renderOpenAtLoginStep()
     renderTryItStep()
 
     gtk_button_set_label(primaryButton, viewModel.primaryTitle)
@@ -326,8 +352,21 @@ extension WelcomeWindow {
     let summary = WelcomeRowSummary.text(
       step: step, state: state, hotkeyText: viewModel.hotkey.displayText,
       permissionSummary: permission.collapsedSummary(isSkipped: state == .skipped),
-      tryItStatus: viewModel.tryItStatusText)
+      tryItStatus: viewModel.tryItStatusText,
+      openAtLoginStatus: viewModel.collapsedStatusText(for: .openAtLogin))
     setText(row.summary, summary)
+  }
+
+  @MainActor
+  private func renderOpenAtLoginStep() {
+    gtk_label_set_text(openAtLoginStep.body, viewModel.openAtLoginBodyText)
+    // Syncing the widget fires "toggled" -> launchAtLoginToggled, which is a
+    // no-op when the model already agrees (no render loop).
+    let active = gtk_check_button_get_active(openAtLoginStep.toggle) != 0
+    if active != viewModel.wantsLaunchAtLogin {
+      gtk_check_button_set_active(openAtLoginStep.toggle, viewModel.wantsLaunchAtLogin ? 1 : 0)
+    }
+    setText(openAtLoginStep.error, viewModel.launchAtLoginError)
   }
 
   @MainActor
@@ -402,6 +441,15 @@ private let welcomeButtonClickedTrampoline:
     Void = { _, data in
       guard let context = unretainedContext(data, as: ClosureContext<Void>.self) else { return }
       context.perform(())
+    }
+
+private let welcomeToggleTrampoline:
+  @convention(c) (OpaquePointer?, UnsafeMutableRawPointer?) ->
+    Void = { button, data in
+      guard let button, let context = unretainedContext(data, as: ClosureContext<Bool>.self) else {
+        return
+      }
+      context.perform(gtk_check_button_get_active(button) != 0)
     }
 
 private let welcomeCloseRequestTrampoline:

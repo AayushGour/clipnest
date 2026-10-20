@@ -57,7 +57,7 @@ struct PermissionsSettingsView: View {
 
       if !watcher.isGranted {
         Section("Already switched on but still not working?") {
-          // Shared with the welcome window's step 2 (T-WELCOME1) so the
+          // Shared with the welcome window's step 1 (T-WELCOME1) so the
           // stale-entry guidance is never forked.
           Text(
             AccessibilityPermissionCopy.staleEntryExplanation + "\n\n"

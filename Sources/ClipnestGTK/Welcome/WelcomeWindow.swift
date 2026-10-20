@@ -2,7 +2,7 @@
 //
 // T-WELCOME1-LX: the Linux first-run welcome window (design.md "Welcome
 // window (T-WELCOME0)"), replacing the one-off `AutoPasteStartupPrompt`. One
-// non-modal GtkWindow with two stacked step rows (the current one
+// non-modal GtkWindow with three stacked step rows (the current one
 // expanded), driven by the shared `WelcomeViewModel` (`ClipnestViewModels`),
 // so state, copy and the Continue/Skip rules are identical to macOS.
 //
@@ -33,6 +33,9 @@ public final class WelcomeWindow: @unchecked Sendable {
   public struct Configuration {
     public var keyboardAccess: WelcomeKeyboardAccess
     public var extensionStatus: GnomeExtensionStatus
+    /// Step 2's backend (the same autostart file Settings -> General edits).
+    public var launchAtLogin: WelcomeLaunchAtLogin
+    public var launchAtLoginPreChecked: Bool
     /// Live binding, re-read when the window becomes active.
     public var readHotkey: () -> WelcomeHotkey
     /// Same shape as `SettingsWindow.requestUInputGrant`: the real caller is
@@ -47,6 +50,8 @@ public final class WelcomeWindow: @unchecked Sendable {
     public init(
       keyboardAccess: WelcomeKeyboardAccess,
       extensionStatus: GnomeExtensionStatus,
+      launchAtLogin: WelcomeLaunchAtLogin,
+      launchAtLoginPreChecked: Bool,
       readHotkey: @escaping () -> WelcomeHotkey,
       requestUInputGrant: @escaping (_ completion: @escaping UInputGrantCompletion) -> Void,
       extensionAction: @escaping (WelcomeGnomeExtensionPresentation.Action) -> Void,
@@ -56,6 +61,8 @@ public final class WelcomeWindow: @unchecked Sendable {
     ) {
       self.keyboardAccess = keyboardAccess
       self.extensionStatus = extensionStatus
+      self.launchAtLogin = launchAtLogin
+      self.launchAtLoginPreChecked = launchAtLoginPreChecked
       self.readHotkey = readHotkey
       self.requestUInputGrant = requestUInputGrant
       self.extensionAction = extensionAction
@@ -93,6 +100,7 @@ public final class WelcomeWindow: @unchecked Sendable {
   var primaryButton: OpaquePointer!
   var skipButton: OpaquePointer!
   var permissionStep: PermissionStepWidgets!
+  var openAtLoginStep: OpenAtLoginStepWidgets!
   var tryItStep: TryItStepWidgets!
   var renderedHotkey: WelcomeHotkey?
   var hintTask: Task<Void, Never>?
@@ -109,7 +117,9 @@ public final class WelcomeWindow: @unchecked Sendable {
     self.permission = permission
     viewModel = WelcomeViewModel(
       platform: .linux, hotkey: configuration.readHotkey(),
-      isPermissionComplete: permission.isComplete)
+      isPermissionComplete: permission.isComplete,
+      launchAtLogin: configuration.launchAtLogin,
+      launchAtLoginPreChecked: configuration.launchAtLoginPreChecked)
     viewModel.setHotkeyPendingSetup(permission.isHotkeyPendingSetup)
     window = gtk_window_new()
     buildWindow()
@@ -142,7 +152,11 @@ public final class WelcomeWindow: @unchecked Sendable {
       permission.keyboard.buttonTitle != nil && permission.keyboard.isButtonEnabled
     let extensionAction = permission.extensionContent.action != nil
     let target = viewModel.focusTarget(permissionActionAvailable: keyboardAction || extensionAction)
-    guard target == .permissionAction else { return primaryButton }
+    switch target {
+    case .primaryButton: return primaryButton
+    case .launchAtLoginToggle: return openAtLoginStep.toggle
+    case .permissionAction: break
+    }
     return keyboardAction ? permissionStep.keyboard.button : permissionStep.extensionRow.button
   }
 
@@ -183,7 +197,7 @@ public final class WelcomeWindow: @unchecked Sendable {
   @MainActor
   private func navigate(_ result: WelcomeNavigation) {
     switch result {
-    case .advanced: render()
+    case .advanced, .stayed: render()
     case .close: gtk_window_close(window)
     }
   }
@@ -215,6 +229,14 @@ public final class WelcomeWindow: @unchecked Sendable {
   @MainActor
   func extensionActionTapped(_ action: WelcomeGnomeExtensionPresentation.Action) {
     configuration.extensionAction(action)
+  }
+
+  /// The step-2 switch was flipped (user or our own `render()` syncing it).
+  @MainActor
+  func launchAtLoginToggled(_ isOn: Bool) {
+    guard !isDismissed, isOn != viewModel.wantsLaunchAtLogin else { return }
+    viewModel.setWantsLaunchAtLogin(isOn)
+    render()
   }
 
   @MainActor

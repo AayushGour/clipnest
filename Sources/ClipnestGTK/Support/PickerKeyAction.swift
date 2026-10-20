@@ -60,6 +60,10 @@ public enum PickerKeyAction: Equatable, Sendable {
   /// Ctrl+, — opens Settings, dismissing the picker first. Dispatches to
   /// `PickerViewModel.openSettingsFromPicker()`, mirroring macOS's ⌘,.
   case openSettings
+  /// T-AUD-KBD: Ctrl+] (forward) / Ctrl+[ (backward) — cycle the type filter.
+  case cycleFilter(forward: Bool)
+  /// T-AUD-KBD: Ctrl+Y — toggle the preview of the highlighted row.
+  case togglePreview
 
   /// Whether this action's key is one a focused text field legitimately owns,
   /// so the picker must NOT act on it while the search entry has focus.

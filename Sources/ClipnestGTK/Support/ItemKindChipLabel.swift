@@ -13,16 +13,13 @@
 // `ClipnestViewModels` alongside `gtkIconName` at that point, mirroring why
 // `gtkIconName` itself lives there instead of duplicated per call site.
 import ClipnestCore
+import ClipnestViewModels
 
 public enum ItemKindChipLabel {
-  /// The chip label shown for `kind` in the picker's type-filter row.
+  /// The chip label shown for `kind` in the picker's type-filter row. Delegates
+  /// to the shared `KindFilterOptions.title(for:)` (T-AUD-KBD) so the macOS and
+  /// Linux names can't drift.
   public static func label(for kind: ItemKind) -> String {
-    switch kind {
-    case .text: return "Text"
-    case .richText: return "Rich Text"
-    case .link: return "Link"
-    case .image: return "Image"
-    case .file: return "File"
-    }
+    KindFilterOptions.title(for: kind)
   }
 }

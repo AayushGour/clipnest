@@ -334,10 +334,12 @@ final class AppEnvironment {
     viewModel.dismiss = { [weak panel] in panel?.hide() }
     // Self-update (approved feature): the version label in
     // `PickerView.shortcutHintBar` and the update it triggers on click —
-    // see `AppUpdater`'s doc comment for why this stays network-free in-app
-    // (shells out to the public curl updater via Terminal instead).
+    // see `AppUpdater`'s doc comment (no in-process networking; shells out
+    // to the tag-pinned public updater via Terminal).
     viewModel.appVersion = AppUpdater.currentVersion
-    viewModel.requestAppUpdate = { AppUpdater.runUpdate() }
+    viewModel.requestAppUpdate = { [weak viewModel] in
+      AppUpdater.runUpdate(latestVersion: viewModel?.latestVersion)
+    }
 
     // Approved feature: background 24h update-availability check — see
     // `UpdateChecker`'s doc comment. Purely informational (a badge next to

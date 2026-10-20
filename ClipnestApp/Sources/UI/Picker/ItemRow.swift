@@ -99,6 +99,13 @@ struct ItemRow: View {
   /// the preview surface (hover wins over keyboard selection, see that
   /// method's doc comment).
   let onHover: (Bool) -> Void
+  /// T-AUD-VO: whether this is the picker's highlighted row — exposed to
+  /// VoiceOver as the selected trait.
+  let isSelected: Bool
+  /// T-AUD-VO: "Paste as plain text" custom action — the ⌥Return path
+  /// (`PickerViewModel.select(_:plainText: true)`); only offered when it
+  /// differs from the default paste (`RowAccessibility.supportsPlainTextPaste`).
+  let onPastePlainText: () -> Void
 
   /// T-SET4: promoted to `ClipItem.supportsSaveAsSnippet` (Core) — the exact
   /// same predicate `PickerViewModel.presentSaveAsSnippetForm(from:)`/
@@ -155,6 +162,47 @@ struct ItemRow: View {
       }
       Button("Delete", systemImage: "trash", role: .destructive, action: onDelete)
     }
+    .modifier(accessibility)
+  }
+
+  /// T-AUD-VO: the whole row is ONE accessibility element — spoken label from
+  /// `RowAccessibility.itemLabel`, button + selected traits, VoiceOver's
+  /// default action = paste (same closure as a click / Return), and the
+  /// row's pin/delete/save/plain-paste/OCR actions as named custom actions
+  /// calling the SAME closures the hover buttons and context menu use. The
+  /// inner `ExpandingIconButton`s are hidden from VoiceOver (children
+  /// `.ignore`) because the custom actions replace them.
+  private var accessibility: RowAccessibilityModifier {
+    RowAccessibilityModifier(
+      label: RowAccessibility.itemLabel(
+        for: item, relativeTime: RelativeTimeText.string(from: item.createdAt)),
+      isSelected: isSelected,
+      onDefaultAction: onSelect,
+      actions: itemActions)
+  }
+
+  private var itemActions: [RowAccessibilityModifier.NamedAction] {
+    var actions: [RowAccessibilityModifier.NamedAction] = [
+      .init(
+        name: item.pinned
+          ? RowAccessibility.ActionName.unpin : RowAccessibility.ActionName.pin,
+        perform: onTogglePin)
+    ]
+    if RowAccessibility.supportsPlainTextPaste(item) {
+      actions.append(
+        .init(name: RowAccessibility.ActionName.pastePlainText, perform: onPastePlainText))
+    }
+    if item.supportsSaveAsSnippet {
+      actions.append(
+        .init(name: RowAccessibility.ActionName.saveAsSnippet, perform: onSaveAsSnippet))
+    }
+    if hasRecognizedText {
+      actions.append(
+        .init(
+          name: RowAccessibility.ActionName.copyRecognizedText, perform: onCopyRecognizedText))
+    }
+    actions.append(.init(name: RowAccessibility.ActionName.delete, perform: onDelete))
+    return actions
   }
 
   /// Up to three always-visible trailing actions. The pin button's icon

@@ -30,8 +30,8 @@ public enum KeyEventMapping {
   /// constants (not inline `4`/`8`) per coding-standards.md's no-magic-
   /// numbers rule. `controlMask` gates the Linux-conventional primary
   /// modifier (Ctrl+F/P/S/N/1/2/3/, — this picker's substitute for macOS's
-  /// ⌘-chords); Delete is the one exception — it matches with or without
-  /// Ctrl held, see `Keyval.delete`'s case below for why. `altMask` gates
+  /// ⌘-chords); Delete (forward-delete) is Ctrl-gated too (Ctrl+Delete).
+  /// `altMask` gates
   /// the Enter/plain-text variant, mirroring macOS's ⌥⏎ specifically (not
   /// ⌘⏎) — see `.commit`'s case below.
   ///
@@ -114,6 +114,10 @@ public enum KeyEventMapping {
     static let eLower: UInt32 = 0x065
     static let eUpper: UInt32 = 0x045
     static let comma: UInt32 = 0x02c
+    static let bracketLeft: UInt32 = 0x05b
+    static let bracketRight: UInt32 = 0x05d
+    static let yLower: UInt32 = 0x079
+    static let yUpper: UInt32 = 0x059
   }
 
   /// Maps a raw `(keyval, state)` GTK key-press to the `PickerKeyAction` it
@@ -128,9 +132,8 @@ public enum KeyEventMapping {
   ///     consults only `controlMask`, ignoring every other bit (Shift, Lock,
   ///     a mouse-button chord, etc.) — masking the bit you care about, not
   ///     requiring an exact full-state match, so e.g. Caps Lock being on
-  ///     doesn't silently break every Ctrl-chord. `delete` ignores `state`
-  ///     entirely (see its case below — bare Delete and Ctrl+Delete are both
-  ///     accepted). Return/numpad-Enter is the other exception:
+  ///     doesn't silently break every Ctrl-chord. `delete` is
+  ///     Ctrl-gated like the rest (bare Delete and Backspace never delete). Return/numpad-Enter is the other exception:
   ///     `returnAction(forState:)` below also consults Shift/Super (and
   ///     masks out Lock) so an unimplemented modifier held on Return is
   ///     reported as unhandled rather than silently aliased to plain Return
@@ -165,24 +168,13 @@ public enum KeyEventMapping {
       return isControlDown ? .focusSearch : nil
     case Keyval.pLower, Keyval.pUpper:
       return isControlDown ? .togglePin : nil
-    // Bare Delete now deletes, matching macOS's `PickerView.handle(_:)`
-    // `.delete` case, which — per that method's own "Reliability note
-    // (T24)" doc comment — "matches the physical Delete key regardless of
-    // modifiers, so this one case covers both plain Delete and ⌘⌫." Linux
-    // previously required Ctrl+Delete, an inconsistency with no platform
-    // reason behind it (GTK has no text-field-swallows-bare-Delete
-    // complication the way macOS's always-focused search field does).
-    // Ctrl+Delete is DELIBERATELY kept working too — not narrowed to just
-    // bare Delete — because it's this app's already-documented/shipped
-    // Linux convention (`LinuxShortcutDescriptions.swift`'s Settings ->
-    // Shortcuts listing, and this file's own prior test suite); a user who
-    // already learned Ctrl+Delete must not have it stop working. Ignoring
-    // `state` entirely (rather than special-casing "state == 0 ||
-    // isControlDown") makes bare Delete a superset of the old behavior, not
-    // a replacement — every modifier combination that used to delete still
-    // does, plus the one that didn't (plain Delete) now also does.
+    // T-BKSPDEL1: deleting a clip is destructive (no confirmation, no undo),
+    // so it requires Ctrl+Delete — parity with macOS's ⌘⌫. Bare Delete (the
+    // forward-delete key) maps to nil so it only edits the search text.
+    // Backspace (GDK_KEY_BackSpace, 0xff08) is deliberately NOT mapped at
+    // all, so it can never delete an item.
     case Keyval.delete:
-      return .delete
+      return isControlDown ? .delete : nil
     case Keyval.one:
       return isControlDown ? .switchTab(.one) : nil
     case Keyval.two:
@@ -210,6 +202,16 @@ public enum KeyEventMapping {
       return isControlDown && isShiftDown ? .replaceSnippet : nil
     case Keyval.comma:
       return isControlDown ? .openSettings : nil
+    // T-AUD-KBD: Ctrl+] / Ctrl+[ cycle the type filter; Ctrl+Y toggles the
+    // preview (Space types into the search entry, so it can't be used). Ctrl+Y
+    // shadows GtkText's redo in the search entry — accepted: the capture-phase
+    // handler runs first and the search box rarely needs redo.
+    case Keyval.bracketRight:
+      return isControlDown ? .cycleFilter(forward: true) : nil
+    case Keyval.bracketLeft:
+      return isControlDown ? .cycleFilter(forward: false) : nil
+    case Keyval.yLower, Keyval.yUpper:
+      return isControlDown ? .togglePreview : nil
     default:
       return nil
     }

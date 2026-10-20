@@ -62,6 +62,9 @@ final class SnippetEditorWindow: NSWindow, NSWindowDelegate {
       defer: false
     )
     isReleasedWhenClosed = false
+    // Can be prefilled from a clipboard item (may be a secret): keep it out of
+    // screen sharing/recording (best effort; see `excludeFromScreenSharing()`).
+    excludeFromScreenSharing()
     level = .floating
     delegate = self
   }
@@ -115,12 +118,14 @@ final class SnippetEditorWindow: NSWindow, NSWindowDelegate {
       )
     )
     positionRelativeToPicker(pickerPanel)
-    // `activate()` (no `ignoringOtherApps:`) — the `ignoringOtherApps:`
-    // overload is deprecated as of macOS 14, our exact deployment floor;
-    // plain `activate()` is the current replacement and behaves
-    // equivalently for a single-app-instance accessory app like Clipnest.
-    NSApp.activate()
+    // Plain `NSApp.activate()` is refused for an LSUIElement accessory app
+    // when another app is frontmost, so typing/Esc went to that app. Reuse
+    // the shared Settings/Welcome activator: it flips to `.regular`,
+    // force-activates, and restores `.accessory` when the last observed
+    // Clipnest window (this one included) closes.
+    SettingsFocusCoordinator.activator.activate(observing: self)
     makeKeyAndOrderFront(nil)
+    orderFrontRegardless()
   }
 
   /// Lays the editor out beside `pickerPanel` as a side-by-side pair (see

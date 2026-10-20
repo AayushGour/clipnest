@@ -153,25 +153,33 @@ enum Inflate {
   /// doc comment). Returns `nil` on any malformed/truncated input — never
   /// crashes, matching this module's "OCR is best-effort, a bad image must
   /// never crash a background pass" discipline.
-  static func decompress(_ data: [UInt8]) -> [UInt8]? {
+  ///
+  /// `maxOutputBytes` (T-PNGBOMB1) caps the decompressed size: a tiny
+  /// stream can legally expand ~1000:1 (a "decompression bomb"), so the
+  /// caller passes the size it EXPECTS (PNG: derived from IHDR) and the
+  /// decode fails closed (`nil`) the moment output would exceed it,
+  /// instead of growing the buffer without bound. `nil` = uncapped (tests).
+  static func decompress(_ data: [UInt8], maxOutputBytes: Int? = nil) -> [UInt8]? {
+    let limit = maxOutputBytes ?? Int.max
     var reader = BitReader(data)
     var output: [UInt8] = []
     while true {
       guard let isFinalBlock = reader.bits(1), let blockType = reader.bits(2) else { return nil }
       switch blockType {
       case 0:
-        guard decodeStoredBlock(&reader, into: &output) else { return nil }
+        guard decodeStoredBlock(&reader, into: &output, limit: limit) else { return nil }
       case 1:
         guard
           decodeCompressedBlock(
             &reader, literalTable: fixedLiteralLengthTable, distanceTable: fixedDistanceTable,
-            into: &output)
+            into: &output, limit: limit)
         else { return nil }
       case 2:
         guard let (literalTable, distanceTable) = readDynamicTables(&reader) else { return nil }
         guard
           decodeCompressedBlock(
-            &reader, literalTable: literalTable, distanceTable: distanceTable, into: &output)
+            &reader, literalTable: literalTable, distanceTable: distanceTable, into: &output,
+            limit: limit)
         else { return nil }
       default:
         // btype == 3 is reserved/invalid per RFC 1951.
@@ -182,9 +190,9 @@ enum Inflate {
     return output
   }
 
-  private static func decodeStoredBlock(_ reader: inout BitReader, into output: inout [UInt8])
-    -> Bool
-  {
+  private static func decodeStoredBlock(
+    _ reader: inout BitReader, into output: inout [UInt8], limit: Int
+  ) -> Bool {
     reader.alignToByteBoundary()
     guard let lenLow = reader.readByte(), let lenHigh = reader.readByte(),
       let complementLow = reader.readByte(), let complementHigh = reader.readByte()
@@ -192,6 +200,7 @@ enum Inflate {
     let length = Int(lenLow) | (Int(lenHigh) << 8)
     let complement = Int(complementLow) | (Int(complementHigh) << 8)
     guard length == (~complement & 0xFFFF) else { return false }
+    guard output.count <= limit - length else { return false }
     for _ in 0..<length {
       guard let byte = reader.readByte() else { return false }
       output.append(byte)
@@ -201,11 +210,12 @@ enum Inflate {
 
   private static func decodeCompressedBlock(
     _ reader: inout BitReader, literalTable: HuffmanTable, distanceTable: HuffmanTable,
-    into output: inout [UInt8]
+    into output: inout [UInt8], limit: Int
   ) -> Bool {
     while true {
       guard let symbol = decodeSymbol(&reader, literalTable) else { return false }
       if symbol < 256 {
+        guard output.count < limit else { return false }
         output.append(UInt8(symbol))
       } else if symbol == 256 {
         return true
@@ -223,6 +233,7 @@ enum Inflate {
         let matchDistance = distanceBase[distanceSymbol] + distanceExtra
 
         guard matchDistance > 0, matchDistance <= output.count else { return false }
+        guard output.count <= limit - matchLength else { return false }
         var copyFrom = output.count - matchDistance
         for _ in 0..<matchLength {
           output.append(output[copyFrom])

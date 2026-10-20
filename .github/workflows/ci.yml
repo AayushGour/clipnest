@@ -1,4 +1,4 @@
-name: CI (Linux)
+name: CI
 
 # The PR gate for the Linux port — did not exist before P7-F. release.yml
 # (macOS) only runs on push to main and only builds/releases the mac app;
@@ -18,15 +18,34 @@ name: CI (Linux)
 # exactly why this workflow needs the toolchain baked into the image
 # instead.
 
+# Also a reusable workflow (`workflow_call`): release.yml calls it as its
+# `test` job, so a push to main only ships if the exact same Linux + macOS
+# suites pass. One definition of "green" for PRs and releases (T-CIGATE1).
+#
+# The macOS job is the ONLY place the Mac app's `xcodebuild test` suite runs
+# before merge (the Linux job cannot build ClipnestApp/). It runs on the same
+# runner/Xcode as release.yml (macos-26 / Xcode 26 — required, see the
+# comment in release.yml about the SwiftData "Unable to determine Bundle
+# Name" crash on Xcode 16).
+
 on:
   pull_request:
   workflow_dispatch: {}
+  workflow_call: {}
 
 permissions:
   contents: read
 
+# New pushes to a PR cancel the superseded run. When called from release.yml
+# (event is push/dispatch, github.workflow is "Release") the run is never
+# cancelled — a release gate must finish.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   build-and-test:
+    name: Linux (${{ matrix.series }})
     runs-on: ubuntu-latest
     container: swift:6.0-${{ matrix.series }}
     strategy:
@@ -34,7 +53,7 @@ jobs:
       matrix:
         series: [jammy, noble]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install system dependencies
         # Exactly Package.swift's own `providers:` entries for CXlib/CGtk4,
@@ -76,3 +95,46 @@ jobs:
         # it isn't part of this SPM package graph at all and doesn't build
         # outside Xcode — see Package.swift's own top comment).
         run: scripts/lint.sh Sources Tests
+
+  macos:
+    name: macOS (swift test + app xcodebuild test)
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Select Xcode
+        uses: maxim-lobanov/setup-xcode@ed7a3b1fda3918c0306d1b724322adc0b8cc0a90 # v1.7.0
+        with:
+          xcode-version: 'latest-stable'   # same as release.yml
+
+      - name: Lint (swift-format, strict)
+        # Native Xcode swift-format, exactly as release.yml always did. The
+        # pinned-binary check in scripts/lint.sh needs Docker, which hosted
+        # macOS runners do not have; the Linux job above already certifies
+        # Sources/Tests with the pinned binary via scripts/lint.sh.
+        run: |
+          swift format lint --recursive --strict Sources Tests
+          swift format lint --recursive --strict ClipnestApp/Sources
+
+      - name: Install build tools
+        run: brew install xcodegen
+
+      - name: swift test (core package)
+        run: swift test
+
+      - name: xcodegen + xcodebuild test (Mac app, unsigned)
+        # Mirrors scripts/release-local.sh's quality gate. The XCTest harness
+        # prints a decoy "Executed 0 tests" line, so require BOTH the
+        # '** TEST SUCCEEDED **' marker and the Swift Testing summary line —
+        # an exit code of 0 alone is not trusted.
+        run: |
+          set -euo pipefail
+          (cd ClipnestApp && xcodegen generate)
+          xcodebuild test \
+            -project ClipnestApp/ClipnestApp.xcodeproj \
+            -scheme ClipnestApp \
+            -destination 'platform=macOS' \
+            CODE_SIGNING_ALLOWED=NO \
+            2>&1 | tee "$RUNNER_TEMP/xcodebuild-test.log"
+          grep -q '\*\* TEST SUCCEEDED \*\*' "$RUNNER_TEMP/xcodebuild-test.log"
+          grep -Eq 'Test run with [0-9]+ tests? in [0-9]+ suites? passed' "$RUNNER_TEMP/xcodebuild-test.log"

@@ -47,8 +47,8 @@ Global hotkey defaults to **Alt+Super+V**, rebindable in Settings → Shortcuts.
 |---|---|
 | `↑` `↓` | move · `Enter` paste · `Alt+Enter` paste as plain text |
 | `Ctrl+F` | search · `Ctrl+P` pin · `Ctrl+1/2/3` tabs |
-| `Delete` | delete highlighted (only when the search box is empty — see below) |
-| `Ctrl+S` | save as snippet · `Ctrl+N` new snippet · `Ctrl+Shift+E` replace |
+| `Ctrl+Delete` | delete highlighted (bare `Delete` / `Backspace` never delete an item — see below) |
+| `Ctrl+S` | save as snippet · `Ctrl+N` new snippet · `Ctrl+Shift+E` edit |
 | `Ctrl+,` | Settings · `Esc` close |
 
 The footer's `Enter` hint reflects what will actually happen: it reads
@@ -63,14 +63,14 @@ is only whether Clipnest can also synthesize the paste keystroke for you.
 
 **First-run Welcome window.** Shown once at startup (and once for users
 upgrading from a version without it), replacing the old "Set Up Auto-Paste?"
-dialog. Two steps in one non-modal window: (1) *Paste straight
+dialog. Three steps in one non-modal window: (1) *Paste straight
 into apps* with two sub-rows, *Keyboard access* (**Grant Access…** runs the
 same `pkexec clipnest-grant-input` flow as Settings → Permissions; on failure
 the button becomes **Try Again**; a dismissed or unavailable polkit dialog
 shows "Authorization was cancelled or not available…" with the manual
 `pkexec` command, the raw pkexec text only goes to the log) and *Hotkey everywhere* (the GNOME extension
 status: on, "Log out once to finish setup", **Turn On**, **Try Again**, or a
-plain note on non-GNOME desktops), (2) *Try your hotkey* (your live hotkey as
+plain note on non-GNOME desktops), (2) *Open Clipnest at login* (a checkbox, pre-checked until you have answered once, written to the same `~/.config/autostart/clipnest.desktop` that Settings → General edits when you press Continue; Skip leaves it untouched), (3) *Try your hotkey* (your live hotkey as
 key caps, a *Change in Settings…* button that opens Settings → Shortcuts, and
 a status that flips to "It works" when the
 picker opens; a hint appears after 15 s; while the GNOME extension still needs
@@ -84,9 +84,9 @@ way, or killing the app, never re-shows it. Reopen it from the tray menu
 
 Every row also has pin / save-as-snippet / delete buttons, and a right-click menu.
 
-`Delete` deliberately edits the search text when the caret has something to
-delete, and acts on the highlighted item otherwise — matching macOS. An earlier
-version deleted the item unconditionally, which destroyed clips while typing.
+Deleting a clip requires `Ctrl+Delete` (macOS: `⌘⌫`). Bare `Delete` and
+`Backspace` only ever edit the search text; they never delete an item. Earlier
+versions let a bare key destroy the highlighted clip with no confirmation.
 
 ---
 
@@ -226,3 +226,26 @@ enabled.
 Your data lives in `~/.local/share/Clipnest/` (history and snippets, SQLite) and
 `~/.config/clipnest/settings.json`. Uninstalling never deletes it — `apt-get
 purge` deliberately leaves the data directory alone.
+
+## In-app update installer (`clipnest-install-update`)
+
+Settings → General → Install Update streams the downloaded .deb to
+`pkexec /usr/libexec/clipnest/clipnest-install-update <sha256>`
+(polkit action `app.clipnest.install-update`). The root helper re-verifies the
+SHA-256 and `Package: clipnest` on its own root-owned copy, and refuses any
+version that is not strictly newer than the installed one (exit status 3 — no
+downgrade or same-version reinstall), before `apt-get install -y`. Fixture test (installs a dummy `clipnest` package, so use
+a container only):
+
+```
+docker run --rm -v "$PWD":/src -w /src ubuntu:24.04 sh packaging/linux/tests/test-install-update.sh
+```
+
+Covers: good file installs; tampered file refused with nothing installed; bad,
+uppercase, short, long and injection-shaped digest arguments refused; wrong
+package name refused; stdin over 200 MiB refused; downgrade and same-version
+refused with exit 3 while upgrades (incl. epoch) install; work directory cleaned up.
+
+Package install output: `debian/clipnest.postinst` prints one line on configure
+saying the GNOME Shell extension is set up automatically on first launch and a
+log out/in is needed once to activate the hotkey.

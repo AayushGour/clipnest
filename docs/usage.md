@@ -73,6 +73,8 @@ curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/up
 
 </div>
 
+Before replacing anything it checks that the new app's version matches the release and that its code signature is valid and made by the same signer as your installed copy (a mismatch aborts with a `SECURITY` message and leaves your app untouched). The new app is copied next to the old one and swapped in only after those checks pass, and the old one is restored if the swap fails. Clicking the version in the picker footer does the same, but runs the script from the release tag being installed rather than from `main`.
+
 ### Download the `.dmg`
 
 Grab the latest `.dmg` from the project's [Releases](https://github.com/AayushGour/clipnest/releases) page, open it, and drag **Clipnest** into your Applications folder.
@@ -99,7 +101,7 @@ After that first launch, Clipnest opens normally like any other app. Switching t
 
 ## 4. First launch & permissions
 
-When Clipnest first launches, it shows a small **Welcome** window once — also once after you update from a version that didn't have it — and then sits quietly in your menu bar. The window has two steps: **(1)** an optional Accessibility grant, and **(2)** *Try your hotkey* — your live ⌥⌘V binding, a button to change it in Settings → Shortcuts, and a live check that confirms the hotkey opens the picker. Skip any step, or close the window with **Esc** / **⌘W** / the red button; it won't appear again on its own. Reopen it any time from the menu-bar icon → **Getting Started…**. While it is open Clipnest shows its Dock icon (macOS requires that to bring the window to the front) and hides it again when you close it (unless Settings is still open). Clipboard capture, browsing, and search all work immediately with no permissions granted at all.
+When Clipnest first launches, it shows a small **Welcome** window once — also once after you update from a version that didn't have it — and then sits quietly in your menu bar. The window has three steps: **(1)** an optional Accessibility grant (needed only for pasting straight into other apps and expanding snippets; the hotkey itself works without it), **(2)** *Open Clipnest at login* — a pre-checked switch, applied when you press Continue, that is the same setting as Settings → General → Launch Clipnest at login (if macOS refuses, the reason is shown and nothing is changed), and **(3)** *Try your hotkey* — your live ⌥⌘V binding, a button to change it in Settings → Shortcuts, and a live check that confirms the hotkey opens the picker. Skip any step, or close the window with **Esc** / **⌘W** / the red button; it won't appear again on its own. Reopen it any time from the menu-bar icon → **Getting Started…**. While it is open Clipnest shows its Dock icon (macOS requires that to bring the window to the front) and hides it again when you close it (unless Settings is still open). Clipboard capture, browsing, and search all work immediately with no permissions granted at all.
 
 **Accessibility** is the one optional permission Clipnest asks for, and it's only needed for two things:
 
@@ -154,7 +156,7 @@ Press **⌘P**, click the pin icon on a row, or right-click → Pin/Unpin. Pinne
 
 ### Deleting
 
-Press **⌘⌫** (or plain Delete), click the trash icon on a row, or right-click → Delete, to remove an item for good (this also frees up the disk space it was using, for images/rich text).
+Press **⌘⌫** (macOS) or **Ctrl+Delete** (Linux) — plain Delete/Backspace never delete an item — click the trash icon on a row, or right-click → Delete, to remove an item for good (this also frees up the disk space it was using, for images/rich text).
 
 ### Hovering for a full preview
 
@@ -281,7 +283,10 @@ Opening Settings briefly shows a Dock icon while that window is focused — Clip
 | Pin / unpin highlighted item | `⌘P` | `Ctrl+P` |
 | Save highlighted item as a snippet | `⌘S` | `Ctrl+S` |
 | New snippet *(Snippets tab)* | `⌘N` | `Ctrl+N` |
-| Delete highlighted item / snippet | `⌘⌫` (or `Delete`) | `Delete` |
+| Edit highlighted snippet *(Snippets tab)* | `⌘E` | `Ctrl+Shift+E` |
+| Next / previous type filter *(History, Pinned)* | `⌘]` / `⌘[` | `Ctrl+]` / `Ctrl+[` |
+| Show / hide the preview of the highlighted item | `⌘Y` | `Ctrl+Y` |
+| Delete highlighted item / snippet | `⌘⌫` | `Ctrl+Delete` |
 | Switch to History tab | `⌘1` | `Ctrl+1` |
 | Switch to Pinned tab | `⌘2` | `Ctrl+2` |
 | Switch to Snippets tab | `⌘3` | `Ctrl+3` |
@@ -289,6 +294,8 @@ Opening Settings briefly shows a Dock icon while that window is focused — Clip
 | Close the picker | `Esc` (or the × button at the right of the header) | `Esc` (or the × button) |
 
 The two **global** shortcuts above — **Open/toggle the picker** and **Expand a snippet by Tag** — are rebindable from **Settings → Shortcuts** (**⌘,**): click a shortcut field and press your preferred key combination; it takes effect immediately (see [Settings window](#8-settings-window)). The shortcuts *inside* the picker (search, pin, delete, switch tabs, and so on, listed in the table above) are fixed and aren't currently customizable.
+
+**Screen readers.** Each picker row is a single VoiceOver (macOS) / Orca (Linux) item, spoken as its type, whether it is pinned, its age, and the first ~80 characters ("Text, pinned, 2 minutes ago: …", "Image, 1200 by 800, 5 minutes ago", "Snippet Sig, keyword sig: …"). On macOS the row's actions (Pin/Unpin, Delete, Save as Snippet, Paste as plain text, Copy Recognized Text, Edit) are in the VoiceOver Actions rotor, and VoiceOver's default action pastes. Keyboard focus stays in the search field while you press ↑/↓, so VoiceOver announces the newly highlighted row instead of moving focus. Tabs and type filters are announced with their full names ("Images filter") and "selected"; the active type filter also shows its name next to the filter icons. The preview is off by default while arrowing (Settings → General); ⌘Y / Ctrl+Y shows it for the highlighted item on demand.
 
 `⌘,` (Command+Comma) also opens Settings while the Settings window itself is focused — the standard macOS convention — but it is deliberately **not** a global shortcut: unlike `⌥⌘V`/`⌥⌘E` above, it only works from inside the picker or from Settings itself, so it never takes `⌘,` away from whatever other app you're using (that app's own Preferences/Settings shortcut keeps working normally).
 
@@ -350,7 +357,8 @@ Everything Clipnest stores is local to those folders — removing them leaves no
 Since 1.0, Clipnest runs on **Ubuntu 22.04 and 24.04 with GNOME**, on X11 or Wayland, for amd64 and arm64 — a native GTK 4 app built from the same Swift core, so everything in sections 5–8 applies, with the Linux keys from the [shortcuts reference](#9-keyboard-shortcuts-reference).
 
 - **Install, update and uninstall:** see [Contribute → Linux details]({{ '/contribute/#linux' | relative_url }}) and the [Download page]({{ '/download/' | relative_url }}). In short (to uninstall, run the same command with `uninstall.sh` instead of `install.sh`; see [Uninstall](#11-uninstall)): run the same one-line command as on the Mac (`curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash`) as your normal user; it detects Linux and your CPU, downloads and verifies the latest release, and installs it. Or download the tarball for your architecture from the [latest release](https://github.com/AayushGour/clipnest/releases/latest), verify it with `sha256sum -c SHA256SUMS`, and run `./install.sh`.
-- **Tray icon:** Open Clipnest, Pause Capture, Settings…, Quit.
+- **Tray icon:** Open Clipnest, Pause Capture, Settings…, Check for Updates… (opens Settings → General and checks now), Getting Started…, Quit.
+- **macOS menu-bar icon:** also has **Check for Updates…** — an immediate check that shows "You're up to date (x.y.z)" or offers to update.
 - **Auto-paste** needs a one-time permission, offered on first launch or from **Settings → Permissions**. It adds you to a dedicated `clipnest-input` group that can create a virtual keyboard and nothing else. Log out and back in afterwards; until then Clipnest copies your choice and you press Ctrl+V yourself.
 - **Start at login** is off by default, and nothing is captured while Clipnest isn't running — turn on **Settings → General → Launch Clipnest at login**.
 - **OCR** is off by default; turn it on in **Settings → History**. It needs the `clipnest-ocr` packages, which `install.sh` installs.

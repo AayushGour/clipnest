@@ -63,7 +63,7 @@ final class WelcomeWindowController: NSObject, NSWindowDelegate {
     window.setContentSize(WelcomeView.windowSize)
     Self.center(window)
 
-    // Step 2: the picker became visible (menu item or hotkey).
+    // Step 3: the picker became visible (menu item or hotkey).
     environment.onPickerShown = { [weak session] in session?.viewModel.pickerDidShow() }
     // Never paste a test pick into the welcome window itself.
     environment.isOwnWindowFrontmost = { [weak self] in self?.isFrontmost ?? false }

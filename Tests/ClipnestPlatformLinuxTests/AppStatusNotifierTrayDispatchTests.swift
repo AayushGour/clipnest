@@ -290,6 +290,20 @@ import Testing
       #expect(!isPaused)
     }
 
+    @Test("Clicking Check for Updates… fires onCheckForUpdates, not Settings")
+    func checkForUpdatesClickDispatches() throws {
+      let (tray, _) = try connectedTray()
+      var checks = 0
+      var settingsOpens = 0
+      tray.onCheckForUpdates = { checks += 1 }
+      tray.onOpenSettings = { settingsOpens += 1 }
+      _ = tray.handle(
+        .menuEvent(itemID: DBusMenuItemID.checkForUpdates, eventID: DBusMenuEventID.clicked),
+        message: menuCall("Event", serial: 20))
+      #expect(checks == 1)
+      #expect(settingsOpens == 0)
+    }
+
     @Test("AboutToShow asks the panel to re-fetch only when the paused state changed elsewhere")
     func aboutToShowReportsExternalChange() throws {
       let (tray, _) = try connectedTray()

@@ -29,6 +29,7 @@
 // documents for `gtk_label_set_text`/`_set_wrap`/etc. — which requires this
 // file to import the module itself.
 import CGtk4
+import ClipnestViewModels
 
 // MARK: - T-LXUPD: Linux self-update types + presentation logic
 //
@@ -87,7 +88,7 @@ public enum LinuxAppUpdaterError: Error, Equatable, Sendable {
   case checksumMismatch
   /// `pkexec` reported the authentication dialog was dismissed/denied
   /// (verified exit code 126 — see `LinuxAppUpdater`'s
-  /// `runPkexecAptGetInstall(debPath:)` doc comment).
+  /// `runPkexecInstallUpdate(digest:debInput:)` doc comment).
   case installationCancelled
   case installationFailed(String)
 }
@@ -380,11 +381,26 @@ extension SettingsWindow {
   /// second implementation), then re-reconciles this section from its
   /// (possibly now-changed) result.
   @MainActor
-  private func checkForUpdatesFromUI() {
+  public func checkForUpdatesFromUI() {
+    guard !isCheckingForUpdates else { return }
+    isCheckingForUpdates = true
     let checker = updateChecker
+    if let updateExplanationLabel {
+      setStatusLabel(updateExplanationLabel, text: "Checking for updates…")
+    }
     Task { @MainActor [weak self] in
-      await checker.checkNow()
+      let outcome = await checker.checkNowReportingOutcome()
+      self?.isCheckingForUpdates = false
       self?.refreshUpdateAvailabilityUI()
+      // Visible feedback for the two non-"available" outcomes (the available
+      // case is fully rendered by the refresh above).
+      switch outcome {
+      case .upToDate, .failed:
+        if let label = self?.updateExplanationLabel {
+          self?.setStatusLabel(label, text: UpdateCheckFeedback(outcome: outcome).title)
+        }
+      case .updateAvailable: break
+      }
     }
   }
 

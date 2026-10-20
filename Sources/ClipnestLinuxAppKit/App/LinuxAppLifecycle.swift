@@ -462,6 +462,7 @@ public enum LinuxAppLifecycle {
     let tray = StatusNotifierTray(ownConnection: ownConnection, watchConnection: watchConnection)
     tray.onOpenClipnest = { Task { @MainActor in environment.togglePicker() } }
     tray.onOpenSettings = { Task { @MainActor in environment.openSettings() } }
+    tray.onCheckForUpdates = { Task { @MainActor in environment.checkForUpdatesFromTray() } }
     tray.onOpenGettingStarted = { Task { @MainActor in welcomeCoordinator?.show() } }
     // Synchronous hops (the tray's receive thread blocks until the GTK
     // thread's main-queue pump runs them) so the menu reads back the state

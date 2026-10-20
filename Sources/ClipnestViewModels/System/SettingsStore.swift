@@ -66,6 +66,7 @@ public final class SettingsStore {
     static let userExcludedBundleIDs = "settings.userExcludedBundleIDs"
     static let hasRequestedAccessibility = "settings.hasRequestedAccessibility"
     static let hasSeenWelcome = "settings.hasSeenWelcome"
+    static let hasChosenLaunchAtLogin = "settings.hasChosenLaunchAtLogin"
     static let automaticallyCheckForUpdates = "settings.automaticallyCheckForUpdates"
     static let isTextRecognitionEnabled = "settings.isTextRecognitionEnabled"
     static let textRecognitionQuality = "settings.textRecognitionQuality"
@@ -114,6 +115,16 @@ public final class SettingsStore {
   /// every other key here, so the SwiftData migration rule does not apply.
   public var hasSeenWelcome: Bool {
     didSet { defaults.set(hasSeenWelcome, forKey: Key.hasSeenWelcome) }
+  }
+
+  /// Whether the user has answered the welcome window's "Open Clipnest at
+  /// login" step (T-WELCOMELOGIN1). Until then the switch starts pre-checked
+  /// (recommended); afterwards it starts from the real login-item state so
+  /// reopening "Getting Started…" never re-enables what Settings turned off.
+  /// The login item itself is NOT mirrored here (SMAppService / the autostart
+  /// `.desktop` file stay the source of truth). Absent -> false.
+  public var hasChosenLaunchAtLogin: Bool {
+    didSet { defaults.set(hasChosenLaunchAtLogin, forKey: Key.hasChosenLaunchAtLogin) }
   }
 
   /// Approved feature: whether `UpdateChecker` runs its 24h background
@@ -196,6 +207,7 @@ public final class SettingsStore {
     // `bool(forKey:)` is correct: absent -> false, which IS the default
     // (upgraders have no key, so they see the welcome once).
     self.hasSeenWelcome = defaults.bool(forKey: Key.hasSeenWelcome)
+    self.hasChosenLaunchAtLogin = defaults.bool(forKey: Key.hasChosenLaunchAtLogin)
     // `object(forKey:) as? Bool` distinguishes "absent" (-> default true)
     // from an explicitly-stored false, same reasoning as `isCaptureEnabled`.
     self.automaticallyCheckForUpdates =

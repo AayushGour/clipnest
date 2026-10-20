@@ -41,6 +41,8 @@ struct TabSwitcher: View {
             }
         }
         .buttonStyle(.plain)
+        .accessibilityLabel(tab.accessibilityLabel)
+        .accessibilityAddTraits(selection == tab ? .isSelected : [])
       }
     }
   }

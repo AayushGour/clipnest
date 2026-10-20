@@ -68,9 +68,16 @@ struct ExpandingIconButton: View {
   /// callers with no notion of "active" (a plain icon button) don't need to
   /// pass anything.
   var isActive: Bool = false
+  /// T-AUD-VO: spoken name when it should be fuller than the visible `title`
+  /// (e.g. "Images filter" for the "Image" chip). Defaults to `title`.
+  var accessibilityLabelOverride: String?
   let action: () -> Void
 
   @State private var isHovering = false
+
+  /// The title shows on hover, and permanently while the button is the active
+  /// one (T-AUD-KBD) — so the active filter's NAME is visible, not icon-only.
+  private var isExpanded: Bool { isHovering || isActive }
 
   /// Icon-only resting size — a square, matching the icon-only chip design
   /// this replaces (`TypeFilterChips`'s prior 22×22pt buttons).
@@ -86,10 +93,10 @@ struct ExpandingIconButton: View {
 
   var body: some View {
     Button(action: action) {
-      HStack(spacing: isHovering ? Self.contentSpacing : 0) {
+      HStack(spacing: isExpanded ? Self.contentSpacing : 0) {
         Image(systemName: systemName)
           .font(.system(size: Self.fontSize, weight: isActive ? .semibold : .regular))
-        if isHovering {
+        if isExpanded {
           Text(title)
             .font(.system(size: Self.fontSize, weight: isActive ? .semibold : .regular))
             .lineLimit(1)
@@ -98,7 +105,7 @@ struct ExpandingIconButton: View {
         }
       }
       .foregroundStyle(isActive ? .primary : .secondary)
-      .padding(.horizontal, isHovering ? Self.horizontalPadding : 0)
+      .padding(.horizontal, isExpanded ? Self.horizontalPadding : 0)
       .frame(
         minWidth: Self.compactSize, minHeight: Self.compactSize, maxHeight: Self.compactSize
       )
@@ -114,7 +121,8 @@ struct ExpandingIconButton: View {
       }
     }
     .help(title)
-    .accessibilityLabel(title)
+    .accessibilityLabel(accessibilityLabelOverride ?? title)
+    .accessibilityAddTraits(isActive ? .isSelected : [])
   }
 
   private var backgroundColor: Color {

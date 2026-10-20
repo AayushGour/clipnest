@@ -93,11 +93,15 @@ the human-readable list also shown in Settings → Shortcuts):
 | Escape | Dismiss (via `onDismiss`). The header's trailing close (x) button (tooltip `PickerCloseAffordance.buttonLabel`) calls the same `dismiss()` |
 | Ctrl+F | Focus the search field |
 | Ctrl+P | Toggle pin |
-| Delete (Ctrl+Delete also accepted) | Delete highlighted item, EXCEPT when the search field has focus and pressing Delete would actually edit its content (a selection, or a character after the caret) — then the key edits the search text instead, same as macOS. See below. |
+| Ctrl+Delete (bare Delete and Backspace never delete) | Delete highlighted item, EXCEPT when the search field has focus and the key would actually edit its content (a selection, or a character after the caret) — then the key edits the search text instead. See below. (T-BKSPDEL1: macOS equivalent is ⌘⌫.) |
 | Ctrl+1 / 2 / 3 | Switch to History / Pinned / Snippets |
 | Ctrl+S | Save highlighted item as a new snippet (History/Pinned) |
 | Ctrl+N | New blank snippet (Snippets tab only) |
-| Ctrl+Shift+E | Edit the highlighted snippet (Snippets tab only) |
+| Ctrl+Shift+E | Edit the highlighted snippet (Snippets tab only) — `PickerViewModel.editHighlightedSnippet()` |
+| Ctrl+] / Ctrl+[ | Next / previous type filter (`PickerKeyAction.cycleFilter(forward:)`; activates the neighbouring chip, wrapping; no-op on Snippets). Order and names come from the shared `KindFilterOptions` |
+| Ctrl+Y | Toggle the preview of the highlighted row (`PickerViewModel.togglePreviewForHighlighted()`), even when "show preview on keyboard selection" is off. Shadows GtkText's redo in the search entry |
+
+Assistive technology (Orca): every list row's `GtkListBoxRow` gets an accessible label from `RowAccessibility.itemLabel` / `snippetLabel`; tab buttons ("History tab"), filter chips ("Images filter") and the per-row action buttons carry explicit accessible labels, and a filter change is announced via `GTKAccessibility.announce` (GTK >= 4.14 only). The active filter's name is also shown as text beside the icon-only chips. GTK has no custom-actions API, so the row actions are the labelled buttons.
 | Ctrl+, | Open Settings (dismisses the picker first) |
 
 ### Delete-vs-search-field parity with macOS (T-KBPARITY3)
@@ -545,8 +549,8 @@ public enum GTKClipboardCrashNoticeDetection {
 
 The Linux first-run welcome (T-WELCOME1-LX, design in `.claude/design.md`
 "Welcome window"); replaces the removed `AutoPasteStartupPrompt`. One
-non-modal, non-resizable `GtkWindow` (520 pt wide) with two stacked step
-rows (1 permission, 2 *Try your hotkey*) driven by the shared `WelcomeViewModel` (`ClipnestViewModels`). Source:
+non-modal, non-resizable `GtkWindow` (520 pt wide) with three stacked step
+rows (1 permission, 2 *Open Clipnest at login*, 3 *Try your hotkey*) driven by the shared `WelcomeViewModel` (`ClipnestViewModels`). Source:
 `Sources/ClipnestGTK/Welcome/`.
 
 ```swift
@@ -555,6 +559,8 @@ public final class WelcomeWindow {
     public init(
       keyboardAccess: WelcomeKeyboardAccess,
       extensionStatus: GnomeExtensionStatus,
+      launchAtLogin: WelcomeLaunchAtLogin,       // step 2 backend (autostart file)
+      launchAtLoginPreChecked: Bool,
       readHotkey: @escaping () -> WelcomeHotkey,
       requestUInputGrant: @escaping (_ completion: @escaping UInputGrantCompletion) -> Void,
       extensionAction: @escaping (WelcomeGnomeExtensionPresentation.Action) -> Void,
@@ -593,7 +599,7 @@ public final class WelcomeWindow {
 - **Use-after-free guard** — `isDismissed` is set on `close-request` and
   re-checked before the `pkexec` completion (or the 15 s hint timer) touches
   any widget.
-- **Accessibility** — each row is a labelled group ("Step N of 2: heading,
+- **Accessibility** — each row is a labelled group ("Step N of 3: heading,
   state"); key caps are hidden from AT because the body sentence spells the
   hotkey out. Live announcements use `gtk_accessible_announce` when the
   running GTK has it (>= 4.14) and are skipped on GTK 4.6 (Ubuntu 22.04).

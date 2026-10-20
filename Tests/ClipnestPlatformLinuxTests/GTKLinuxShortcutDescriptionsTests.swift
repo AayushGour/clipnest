@@ -42,9 +42,9 @@ struct GTKLinuxShortcutDescriptionsTests {
     let delete = LinuxShortcutDescriptions.all.first {
       $0.description.contains("Delete the highlighted item")
     }
-    #expect(delete?.combo == "Delete")
+    #expect(delete?.combo == "Ctrl+Delete")
     #expect(delete?.description.contains("edit the search box") == true)
-    #expect(delete?.description.contains("Ctrl+Delete") == true)
+    #expect(delete?.description.contains("Backspace never delete") == true)
   }
 
   // Keyboard-parity pass (routed follow-up): the four newly-bound chords

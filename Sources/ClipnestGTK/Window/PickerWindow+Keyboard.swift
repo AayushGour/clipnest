@@ -276,33 +276,13 @@ extension PickerWindow {
         viewModel.presentCreateSnippetForm()
       }
     case .replaceSnippet:
-      // Opens the edit form for the highlighted snippet — the same
-      // `presentEditSnippetForm(_:)` a Snippets-tab row's "Edit" hover
-      // button/context-menu item already calls
-      // (`PickerWindow+RowActions.swift`). Unlike macOS, this has no global
-      // ⌥⌘E analogue to defer to: macOS's ⌥⌘E is `SnippetExpander`'s
-      // system-wide "replace the OS-level text selection with a snippet's
-      // body" hotkey, registered outside the picker entirely
-      // (`HotkeyManager`/`AppEnvironment.swift`) — it does not open this
-      // edit form and has no notion of "the highlighted row." `PickerView`'s
-      // own key handler has no ⌥⌘E case at all. `presentEditSnippetForm(_:)`
-      // takes a concrete `Snippet`, and `PickerViewModel.highlightedSnippet`
-      // is `private` (not reachable from this module) — so the lookup below
-      // mirrors the exact `snippetRows.first { $0.id == id }` pattern
-      // `PickerView.swift`'s own `.onChange(of: previewTargetID)` already
-      // uses against the same public `snippetRows`/`selectedSnippetID`,
-      // rather than adding a new `PickerViewModel` method for this one
-      // dispatch site. A no-op off the Snippets tab or with nothing
-      // highlighted, mirroring `saveHighlightedAsSnippet()`/
-      // `deleteHighlighted()`'s own "guard ... else return" shape for an
-      // absent highlighted row.
-      MainActor.assumeIsolated {
-        guard viewModel.activeTab == .snippets,
-          let id = viewModel.selectedSnippetID,
-          let snippet = viewModel.snippetRows.first(where: { $0.id == id })
-        else { return }
-        viewModel.presentEditSnippetForm(snippet)
-      }
+      // Edit form for the highlighted snippet (Ctrl+Shift+E). NOT macOS's
+      // global ⌥⌘E expansion hotkey — see `PickerViewModel.editHighlightedSnippet`.
+      MainActor.assumeIsolated { viewModel.editHighlightedSnippet() }
+    case .cycleFilter(let forward):
+      cycleKindFilter(forward: forward)
+    case .togglePreview:
+      MainActor.assumeIsolated { viewModel.togglePreviewForHighlighted() }
     case .openSettings:
       // Mirrors macOS's ⌘, (`PickerPanel.onCommandComma` ->
       // `viewModel.openSettingsFromPicker()`): dismisses the picker, then

@@ -54,6 +54,7 @@ extension PickerWindow {
         groupSource = button
       }
       gtk_toggle_button_set_active(button, tab == .history ? 1 : 0)
+      GTKAccessibility.setLabel(button, tab.accessibilityLabel)
       gtkConnect(
         button, signal: "toggled",
         context: TabButtonContext(window: self, tab: tab),
@@ -99,6 +100,7 @@ extension PickerWindow {
   func buildChips() {
     var groupSource: OpaquePointer?
     func makeChip(kind: ItemKind?, iconName: String, tooltip: String) {
+      chipKinds.append(kind)
       let button: OpaquePointer = gtk_toggle_button_new()
       gtk_button_set_icon_name(button, iconName)
       gtk_widget_set_tooltip_text(button, tooltip)
@@ -113,6 +115,8 @@ extension PickerWindow {
         groupSource = button
       }
       gtk_toggle_button_set_active(button, kind == nil ? 1 : 0)
+      // Icon-only chip: give assistive tech the full name ("Images filter").
+      GTKAccessibility.setLabel(button, KindFilterOptions.accessibilityLabel(for: kind))
       gtkConnect(
         button, signal: "toggled",
         context: ChipButtonContext(window: self, kind: kind),
@@ -121,10 +125,38 @@ extension PickerWindow {
       chipButtons.append(button)
     }
 
-    makeChip(kind: nil, iconName: "edit-find", tooltip: "All")
-    for kind in ItemKind.allCases {
-      makeChip(kind: kind, iconName: kind.gtkIconName, tooltip: ItemKindChipLabel.label(for: kind))
+    for option in KindFilterOptions.linuxOptions {
+      makeChip(
+        kind: option, iconName: option?.gtkIconName ?? "edit-find",
+        tooltip: KindFilterOptions.title(for: option))
     }
+    // T-AUD-KBD: the chips are icon-only, so the ACTIVE filter's name is shown
+    // as text beside them (the macOS chip expands its title when active).
+    gtk_widget_add_css_class(activeFilterLabel, "dim-label")
+    gtk_widget_add_css_class(activeFilterLabel, "picker-row-meta")
+    gtk_box_append(chipsBox, activeFilterLabel)
+    updateActiveFilterLabel(for: nil)
+  }
+
+  private func updateActiveFilterLabel(for kind: ItemKind?) {
+    gtk_label_set_text(activeFilterLabel, KindFilterOptions.title(for: kind))
+  }
+
+  /// Ctrl+] / Ctrl+[: activates the next/previous chip (wrapping). The chip's
+  /// own `toggled` handler updates `viewModel.query.kindFilter` and announces
+  /// the new filter. No-op on the Snippets tab, where the chips don't apply.
+  func cycleKindFilter(forward: Bool) {
+    let target: ItemKind?? = MainActor.assumeIsolated {
+      guard viewModel.activeTab != .snippets else { return nil }
+      return .some(
+        KindFilterOptions.cycled(
+          from: viewModel.query.kindFilter, in: KindFilterOptions.linuxOptions,
+          step: forward ? 1 : -1))
+    }
+    guard let target, let index = chipKinds.firstIndex(where: { $0 == target }),
+      chipButtons.indices.contains(index)
+    else { return }
+    gtk_toggle_button_set_active(chipButtons[index], 1)
   }
 
   func handleTabToggled(tab: PickerTab, isActive: Bool) {
@@ -142,6 +174,8 @@ extension PickerWindow {
 
   func handleChipToggled(kind: ItemKind?, isActive: Bool) {
     guard isActive else { return }
+    updateActiveFilterLabel(for: kind)
+    GTKAccessibility.announce(window, KindFilterOptions.accessibilityLabel(for: kind))
     MainActor.assumeIsolated {
       viewModel.query.kindFilter = kind
     }

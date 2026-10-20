@@ -54,6 +54,7 @@ override_dh_auto_install:
 	install -Dm755 .build/release/clipnest debian/clipnest/usr/bin/clipnest
 	install -Dm755 packaging/linux/scripts/clipnest-ctl debian/clipnest/usr/bin/clipnest-ctl
 	install -Dm755 packaging/linux/scripts/clipnest-grant-input debian/clipnest/usr/libexec/clipnest/clipnest-grant-input
+	install -Dm755 packaging/linux/scripts/clipnest-install-update debian/clipnest/usr/libexec/clipnest/clipnest-install-update
 	install -Dm644 assets/clipnest-icons/clipnest-app-icon.svg debian/clipnest/usr/share/icons/hicolor/scalable/apps/app.clipnest.Clipnest.svg
 	# The tray icon (org.kde.StatusNotifierItem's IconName, see
 	# StatusNotifierNames.swift) — freedesktop's "symbolic" icon-theme size

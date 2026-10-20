@@ -1,0 +1,113 @@
+#!/bin/sh
+# clipnest-install-update — installed to /usr/libexec/clipnest/clipnest-install-update.
+#
+# Invoked ONLY via `pkexec clipnest-install-update <sha256-hex>`, gated by the
+# app.clipnest.install-update polkit action (fixed org.freedesktop.policykit.exec.path
+# annotation, same pattern as clipnest-grant-input). Reads the downloaded
+# clipnest .deb on STDIN, then — as root — verifies it BEFORE installing.
+#
+# Security note (mandatory security-pass trigger: runs as root, takes external
+# input). Why this exists: the unprivileged app used to write the verified .deb
+# to a user-owned /tmp path and hand that PATH to `pkexec apt-get install`. The
+# polkit prompt stays open for seconds, during which any same-user process could
+# swap the file (check-then-use race) and get its .deb installed as root. Here
+# the privileged step does its own check:
+#   1. the .deb arrives on stdin (an already-open fd, no path for anyone to
+#      swap and nothing for root to open by name — no symlink games);
+#   2. it is copied into a root-created directory only root can write;
+#   3. the sha256 of THAT copy is compared with the digest argv (validated
+#      ^[0-9a-f]{64}$); mismatch => refuse, nothing is installed;
+#   4. Package must be exactly "clipnest";
+#   5. the .deb's Version must be strictly NEWER than the installed one
+#      (`dpkg --compare-versions new gt installed`); a downgrade or same-version
+#      reinstall is refused with exit status 3, so a replayed, validly-checksummed
+#      OLD release cannot roll the machine back to a vulnerable version. Not
+#      installed yet => allowed;
+#   6. apt-get installs the root-owned, already-verified copy.
+# No shell interpolation of caller input: the digest is only ever compared as a
+# quoted string; the install path is one we generate ourselves.
+set -eu
+umask 077
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+unset TMPDIR LD_PRELOAD LD_LIBRARY_PATH
+DEBIAN_FRONTEND=noninteractive
+export DEBIAN_FRONTEND
+
+PACKAGE_NAME="clipnest"
+# Distinct exit status for "not newer than installed" (pkexec itself uses
+# 126/127; 1 is the generic failure). Mapped to friendly copy in
+# LinuxAppUpdater.swift (InstallUpdateExit.notNewer).
+EXIT_NOT_NEWER=3
+# Refuse anything larger than this many bytes (200 MiB); real .debs are ~10 MB.
+MAX_DEB_BYTES=209715200
+
+die() {
+  echo "clipnest-install-update: $*" >&2
+  exit 1
+}
+
+if [ "$(id -u)" -ne 0 ]; then
+  die "must run as root (via pkexec)."
+fi
+
+if [ "$#" -ne 1 ]; then
+  die "usage: clipnest-install-update <sha256-hex> (the .deb is read from stdin)."
+fi
+expected="$1"
+case "$expected" in
+  *[!0-9a-f]*) die "digest must be 64 lowercase hex characters." ;;
+esac
+if [ "${#expected}" -ne 64 ]; then
+  die "digest must be 64 lowercase hex characters."
+fi
+
+# Refuse an interactive terminal on stdin — the .deb must be piped in.
+if [ -t 0 ]; then
+  die "the .deb must be provided on stdin."
+fi
+
+workdir="$(mktemp -d /var/tmp/clipnest-update.XXXXXX)" || die "could not create work directory."
+cleanup() { rm -rf "$workdir"; }
+trap cleanup EXIT
+trap 'exit 1' HUP INT TERM  # exit runs the EXIT trap once
+chmod 0700 "$workdir"
+deb="$workdir/clipnest-update.deb"
+
+head -c "$((MAX_DEB_BYTES + 1))" >"$deb" || die "could not read the .deb from stdin."
+size="$(wc -c <"$deb")"
+if [ "$size" -gt "$MAX_DEB_BYTES" ]; then
+  die "input larger than $MAX_DEB_BYTES bytes; refusing."
+fi
+
+actual="$(sha256sum "$deb")" || die "could not hash the .deb."
+actual="${actual%% *}"
+if [ "$actual" != "$expected" ]; then
+  die "SHA-256 mismatch (expected $expected, got $actual); refusing to install."
+fi
+
+name="$(dpkg-deb -f "$deb" Package 2>/dev/null)" || die "not a valid .deb."
+if [ "$name" != "$PACKAGE_NAME" ]; then
+  die "package is '$name', expected '$PACKAGE_NAME'; refusing."
+fi
+
+# Anti-downgrade: only install a strictly newer version than what is present.
+new_version="$(dpkg-deb -f "$deb" Version 2>/dev/null)" || die "could not read the .deb version."
+if [ -z "$new_version" ]; then
+  die "the .deb has no Version field."
+fi
+installed_version="$(dpkg-query -W -f='${Version}' "$PACKAGE_NAME" 2>/dev/null || true)"
+if [ -n "$installed_version" ]; then
+  if ! dpkg --compare-versions "$new_version" gt "$installed_version"; then
+    echo "clipnest-install-update: version $new_version is not newer than installed $installed_version; refusing to downgrade or reinstall." >&2
+    exit "$EXIT_NOT_NEWER"
+  fi
+fi
+
+# Root-owned, root-only-writable; world-readable so apt's _apt sandbox user can
+# read the file (otherwise apt warns and downloads unsandboxed as root).
+chmod 0755 "$workdir"
+chmod 0644 "$deb"
+
+apt-get install -y "$deb"
