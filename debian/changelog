@@ -1,3 +1,22 @@
+clipnest (1.5.0) jammy; urgency=medium
+
+  * fix: Delete alone no longer removes the highlighted clip from the
+    picker; deleting now needs Ctrl+Delete (Backspace never deletes).
+  * feat: the Welcome window gains an "Open Clipnest at login" step
+    (pre-checked, shared with Settings > General).
+  * feat: "Check for Updates..." in the tray menu runs an immediate check.
+  * feat: the package install prints a notice that the GNOME Shell
+    extension is set up automatically on first launch.
+  * feat: picker shortcuts Ctrl+]/Ctrl+[ cycle the type filter, Ctrl+Y
+    toggles the preview; Orca labels for rows, tabs and filter chips.
+  * security: OCR refuses PNGs over 40 megapixels and caps decompression at
+    the header-declared size (decompression-bomb protection).
+  * security: in-app updates install through a root helper that re-verifies
+    the package from a private copy and refuses versions that are not newer
+    than the installed one.
+
+ -- Aayush Gour <ag14906@gmail.com>  Tue, 20 Oct 2026 00:00:00 +0000
+
 clipnest (1.4.0) jammy; urgency=medium
 
   * security: clipboard history, snippets and copied images are no longer

@@ -155,6 +155,9 @@ public final class PickerPanel: NSPanel {
     isOpaque = true
     backgroundColor = .windowBackgroundColor
     hasShadow = true
+    // Clipboard contents may include secrets — keep the picker out of screen
+    // sharing/recording (best effort; see `excludeFromScreenSharing()`).
+    excludeFromScreenSharing()
     // `.canJoinAllSpaces` makes the panel present on every Space at once
     // (including whichever one is active when `show()` is called, with no
     // Space-switch animation), and `.fullScreenAuxiliary` is specifically

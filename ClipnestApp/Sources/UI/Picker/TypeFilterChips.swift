@@ -27,6 +27,11 @@
 // all filtering behavior (`SearchQuery.kindFilter`, "All" = no filter,
 // persists across tabs) are unchanged — only the chip's own rendering
 // moved into the shared component.
+//
+// T-AUD-KBD / T-AUD-VO: the ACTIVE chip now stays expanded (icon + name) so the
+// current filter is readable without hovering, and every chip speaks its full
+// name ("Images filter") with the selected trait on the active one. Order,
+// names and ⌘[ / ⌘] cycling live in `KindFilterOptions`.
 import ClipnestCore
 import ClipnestViewModels
 import SwiftUI
@@ -42,42 +47,29 @@ import SwiftUI
 struct TypeFilterChips: View {
   @Binding var selection: ItemKind?
 
-  /// The fixed chip set + display order — the one place both are defined,
-  /// so nothing else in this file (or elsewhere) hardcodes them again.
-  private static let options: [ItemKind?] = [nil, .text, .image, .file, .link]
-
   /// "All" has no backing `ItemKind` to source a glyph from (see
   /// `ItemKind+SFSymbol.swift`), so its icon is defined once, here.
   private static let allSymbolName = "square.grid.2x2"
 
   var body: some View {
     HStack(spacing: 2) {
-      ForEach(Self.options, id: \.self) { option in
+      ForEach(KindFilterOptions.macOptions, id: \.self) { option in
         chip(for: option)
       }
     }
   }
 
+  /// Names, order and cycling live in `KindFilterOptions` (shared with Linux
+  /// and with the ⌘[ / ⌘] shortcut). The active chip shows its title; every
+  /// chip speaks its full name ("Images filter") and the active one carries
+  /// the selected trait (T-AUD-VO / T-AUD-KBD).
   private func chip(for option: ItemKind?) -> some View {
     ExpandingIconButton(
       systemName: option?.sfSymbolName ?? Self.allSymbolName,
-      title: Self.title(for: option),
+      title: KindFilterOptions.title(for: option),
       isActive: selection == option,
+      accessibilityLabelOverride: KindFilterOptions.accessibilityLabel(for: option),
       action: { selection = option }
     )
-  }
-
-  private static func title(for option: ItemKind?) -> String {
-    guard let option else { return "All" }
-    switch option {
-    case .text: return "Text"
-    case .image: return "Image"
-    case .file: return "File"
-    case .link: return "Link"
-    case .richText:
-      // Unreachable — `options` above never includes `.richText` — kept
-      // here only so this switch stays exhaustive over `ItemKind`.
-      return "Text"
-    }
   }
 }

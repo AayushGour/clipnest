@@ -86,6 +86,12 @@
 // `ItemPreviewController.update(...)` (same closure-injection pattern as
 // `dismiss`/`presentSnippetEditor`/`suppressOwnPasteboardWrite`) — this view
 // never touches AppKit/`NSPanel` directly.
+//
+// T-AUD-VO / T-AUD-KBD (design audit): rows are single VoiceOver elements with
+// spoken labels + custom actions (`RowAccessibilityModifier`); arrow-key
+// highlight moves are announced (`announceHighlightedRow`, because focus stays
+// in the search field); new chords ⌘]/⌘[ (cycle type filter), ⌘E (edit snippet)
+// and ⌘Y (toggle preview) are decoded by the pure `PickerCommandShortcut`.
 // macOS manual checks (never compiled/run off-Mac): row preferences may not
 // propagate out of a `List`, and the popover is not repositioned on mouse-wheel
 // scrolling.
@@ -180,15 +186,10 @@ struct PickerView: View {
   /// it earlier, at the AppKit layer, so it never reaches this method at all;
   /// see `PickerPanel.onCommandComma`'s doc comment for why.
   ///
-  /// Reliability note (T24): `.delete` matches the physical Delete key
-  /// regardless of modifiers, so this one case covers both plain Delete and
-  /// ⌘⌫ as asked. In practice, though, plain Delete is very likely to be
-  /// consumed by the always-focused search field's own backspace-editing
-  /// behavior whenever it has text — text fields don't forward a key their
-  /// own editing already handled. ⌘⌫ isn't a standard text-editing shortcut,
-  /// so it's the more reliable path to this handler when the field has
-  /// text; this is a runtime behavior, not something verifiable headlessly
-  /// — see the task report.
+  /// T-BKSPDEL1: `.delete` matches the physical Delete key, but only ⌘⌫
+  /// deletes (`isDeleteChord(_:)`); plain ⌫ returns `.ignored` so an empty
+  /// search field can never destroy a clip by accident. (`PickerPanel`'s
+  /// local monitor normally swallows ⌘⌫ first; this is the fallback path.)
   ///
   /// Reliability note (T23 fix round): Return was found to do nothing at
   /// runtime — a focused `TextField`'s own key handling and an ancestor
@@ -212,6 +213,9 @@ struct PickerView: View {
   /// doc comment for why (and see `PickerViewTests.swift` for the coverage
   /// this enables that `KeyPress` itself can't be constructed for).
   private func handle(_ press: KeyPress) -> KeyPress.Result {
+    if let command = Self.commandShortcut(for: press) {
+      return handle(command)
+    }
     switch press.key {
     case .escape:
       viewModel.dismiss()
@@ -235,12 +239,17 @@ struct PickerView: View {
       // T-PREVIEWSEL1: an explicit keyboard move (not an async selection
       // settle or a click) — the only trigger for the selection preview.
       viewModel.selectionChangedForPreview()
+      announceHighlightedRow()
       return .handled
     case .downArrow:
       viewModel.moveSelection(by: 1)
       viewModel.selectionChangedForPreview()
+      announceHighlightedRow()
       return .handled
     case .delete:
+      // T-BKSPDEL1: plain Backspace (empty search field) used to permanently
+      // delete the highlighted clip with no confirmation. Only ⌘⌫ deletes.
+      guard Self.isDeleteChord(press.modifiers) else { return .ignored }
       viewModel.deleteHighlighted()
       return .handled
     case KeyEquivalent("f") where press.modifiers.contains(.command):
@@ -267,6 +276,62 @@ struct PickerView: View {
       return .handled
     default:
       return .ignored
+    }
+  }
+
+  /// T-AUD-KBD: maps ⌘] / ⌘[ / ⌘E / ⌘Y (the pure table in
+  /// `PickerCommandShortcut`, unit-tested) from a `KeyPress`.
+  private static func commandShortcut(for press: KeyPress) -> PickerCommandShortcut? {
+    guard let character = press.characters.first else { return nil }
+    return PickerCommandShortcut.command(
+      character: character,
+      command: press.modifiers.contains(.command),
+      option: press.modifiers.contains(.option),
+      control: press.modifiers.contains(.control),
+      shift: press.modifiers.contains(.shift))
+  }
+
+  private func handle(_ command: PickerCommandShortcut) -> KeyPress.Result {
+    switch command {
+    case .nextFilter, .previousFilter:
+      // The chips (and so the shortcut) don't apply on the Snippets tab.
+      guard viewModel.activeTab != .snippets else { return .ignored }
+      let next = KindFilterOptions.cycled(
+        from: viewModel.query.kindFilter, in: KindFilterOptions.macOptions,
+        step: command == .nextFilter ? 1 : -1)
+      viewModel.query.kindFilter = next
+      PickerAnnouncer.announce(KindFilterOptions.accessibilityLabel(for: next))
+      return .handled
+    case .editSnippet:
+      guard viewModel.activeTab == .snippets else { return .ignored }
+      viewModel.editHighlightedSnippet()
+      return .handled
+    case .togglePreview:
+      viewModel.togglePreviewForHighlighted()
+      return .handled
+    }
+  }
+
+  /// T-AUD-VO: arrow keys move the highlight while keyboard focus stays in
+  /// the search field (deliberately — moving AX focus into the list would
+  /// break typing-to-search), so VoiceOver would otherwise say nothing. This
+  /// posts an announcement of the newly highlighted row's full label instead.
+  /// No-op unless VoiceOver is running.
+  private func announceHighlightedRow() {
+    switch viewModel.activeTab {
+    case .history, .pinned:
+      guard let item = viewModel.rows.first(where: { $0.id == viewModel.selectedItemID })
+      else { return }
+      PickerAnnouncer.announce(
+        RowAccessibility.itemLabel(
+          for: item, relativeTime: RelativeTimeText.string(from: item.createdAt)))
+    case .snippets:
+      guard
+        let snippet = viewModel.snippetRows.first(where: {
+          $0.id == viewModel.selectedSnippetID
+        })
+      else { return }
+      PickerAnnouncer.announce(RowAccessibility.snippetLabel(for: snippet))
     }
   }
 
@@ -309,6 +374,14 @@ struct PickerView: View {
   /// Return whenever one of those happens to be set, so they're excluded
   /// from the check rather than compared for exact equality against
   /// `[]`/`.option`.
+  /// T-BKSPDEL1: whether a `.delete` keypress is the destructive ⌘⌫ chord
+  /// (Finder convention). Plain ⌫ (or ⇧/⌥/⌃⌫ without ⌘) must do nothing
+  /// destructive — it is left to the search field. Pure so it is unit-testable
+  /// (`KeyPress` itself can't be constructed in tests).
+  static func isDeleteChord(_ modifiers: EventModifiers) -> Bool {
+    modifiers.contains(.command)
+  }
+
   static func returnAction(for modifiers: EventModifiers) -> ReturnAction {
     if modifiers.contains(.option) {
       return .selectPlainText
@@ -428,6 +501,7 @@ struct PickerView: View {
         .foregroundStyle(.secondary)
         .lineLimit(1)
         .truncationMode(.tail)
+        .help(ShortcutHints.helpText())
       Spacer(minLength: 8)
       Button {
         showUpdateConfirm = true
@@ -575,7 +649,9 @@ struct PickerView: View {
             onSaveAsSnippet: { viewModel.presentSaveAsSnippetForm(from: item) },
             onDelete: { viewModel.delete(item) },
             onCopyRecognizedText: { viewModel.copyRecognizedText(from: item) },
-            onHover: { hovering in viewModel.hoverItem(hovering ? item.id : nil) }
+            onHover: { hovering in viewModel.hoverItem(hovering ? item.id : nil) },
+            isSelected: viewModel.selectedItemID == item.id,
+            onPastePlainText: { viewModel.select(item, plainText: true) }
           )
         }
       }
@@ -600,7 +676,8 @@ struct PickerView: View {
             onSelect: { viewModel.pasteSnippet(snippet) },
             onEdit: { viewModel.presentEditSnippetForm(snippet) },
             onDelete: { viewModel.deleteSnippet(snippet) },
-            onHover: { hovering in viewModel.hoverItem(hovering ? snippet.id : nil) }
+            onHover: { hovering in viewModel.hoverItem(hovering ? snippet.id : nil) },
+            isSelected: viewModel.selectedSnippetID == snippet.id
           )
         }
       }

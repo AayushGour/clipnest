@@ -231,6 +231,8 @@ public final class SettingsWindow: @unchecked Sendable {
   /// `init`), same contract as every other tab's widget refs above.
   var updateVersionLabel: OpaquePointer?
   var updateExplanationLabel: OpaquePointer?
+  /// In-flight guard for `checkForUpdatesFromUI` (mirrors macOS `UpdateCheckAlert.isChecking`).
+  var isCheckingForUpdates = false
   var updateAptCommandLabel: OpaquePointer?
   var updateInstallButton: OpaquePointer?
   var updateStatusLabel: OpaquePointer?

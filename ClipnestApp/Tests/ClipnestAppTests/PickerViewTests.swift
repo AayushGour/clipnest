@@ -28,6 +28,24 @@ import Testing
 // SwiftUI`, so no separate `import SwiftUI` is needed here.
 @testable import Clipnest
 
+@Suite("PickerView.isDeleteChord")
+struct PickerViewDeleteChordTests {
+  @Test("Plain Backspace never deletes a clip (T-BKSPDEL1)")
+  func plainBackspaceDoesNotDelete() {
+    #expect(!PickerView.isDeleteChord([]))
+    #expect(!PickerView.isDeleteChord([.shift]))
+    #expect(!PickerView.isDeleteChord([.option]))
+    #expect(!PickerView.isDeleteChord([.control]))
+    #expect(!PickerView.isDeleteChord([.capsLock]))
+  }
+
+  @Test("⌘⌫ deletes, even with incidental flags")
+  func commandBackspaceDeletes() {
+    #expect(PickerView.isDeleteChord([.command]))
+    #expect(PickerView.isDeleteChord([.command, .capsLock]))
+  }
+}
+
 @Suite("PickerView.returnAction")
 struct PickerViewReturnActionTests {
 

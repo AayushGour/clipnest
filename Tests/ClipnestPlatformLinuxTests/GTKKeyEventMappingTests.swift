@@ -43,6 +43,27 @@ struct GTKKeyEventMappingTests {
   private static let eUpper: UInt32 = 0x045
   private static let comma: UInt32 = 0x02c
 
+  // T-AUD-KBD: Ctrl+] / Ctrl+[ cycle the type filter, Ctrl+Y toggles preview.
+  private static let bracketLeft: UInt32 = 0x05b
+  private static let bracketRight: UInt32 = 0x05d
+  private static let yLower: UInt32 = 0x079
+  private static let yUpper: UInt32 = 0x059
+
+  @Test("Ctrl+] / Ctrl+[ cycle the filter; Ctrl+Y toggles preview; bare keys are unbound")
+  func auditShortcuts() {
+    #expect(
+      KeyEventMapping.action(keyval: Self.bracketRight, state: Self.controlMask)
+        == .cycleFilter(forward: true))
+    #expect(
+      KeyEventMapping.action(keyval: Self.bracketLeft, state: Self.controlMask)
+        == .cycleFilter(forward: false))
+    #expect(KeyEventMapping.action(keyval: Self.yLower, state: Self.controlMask) == .togglePreview)
+    #expect(KeyEventMapping.action(keyval: Self.yUpper, state: Self.controlMask) == .togglePreview)
+    #expect(KeyEventMapping.action(keyval: Self.bracketRight, state: 0) == nil)
+    #expect(KeyEventMapping.action(keyval: Self.bracketLeft, state: 0) == nil)
+    #expect(KeyEventMapping.action(keyval: Self.yLower, state: 0) == nil)
+  }
+
   @Test("Up/Down move regardless of modifiers")
   func upDownMove() {
     #expect(KeyEventMapping.action(keyval: Self.up, state: 0) == .moveUp)
@@ -131,28 +152,31 @@ struct GTKKeyEventMappingTests {
     #expect(KeyEventMapping.action(keyval: Self.pLower, state: 0) == nil)
   }
 
-  // MARK: - Delete: bare Delete now works, Ctrl+Delete kept as an accepted
-  // alias (see `KeyEventMapping.swift`'s own doc comment on this case for
-  // why both are intentionally accepted, mirroring macOS's `PickerView
-  // .handle(_:)` `.delete` case matching "regardless of modifiers").
+  // MARK: - Delete: T-BKSPDEL1 — only Ctrl+Delete deletes; Backspace never does.
 
-  @Test("Plain Delete deletes — no modifier required, matching macOS parity")
-  func plainDeleteDeletes() {
-    #expect(KeyEventMapping.action(keyval: Self.delete, state: 0) == .delete)
+  private static let backSpace: UInt32 = 0xff08
+
+  @Test("Plain Delete does NOT delete a clip (T-BKSPDEL1)")
+  func plainDeleteDoesNotDelete() {
+    #expect(KeyEventMapping.action(keyval: Self.delete, state: 0) == nil)
+    #expect(KeyEventMapping.action(keyval: Self.delete, state: Self.shiftMask) == nil)
+    #expect(KeyEventMapping.action(keyval: Self.delete, state: Self.lockMask) == nil)
   }
 
-  @Test("Ctrl+Delete still deletes — kept as an accepted alias, not dropped")
-  func ctrlDeleteStillDeletes() {
+  @Test("BackSpace never maps to any action, with or without Ctrl")
+  func backSpaceNeverDeletes() {
+    #expect(KeyEventMapping.action(keyval: Self.backSpace, state: 0) == nil)
+    #expect(KeyEventMapping.action(keyval: Self.backSpace, state: Self.controlMask) == nil)
+  }
+
+  @Test("Ctrl+Delete deletes, regardless of other modifier bits")
+  func ctrlDeleteDeletes() {
     #expect(KeyEventMapping.action(keyval: Self.delete, state: Self.controlMask) == .delete)
-  }
-
-  @Test("Delete deletes regardless of any other modifier bit held (Shift, Super, Lock)")
-  func deleteDeletesRegardlessOfOtherModifiers() {
-    #expect(KeyEventMapping.action(keyval: Self.delete, state: Self.shiftMask) == .delete)
-    #expect(KeyEventMapping.action(keyval: Self.delete, state: Self.superMask) == .delete)
-    #expect(KeyEventMapping.action(keyval: Self.delete, state: Self.lockMask) == .delete)
     #expect(
       KeyEventMapping.action(keyval: Self.delete, state: Self.controlMask | Self.shiftMask)
+        == .delete)
+    #expect(
+      KeyEventMapping.action(keyval: Self.delete, state: Self.controlMask | Self.lockMask)
         == .delete)
   }
 

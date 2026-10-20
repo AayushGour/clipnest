@@ -22,4 +22,7 @@ public enum PickerTab: Int, CaseIterable, Identifiable, Sendable {
     case .snippets: return "Snippets"
     }
   }
+
+  /// T-AUD-VO: full assistive-technology name ("History tab").
+  public var accessibilityLabel: String { "\(title) tab" }
 }

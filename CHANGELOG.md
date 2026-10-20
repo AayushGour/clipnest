@@ -10,6 +10,83 @@ at any time.
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-10-20
+
+### Accessibility
+
+- macOS VoiceOver: every picker row (History, Pinned, Snippets) is now a single
+  labelled element ("Text, pinned, 2 minutes ago: ...", "Image, 1200 by 800, 5
+  minutes ago", "Snippet Sig, keyword sig: ...") with button/selected traits,
+  paste as its default action, and Pin/Unpin, Delete, Save as Snippet, Paste as
+  plain text, Copy Recognized Text and Edit as custom actions. Tabs and type
+  filters expose full names ("Images filter") and the selected trait; arrow-key
+  highlight changes are announced. Linux (Orca): rows, tabs, filter chips and
+  row buttons get accessible labels, filter changes are announced.
+
+### Added
+
+- Welcome window: new "Open Clipnest at login" step (pre-checked, shared with
+  Settings → General) so clipboard history keeps recording after a reboot.
+- "Check for Updates…" in the macOS menu-bar menu and the Linux tray menu: runs
+  an immediate check (even with automatic checking off) and reports "You're up
+  to date (x.y.z)" or offers the update.
+- Linux: package install prints a notice that the GNOME Shell extension is set
+  up automatically on first launch and needs one log out/in to activate the
+  hotkey.
+- CI: macOS `swift test` and Mac app `xcodebuild test` run on every pull
+  request; releases are gated on the same suite; workflows use concurrency
+  groups and SHA-pinned actions.
+- Picker shortcuts: `⌘]` / `⌘[` (Linux `Ctrl+]` / `Ctrl+[`) cycle the type
+  filter; `⌘E` edits the highlighted snippet (Linux already had `Ctrl+Shift+E`);
+  `⌘Y` / `Ctrl+Y` shows or hides the preview of the highlighted item even when
+  "show preview on keyboard selection" is off. The active type filter now shows
+  its name next to the icons (macOS chip stays expanded; Linux label).
+
+### Changed
+
+- Footer hints: macOS drops "↑↓ move" and gains "⌘[/] filter" / "⌘E edit"; the
+  Linux footer's "Ctrl+Shift+E replace" is corrected to "edit" (it always edited
+  the snippet) and gains filter/preview hints.
+
+### Fixed
+
+- Pressing Backspace with an empty picker search no longer permanently deletes
+  the highlighted clip. Deleting needs `⌘⌫` on macOS and `Ctrl+Delete` on Linux
+  (bare Delete/Backspace never delete).
+- The New/Edit Snippet window now activates Clipnest and takes keyboard focus
+  when another app is frontmost (typing and Esc used to go to the other app).
+- Welcome window: the Accessibility step now says the hotkey works without it;
+  the permission is only needed to paste directly and expand snippets.
+
+### Security
+
+- Linux OCR refuses PNGs over 40 megapixels and caps decompression at the size
+  the PNG header declares, so a tiny crafted clipboard image can no longer
+  exhaust memory.
+- Linux in-app updater: the root helper refuses a .deb that is not strictly
+  newer than the installed version (downgrade/replay protection).
+- macOS: picker, item preview and snippet editor windows are hidden from screen sharing and
+  recording (`sharingType = .none`; best effort — macOS 15+ ScreenCaptureKit may
+  still capture them in some modes).
+- macOS updater hardening: the in-app updater no longer pipes `scripts/update.sh`
+  from the mutable `main` branch into `bash`. It fetches the script from the
+  release tag being installed and pins the version (`CLIPNEST_VERSION`, the
+  tag strictly validated as `vN.N.N` before it reaches any URL or command).
+  `update.sh` and the macOS path of `install.sh` now copy the new app next to
+  the old one, verify its version and code signature (and, when an app is
+  installed, that it is signed by the same identity), then swap it in with a
+  rollback if anything fails, instead of deleting the old app first.
+  `hdiutil attach` no longer skips image verification (`-noverify` removed), and
+  every curl is restricted to https with TLS 1.2+.
+- Linux: the in-app "Install Update" no longer hands a user-owned `/tmp` file
+  path to `pkexec apt-get install` (a check-then-use race: any same-user
+  process could swap the .deb while the authentication dialog was open). The
+  .deb is now streamed to a new root helper, `clipnest-install-update`
+  (polkit action `app.clipnest.install-update`), which copies it into a
+  root-only directory, re-verifies its SHA-256 and `Package: clipnest`, and only
+  then runs `apt-get install`. Update downloads are also restricted to https
+  (including redirects).
+
 ## [1.4.0] - 2026-10-19
 
 ### Added
@@ -447,7 +524,8 @@ release (0.5.0, above). None of them were ever installed by a user.
 
 - `Sendable` conformance for `NSPasteboard` access, required by Swift 6.
 
-[Unreleased]: https://github.com/AayushGour/clipnest/compare/v1.4.0...HEAD
+[Unreleased]: https://github.com/AayushGour/clipnest/compare/v1.5.0...HEAD
+[1.5.0]: https://github.com/AayushGour/clipnest/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/AayushGour/clipnest/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/AayushGour/clipnest/compare/v1.2.1...v1.3.0
 [1.2.1]: https://github.com/AayushGour/clipnest/compare/v1.2.0...v1.2.1

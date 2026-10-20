@@ -193,6 +193,9 @@ public enum LinuxAppUpdater {
     [
       "--max-time", String(maxTimeSeconds),
       "--connect-timeout", String(connectTimeoutSeconds),
+      // https only, including across redirects (a downgrade to http would
+      // let a network attacker swap the .deb/checksum pair).
+      "--proto", "=https", "--proto-redir", "=https",
       "-fsSL", urlString,
     ]
   }
@@ -358,19 +361,20 @@ public enum LinuxAppUpdater {
       return .failed(.checksumMismatch)
     }
 
-    let tempURL = FileManager.default.temporaryDirectory
-      .appendingPathComponent("clipnest-update-\(UUID().uuidString)-\(debAsset.name)")
+    // Hand the .deb to the privileged helper on STDIN (an open fd), never as a
+    // path: see `clipnest-install-update`'s security note. The helper re-hashes
+    // its own root-owned copy, so a same-user process swapping bytes while the
+    // polkit dialog is up cannot get anything but the verified .deb installed.
+    let stdinHandle: FileHandle
     do {
-      try debData.write(to: tempURL, options: .atomic)
-      try FileManager.default.setAttributes(
-        [.posixPermissions: 0o644], ofItemAtPath: tempURL.path)
+      stdinHandle = try privateStdinHandle(for: debData)
     } catch {
       return .failed(.downloadFailed("could not save the download: \(error.localizedDescription)"))
     }
-    defer { try? FileManager.default.removeItem(at: tempURL) }
+    defer { try? stdinHandle.close() }
 
     onStep(.installing)
-    switch await runPkexecAptGetInstall(debPath: tempURL.path) {
+    switch await runPkexecInstallUpdate(digest: expectedDigest, debInput: stdinHandle) {
     case .success:
       return .succeeded(installedVersion: latestVersion)
     case .cancelled:
@@ -380,19 +384,62 @@ public enum LinuxAppUpdater {
     }
   }
 
-  /// Pure — the exact argument list `performUpdate` runs `pkexec` with,
-  /// factored out for the same "unit-testable without spawning a process"
-  /// reason as `aptCachePolicyArguments`/`curlArguments` above. `-y`:
-  /// `apt-get install` otherwise prompts for interactive confirmation on
-  /// stdin, which has no terminal to answer it under `pkexec` — NOT a
-  /// second consent gate being bypassed (the two real consent points are
-  /// this tab's own "Install Update…" confirmation dialog, before
-  /// `performUpdate` is ever called, and polkit's own authentication
-  /// dialog, inside this exact `pkexec` invocation); it only silences a
-  /// redundant "install this exact file the user already approved?" prompt
-  /// apt would otherwise hang forever asking.
-  public static func pkexecAptGetInstallArguments(debPath: String) -> [String] {
-    ["apt-get", "install", "-y", debPath]
+  // MARK: - Privileged install (`pkexec clipnest-install-update`)
+
+  /// Fixed path of the root helper; bound to the `app.clipnest.install-update`
+  /// polkit action by its `org.freedesktop.policykit.exec.path` annotation.
+  public static let installHelperPath = "/usr/libexec/clipnest/clipnest-install-update"
+
+  /// True only for exactly 64 lowercase hex characters — the format the helper
+  /// also enforces (`^[0-9a-f]{64}$`), so a malformed digest never reaches argv.
+  public static func isValidSHA256Hex(_ digest: String) -> Bool {
+    digest.utf8.count == 64
+      && digest.utf8.allSatisfy { ($0 >= 0x30 && $0 <= 0x39) || ($0 >= 0x61 && $0 <= 0x66) }
+  }
+
+  /// Pure — argv for `pkexec`: just the helper and the expected digest. Returns
+  /// `nil` for an invalid digest. The .deb itself goes on stdin, not argv.
+  public static func pkexecInstallUpdateArguments(
+    digest: String, helperPath: String = installHelperPath
+  ) -> [String]? {
+    guard isValidSHA256Hex(digest) else { return nil }
+    return [helperPath, digest]
+  }
+
+  /// Base directory for the short-lived private download file:
+  /// `$XDG_RUNTIME_DIR` (per-user tmpfs, 0700) else `$XDG_CACHE_HOME`/
+  /// `~/.cache`. Never the shared `/tmp`.
+  static func privateBaseDirectory(
+    environment: [String: String] = ProcessInfo.processInfo.environment
+  ) -> URL {
+    if let runtime = environment["XDG_RUNTIME_DIR"], runtime.hasPrefix("/") {
+      return URL(fileURLWithPath: runtime, isDirectory: true)
+    }
+    if let cache = environment["XDG_CACHE_HOME"], cache.hasPrefix("/") {
+      return URL(fileURLWithPath: cache, isDirectory: true)
+    }
+    return FileManager.default.homeDirectoryForCurrentUser
+      .appendingPathComponent(".cache", isDirectory: true)
+  }
+
+  /// Writes `data` to a fresh 0700 dir / 0600 file, opens it for reading, then
+  /// unlinks both immediately — only the open fd survives, to be used as the
+  /// helper's stdin. Not a security boundary on its own (a same-user process can
+  /// still reach the inode); the helper's root-side re-hash is.
+  static func privateStdinHandle(
+    for data: Data, base: URL = privateBaseDirectory()
+  ) throws -> FileHandle {
+    let fm = FileManager.default
+    let dir = base.appendingPathComponent("clipnest-update-\(UUID().uuidString)", isDirectory: true)
+    try fm.createDirectory(
+      at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+    defer { try? fm.removeItem(at: dir) }
+    let file = dir.appendingPathComponent("update.deb")
+    guard fm.createFile(atPath: file.path, contents: data, attributes: [.posixPermissions: 0o600])
+    else {
+      throw CocoaError(.fileWriteUnknown)
+    }
+    return try FileHandle(forReadingFrom: file)
   }
 
   private enum InstallProcessResult {
@@ -401,7 +448,7 @@ public enum LinuxAppUpdater {
     case failed(String)
   }
 
-  /// Runs `pkexec apt-get install -y <debPath>` on a background queue.
+  /// Runs `pkexec clipnest-install-update <sha256>` (deb on stdin) on a background queue.
   ///
   /// Exit-code handling is based on `pkexec(1)`'s OWN documented contract
   /// (freedesktop.org/Ubuntu manpages, verified for real rather than
@@ -421,16 +468,24 @@ public enum LinuxAppUpdater {
   /// correct explanation in every case — same principle
   /// `GrantInputHelperClient.requestGrant(completion:)`'s doc comment
   /// states for its own exit-code handling.
-  private static func runPkexecAptGetInstall(debPath: String) async -> InstallProcessResult {
+  private static func runPkexecInstallUpdate(
+    digest: String, debInput: FileHandle
+  ) async -> InstallProcessResult {
     await withCheckedContinuation { continuation in
       processQueue.async {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: GrantInputHelperClient.pkexecExecutablePath)
-        process.arguments = pkexecAptGetInstallArguments(debPath: debPath)
+        guard let arguments = pkexecInstallUpdateArguments(digest: digest) else {
+          continuation.resume(returning: .failed("Invalid checksum format."))
+          return
+        }
+        process.arguments = arguments
+        process.standardInput = debInput
+        // One pipe for both streams: reading them one after the other could
+        // deadlock if the child fills the other pipe's 64 KB buffer.
         let stdout = Pipe()
-        let stderr = Pipe()
         process.standardOutput = stdout
-        process.standardError = stderr
+        process.standardError = stdout
 
         do {
           try process.run()
@@ -442,7 +497,7 @@ public enum LinuxAppUpdater {
         }
 
         let outputData = stdout.fileHandleForReading.readDataToEndOfFile()
-        let errorData = stderr.fileHandleForReading.readDataToEndOfFile()
+        let errorData = Data()  // stderr is merged into `outputData`
         process.waitUntilExit()
 
         switch process.terminationStatus {
@@ -450,6 +505,11 @@ public enum LinuxAppUpdater {
           continuation.resume(returning: .success)
         case 126:
           continuation.resume(returning: .cancelled)
+        case installHelperNotNewerExitCode:
+          continuation.resume(
+            returning: .failed(
+              "This update is not newer than the version you already have, so it was not installed."
+            ))
         default:
           let errorText = Self.decodedTrimmed(errorData)
           let outputText = Self.decodedTrimmed(outputData)
@@ -463,6 +523,10 @@ public enum LinuxAppUpdater {
       }
     }
   }
+
+  /// `clipnest-install-update` exit status for "not newer than installed"
+  /// (anti-downgrade; keep in sync with `EXIT_NOT_NEWER` in the script).
+  private static let installHelperNotNewerExitCode: Int32 = 3
 
   private static func decodedTrimmed(_ data: Data) -> String {
     (String(data: data, encoding: .utf8) ?? "")

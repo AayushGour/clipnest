@@ -45,6 +45,15 @@ struct WelcomeGateTests {
     #expect(SettingsStore(defaults: defaults).hasSeenWelcome == true)
   }
 
+  @Test("the open-at-login choice flag defaults to false and persists (T-WELCOMELOGIN1)")
+  func launchAtLoginChoicePersists() {
+    let defaults = UserDefaults(suiteName: "WelcomeGateTests-\(UUID().uuidString)")!
+    let first = SettingsStore(defaults: defaults)
+    #expect(first.hasChosenLaunchAtLogin == false)
+    first.hasChosenLaunchAtLogin = true
+    #expect(SettingsStore(defaults: defaults).hasChosenLaunchAtLogin == true)
+  }
+
   @Test("accessibility launch prompt is suppressed only while the welcome is unseen")
   func accessibilityPromptSuppression() {
     #expect(WelcomeGate.suppressesLaunchAccessibilityPrompt(hasSeenWelcome: false) == true)

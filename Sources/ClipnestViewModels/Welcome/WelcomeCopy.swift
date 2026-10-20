@@ -12,7 +12,7 @@ public enum WelcomePlatform: Equatable, Sendable {
 
 public enum WelcomeCopy {
   public static let windowTitle = "Welcome to Clipnest"
-  public static let subtitle = "Everything you copy is saved. Two quick steps to get started."
+  public static let subtitle = "Everything you copy is saved. Three quick steps to get started."
   public static let tagline = "Your clipboard history, one hotkey away."
 
   public static let skipTitle = "Skip"
@@ -28,6 +28,7 @@ public enum WelcomeCopy {
   // MARK: Step headings
 
   public static let permissionHeading = "Paste straight into apps"
+  public static let openAtLoginHeading = "Open Clipnest at login"
   public static let tryItHeading = "Try your hotkey"
 
   public static let changeInSettingsTitle = "Change in Settings…"
@@ -38,7 +39,7 @@ public enum WelcomeCopy {
     switch platform {
     case .macOS:
       return
-        "Clipnest saves and searches your clipboard without any permission. Allow Accessibility to also paste items directly into the app you are using, expand snippets as you type, and open Clipnest with your hotkey from other apps. Without it, picking an item copies it and you press Cmd-V yourself."
+        "Clipnest saves your clipboard and opens with your hotkey without any permission. Allow Accessibility to also paste items directly into the app you are using and expand snippets as you type. Without it, picking an item copies it and you press Cmd-V yourself."
     case .linux:
       return
         "Clipnest saves and searches your clipboard without any permission. These two things let it paste directly into other apps and open with your hotkey everywhere. Without them, picking an item copies it and you press Ctrl+V yourself."
@@ -49,7 +50,18 @@ public enum WelcomeCopy {
   public static let permissionSkippedStatus =
     "Not allowed - you can turn this on later in Settings → Permissions."
 
-  // MARK: Step 2 (try your hotkey)
+  // MARK: Step 2 (open at login)
+
+  public static let openAtLoginBody =
+    "Start Clipnest when you log in so nothing you copy is missed."
+  public static let openAtLoginToggleTitle = "Open Clipnest at login"
+  public static let openAtLoginRecommended =
+    "Recommended. You can change this any time in Settings → General."
+  public static let openAtLoginOnStatus = "On"
+  public static let openAtLoginOffStatus = "Off"
+  public static let openAtLoginSavedAnnouncement = "Clipnest will open at login"
+
+  // MARK: Step 3 (try your hotkey)
 
   public static func tryItBody(
     hotkey: String?, platform: WelcomePlatform, hotkeyPendingSetup: Bool = false

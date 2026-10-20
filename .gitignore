@@ -52,3 +52,6 @@ __pycache__/
 # Local agent-org internals and MCP config (CLAUDE.md stays tracked)
 /.claude/
 /.mcp.json
+
+# Per-agent SwiftPM build paths (swift test --build-path .build-<task>)
+/.build-*/

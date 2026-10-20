@@ -1,0 +1,39 @@
+.TH CLIPNEST-INSTALL-UPDATE 8 "2026" "clipnest" "System Administration"
+.SH NAME
+clipnest-install-update \- verify and install a downloaded clipnest .deb
+.SH SYNOPSIS
+.B pkexec clipnest-install-update
+.I sha256-hex
+< clipnest.deb
+.SH DESCRIPTION
+Invoked only via
+.BR pkexec (1), gated by the
+.B app.clipnest.install-update
+polkit action, from Clipnest's Settings update tab. The .deb is read from
+standard input into a root-owned directory; its SHA-256 is compared with the
+64-character lowercase hex digest argument and its Package field must be
+.BR clipnest ,
+and its Version must be strictly newer than the installed one
+.RB ( "dpkg --compare-versions" " new " gt " installed" ;
+if clipnest is not installed yet, any version is accepted).
+Only then is it installed with
+.BR "apt-get install -y" .
+Input larger than 200 MiB is refused. On any mismatch nothing is installed and the exit status is non-zero. This
+closes the race in which a same-user process could replace a user-owned file
+while the authentication dialog was open.
+.SH EXIT STATUS
+.TP
+.B 0
+Installed.
+.TP
+.B 1
+Refused or failed (bad digest, SHA-256 mismatch, wrong package, oversize input, apt-get failure).
+.TP
+.B 3
+The .deb is not newer than the installed version (downgrade or same-version reinstall refused). Nothing is installed.
+.PP
+.BR pkexec (1)
+itself returns 126 (not authorized/dismissed) or 127.
+.SH SEE ALSO
+.BR clipnest (1),
+.BR pkexec (1)

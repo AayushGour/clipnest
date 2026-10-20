@@ -64,13 +64,16 @@ enum WelcomeRowSummary {
   /// shows its full body instead). `nil` = nothing to show.
   static func text(
     step: WelcomeStep, state: WelcomeStepState, hotkeyText: String?, permissionSummary: String,
-    tryItStatus: String
+    tryItStatus: String, openAtLoginStatus: String? = nil
   ) -> String? {
     switch (state, step) {
     case (.current, _):
       return nil
     case (.upcoming, .permission):
       return nil
+    case (_, .openAtLogin):
+      // Collapsed "Open Clipnest at login" row: On / Off.
+      return openAtLoginStatus
     case (.upcoming, .tryIt), (.skipped, .tryIt):
       // Collapsed "Try your hotkey" row: the hotkey itself (or that none is set).
       return hotkeyText ?? WelcomeCopy.noHotkeyShort

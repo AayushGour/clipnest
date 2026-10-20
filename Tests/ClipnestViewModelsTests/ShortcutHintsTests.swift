@@ -253,7 +253,7 @@ struct ItemKindCapabilityTests {
         ShortcutHints.text(
           for: .history,
           capabilities: HighlightedItemCapabilities(item: makeClipItem(kind: .text)))
-          == "↑↓ move · ⏎ paste · ⌘F search · ⌘P pin · ⌘S save · ⌘⌫ delete · ⌘1/2/3 tabs · ⌘, settings"
+          == "⏎ paste · ⌘F search · ⌘P pin · ⌘S save · ⌘⌫ delete · ⌘[/] filter · ⌘1/2/3 tabs · ⌘, settings"
       )
     }
 
@@ -263,7 +263,7 @@ struct ItemKindCapabilityTests {
         ShortcutHints.text(
           for: .history,
           capabilities: HighlightedItemCapabilities(item: makeClipItem(kind: .richText)))
-          == "↑↓ move · ⏎ paste · ⌥⏎ plain · ⌘F search · ⌘P pin · ⌘⌫ delete · ⌘1/2/3 tabs · ⌘, settings"
+          == "⏎ paste · ⌥⏎ plain · ⌘F search · ⌘P pin · ⌘⌫ delete · ⌘[/] filter · ⌘1/2/3 tabs · ⌘, settings"
       )
     }
 
@@ -274,7 +274,7 @@ struct ItemKindCapabilityTests {
           for: .history,
           capabilities: HighlightedItemCapabilities(
             item: makeClipItem(kind: .image, ocrText: "text")))
-          == "↑↓ move · ⏎ paste · ⌥⏎ OCR text · ⌘F search · ⌘P pin · ⌘⌫ delete · ⌘1/2/3 tabs · ⌘, settings"
+          == "⏎ paste · ⌥⏎ OCR text · ⌘F search · ⌘P pin · ⌘⌫ delete · ⌘[/] filter · ⌘1/2/3 tabs · ⌘, settings"
       )
     }
 
@@ -285,7 +285,7 @@ struct ItemKindCapabilityTests {
           for: .history,
           capabilities: HighlightedItemCapabilities(
             item: makeClipItem(kind: .file, fileReference: "file:///tmp/x")))
-          == "↑↓ move · ⏎ paste · ⌘F search · ⌘P pin · ⌘⌫ delete · ⌘1/2/3 tabs · ⌘, settings"
+          == "⏎ paste · ⌘F search · ⌘P pin · ⌘⌫ delete · ⌘[/] filter · ⌘1/2/3 tabs · ⌘, settings"
       )
     }
 
@@ -302,7 +302,7 @@ struct ItemKindCapabilityTests {
     func snippetsExact() {
       #expect(
         ShortcutHints.text(for: .snippets, capabilities: HighlightedItemCapabilities(item: nil))
-          == "↑↓ move · ⏎ paste · ⌘F search · ⌘N new · ⌥⌘E replace · ⌘⌫ delete · ⌘1/2/3 tabs · ⌘, settings"
+          == "⏎ paste · ⌘F search · ⌘N new · ⌥⌘E replace · ⌘E edit · ⌘⌫ delete · ⌘1/2/3 tabs · ⌘, settings"
       )
     }
   }
@@ -378,14 +378,14 @@ struct ItemKindCapabilityTests {
           )
         }
         #expect(!hints.contains("Ctrl+N new"))
-        #expect(!hints.contains("Ctrl+Shift+E replace"))
+        #expect(!hints.contains("Ctrl+Shift+E edit"))
       case .snippets:
         // Ctrl+S isn't part of the Snippets group at all, regardless of
         // `supportsSaveAsSnippet` — mirrors macOS's identical Snippets-tab
         // exclusion (see `ShortcutHints.swift`'s top doc comment).
         #expect(!hints.contains("Ctrl+S save"))
         #expect(hints.contains("Ctrl+N new"))
-        #expect(hints.contains("Ctrl+Shift+E replace"))
+        #expect(hints.contains("Ctrl+Shift+E edit"))
       }
 
       // Never Mac glyphs, regardless of which chords are bound.
@@ -424,7 +424,7 @@ struct ItemKindCapabilityTests {
         ShortcutHints.text(
           for: .history,
           capabilities: HighlightedItemCapabilities(item: makeClipItem(kind: .text)))
-          == "↑/↓ move · Enter paste · Ctrl+F search · Ctrl+P pin · Ctrl+S save · Delete delete · Ctrl+1/2/3 tabs · Ctrl+, settings"
+          == "↑/↓ move · Enter paste · Ctrl+F search · Ctrl+P pin · Ctrl+S save · Ctrl+Delete delete · Ctrl+[/] filter · Ctrl+Y preview · Ctrl+1/2/3 tabs · Ctrl+, settings"
       )
     }
 
@@ -434,7 +434,7 @@ struct ItemKindCapabilityTests {
         ShortcutHints.text(
           for: .history,
           capabilities: HighlightedItemCapabilities(item: makeClipItem(kind: .richText)))
-          == "↑/↓ move · Enter paste · Alt+Enter plain · Ctrl+F search · Ctrl+P pin · Delete delete · Ctrl+1/2/3 tabs · Ctrl+, settings"
+          == "↑/↓ move · Enter paste · Alt+Enter plain · Ctrl+F search · Ctrl+P pin · Ctrl+Delete delete · Ctrl+[/] filter · Ctrl+Y preview · Ctrl+1/2/3 tabs · Ctrl+, settings"
       )
     }
 
@@ -445,7 +445,7 @@ struct ItemKindCapabilityTests {
           for: .history,
           capabilities: HighlightedItemCapabilities(
             item: makeClipItem(kind: .image, ocrText: "text")))
-          == "↑/↓ move · Enter paste · Alt+Enter OCR text · Ctrl+F search · Ctrl+P pin · Delete delete · Ctrl+1/2/3 tabs · Ctrl+, settings"
+          == "↑/↓ move · Enter paste · Alt+Enter OCR text · Ctrl+F search · Ctrl+P pin · Ctrl+Delete delete · Ctrl+[/] filter · Ctrl+Y preview · Ctrl+1/2/3 tabs · Ctrl+, settings"
       )
     }
 
@@ -462,8 +462,20 @@ struct ItemKindCapabilityTests {
     func snippetsExact() {
       #expect(
         ShortcutHints.text(for: .snippets, capabilities: HighlightedItemCapabilities(item: nil))
-          == "↑/↓ move · Enter paste · Ctrl+F search · Ctrl+N new · Ctrl+Shift+E replace · Delete delete · Ctrl+1/2/3 tabs · Ctrl+, settings"
+          == "↑/↓ move · Enter paste · Ctrl+F search · Ctrl+N new · Ctrl+Shift+E edit · Ctrl+Delete delete · Ctrl+Y preview · Ctrl+1/2/3 tabs · Ctrl+, settings"
       )
     }
   }
 #endif
+
+@Suite("ShortcutHints.helpText (T-AUD-KBD)")
+struct ShortcutHintsHelpTextTests {
+  @Test("the bar's tooltip names the preview chord for this platform")
+  func previewInHelp() {
+    #if os(macOS)
+      #expect(ShortcutHints.helpText() == "⌘Y preview")
+    #else
+      #expect(ShortcutHints.helpText() == "Ctrl+Y preview")
+    #endif
+  }
+}

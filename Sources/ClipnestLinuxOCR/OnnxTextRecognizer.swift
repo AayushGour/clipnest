@@ -130,5 +130,6 @@ public struct OnnxTextRecognizer: TextRecognizing {
   /// `VisionTextRecognizer.maxPixelDimension`'s own "either axis" wording.
   private static func isWithinPixelCeiling(width: Int, height: Int) -> Bool {
     width <= maxPixelDimension && height <= maxPixelDimension
+      && PNGDecoder.isWithinPixelBudget(width: width, height: height)
   }
 }

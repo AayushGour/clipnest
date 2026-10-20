@@ -2,6 +2,7 @@
 //
 // T-WELCOME1: the platform-neutral step state machine + copy resolution.
 
+import Foundation
 import Testing
 
 @testable import ClipnestViewModels
@@ -17,17 +18,27 @@ struct WelcomeViewModelTests {
     permissionComplete: Bool = false
   ) -> WelcomeViewModel {
     WelcomeViewModel(
-      platform: platform, hotkey: hotkey ?? boundHotkey, isPermissionComplete: permissionComplete)
+      platform: platform, hotkey: hotkey ?? boundHotkey, isPermissionComplete: permissionComplete,
+      launchAtLogin: .inert)
   }
 
-  @Test("two steps, permission first then the merged hotkey/try step")
+  /// Advances past the permission and open-at-login steps onto "Try your hotkey".
+  private func toTryIt(_ vm: WelcomeViewModel) {
+    _ = vm.continueTapped()
+    _ = vm.continueTapped()
+  }
+
+  @Test("three steps: permission, open at login, then the merged hotkey/try step")
   func stepOrder() {
-    #expect(WelcomeStep.allCases == [.permission, .tryIt])
-    #expect(WelcomeStep.count == 2)
+    #expect(WelcomeStep.allCases == [.permission, .openAtLogin, .tryIt])
+    #expect(WelcomeStep.count == 3)
     #expect(WelcomeStep.permission.number == 1)
-    #expect(WelcomeStep.tryIt.number == 2)
+    #expect(WelcomeStep.openAtLogin.number == 2)
+    #expect(WelcomeStep.openAtLogin.heading == "Open Clipnest at login")
+    #expect(WelcomeStep.tryIt.number == 3)
     #expect(WelcomeStep.tryIt.heading == "Try your hotkey")
-    #expect(WelcomeCopy.subtitle == "Everything you copy is saved. Two quick steps to get started.")
+    #expect(
+      WelcomeCopy.subtitle == "Everything you copy is saved. Three quick steps to get started.")
   }
 
   @Test("starts on step 1 (permission) with step 2 upcoming")
@@ -35,6 +46,7 @@ struct WelcomeViewModelTests {
     let vm = make()
     #expect(vm.activeStep == .permission)
     #expect(vm.state(of: .permission) == .current)
+    #expect(vm.state(of: .openAtLogin) == .upcoming)
     #expect(vm.state(of: .tryIt) == .upcoming)
     #expect(vm.primaryTitle == "Continue")
     #expect(vm.initialFocus == .permissionAction)
@@ -48,16 +60,19 @@ struct WelcomeViewModelTests {
     #expect(vm.initialFocus == .primaryButton)
     #expect(vm.primaryTitle == "Continue")
     #expect(vm.continueTapped() == .advanced)
-    #expect(vm.activeStep == .tryIt)
+    #expect(vm.activeStep == .openAtLogin)
     #expect(vm.state(of: .permission) == .done)
   }
 
-  @Test("Continue walks 1 -> 2; an ungranted permission reads skipped, not done")
+  @Test("Continue walks 1 -> 2 -> 3; an ungranted permission reads skipped, not done")
   func continueWalk() {
     let vm = make()
     #expect(vm.continueTapped() == .advanced)
-    #expect(vm.activeStep == .tryIt)
+    #expect(vm.activeStep == .openAtLogin)
     #expect(vm.state(of: .permission) == .skipped)
+    #expect(vm.primaryTitle == "Continue")
+    #expect(vm.continueTapped() == .advanced)
+    #expect(vm.activeStep == .tryIt)
     #expect(vm.primaryTitle == "Done")
   }
 
@@ -66,13 +81,13 @@ struct WelcomeViewModelTests {
     let vm = make()
     #expect(vm.skipTapped() == .advanced)
     #expect(vm.state(of: .permission) == .skipped)
-    #expect(vm.activeStep == .tryIt)
+    #expect(vm.activeStep == .openAtLogin)
   }
 
   @Test("Skip on step 2 closes and leaves it skipped")
   func skipOnTryItCloses() {
     let vm = make()
-    _ = vm.continueTapped()
+    toTryIt(vm)
     #expect(vm.skipTapped() == .close)
     #expect(vm.state(of: .tryIt) == .skipped)
   }
@@ -80,7 +95,7 @@ struct WelcomeViewModelTests {
   @Test("the last step's primary button is Done and closes")
   func doneOnLastStep() {
     let vm = make()
-    _ = vm.continueTapped()
+    toTryIt(vm)
     #expect(vm.primaryTitle == "Done")
     #expect(vm.continueTapped() == .close)
   }
@@ -90,7 +105,7 @@ struct WelcomeViewModelTests {
     let vm = make()
     vm.updatePermission(isComplete: true, announcement: "Accessibility allowed")
     #expect(vm.state(of: .permission) == .done)
-    #expect(vm.activeStep == .tryIt)
+    #expect(vm.activeStep == .openAtLogin)
     #expect(vm.announcement == "Accessibility allowed")
   }
 
@@ -106,7 +121,7 @@ struct WelcomeViewModelTests {
   @Test("picker shown on step 2 flips it to success, primary stays Done, and announces")
   func pickerShown() {
     let vm = make()
-    _ = vm.continueTapped()
+    toTryIt(vm)
     vm.pickerDidShow()
     #expect(vm.hasDetectedHotkey)
     #expect(vm.state(of: .tryIt) == .done)
@@ -131,7 +146,7 @@ struct WelcomeViewModelTests {
     vm.tryItHintTimedOut()
     #expect(vm.showsTryItHint == true)
     let detected = make(permissionComplete: true)
-    _ = detected.continueTapped()
+    toTryIt(detected)
     detected.pickerDidShow()
     detected.tryItHintTimedOut()
     #expect(detected.showsTryItHint == false)
@@ -140,7 +155,7 @@ struct WelcomeViewModelTests {
   @Test("unbound hotkey: step 2 is skipped state, copy points at Settings + menu bar")
   func unbound() {
     let vm = make(hotkey: .unbound, permissionComplete: true)
-    _ = vm.continueTapped()
+    toTryIt(vm)
     #expect(vm.state(of: .tryIt) == .skipped)
     #expect(vm.primaryTitle == "Done")
     #expect(
@@ -181,16 +196,21 @@ struct WelcomeViewModelTests {
     #expect(make().permissionBodyText.contains("Cmd-V"))
   }
 
-  @Test("accessibility labels read Step N of 2 with state")
+  @Test("accessibility labels read Step N of 3 with state")
   func accessibilityLabels() {
     let vm = make()
     #expect(
-      vm.accessibilityLabel(for: .permission) == "Step 1 of 2: Paste straight into apps, current")
-    #expect(vm.accessibilityLabel(for: .tryIt) == "Step 2 of 2: Try your hotkey, upcoming")
+      vm.accessibilityLabel(for: .permission) == "Step 1 of 3: Paste straight into apps, current")
+    #expect(
+      vm.accessibilityLabel(for: .openAtLogin) == "Step 2 of 3: Open Clipnest at login, upcoming")
+    #expect(vm.accessibilityLabel(for: .tryIt) == "Step 3 of 3: Try your hotkey, upcoming")
     _ = vm.skipTapped()
     #expect(
-      vm.accessibilityLabel(for: .permission) == "Step 1 of 2: Paste straight into apps, skipped")
-    #expect(vm.accessibilityLabel(for: .tryIt) == "Step 2 of 2: Try your hotkey, current")
+      vm.accessibilityLabel(for: .permission) == "Step 1 of 3: Paste straight into apps, skipped")
+    #expect(
+      vm.accessibilityLabel(for: .openAtLogin) == "Step 2 of 3: Open Clipnest at login, current")
+    _ = vm.skipTapped()
+    #expect(vm.accessibilityLabel(for: .tryIt) == "Step 3 of 3: Try your hotkey, current")
   }
 
   @Test("collapsed rows state where they stand: already-granted shows Allowed")
@@ -198,7 +218,7 @@ struct WelcomeViewModelTests {
     let vm = make(permissionComplete: true)
     #expect(vm.collapsedStatusText(for: .permission) == nil)  // active row
     #expect(vm.collapsedStatusText(for: .tryIt) == "⌥⌘V")
-    _ = vm.continueTapped()
+    toTryIt(vm)
     #expect(vm.collapsedStatusText(for: .permission) == "Allowed")
     #expect(vm.collapsedStatusText(for: .tryIt) == nil)  // active row
   }
@@ -225,7 +245,7 @@ struct WelcomeViewModelTests {
     #expect(vm.collapsedStatusAccessibilityText(for: .tryIt) == vm.hotkey.spokenText)
     #expect(vm.collapsedStatusAccessibilityText(for: .tryIt) == "Option Command V")
     #expect(vm.collapsedStatusAccessibilityText(for: .permission) == nil)  // active row
-    _ = vm.continueTapped()
+    toTryIt(vm)
     #expect(vm.collapsedStatusAccessibilityText(for: .permission) == "Allowed")
     let unbound = make(hotkey: .unbound)
     #expect(unbound.collapsedStatusAccessibilityText(for: .tryIt) == "No hotkey set")
@@ -238,7 +258,7 @@ struct WelcomeViewModelTests {
   @Test("pending setup: step 2 does not ask for a key press; points at the tray icon")
   func tryItPendingSetupCopy() {
     let vm = make(platform: .linux, hotkey: linuxHotkey, permissionComplete: true)
-    _ = vm.continueTapped()
+    toTryIt(vm)
     vm.setHotkeyPendingSetup(
       WelcomeGnomeExtensionPresentation.hotkeyIsPendingSetup(.installedNeedsRelogin))
     #expect(vm.activeStep == .tryIt)
@@ -252,7 +272,7 @@ struct WelcomeViewModelTests {
   @Test("pending setup: opening the picker (tray) is still detected, with honest copy")
   func tryItPendingSetupDetection() {
     let vm = make(platform: .linux, hotkey: linuxHotkey, permissionComplete: true)
-    _ = vm.continueTapped()
+    toTryIt(vm)
     vm.setHotkeyPendingSetup(true)
     vm.pickerDidShow()
     #expect(vm.state(of: .tryIt) == .done)
@@ -278,7 +298,7 @@ struct WelcomeFocusTargetTests {
     WelcomeViewModel(
       platform: .macOS,
       hotkey: .macOS(command: true, option: true, control: false, shift: false, key: "V"),
-      isPermissionComplete: complete)
+      isPermissionComplete: complete, launchAtLogin: .inert)
   }
 
   @Test("step 1 with the action button shown focuses the action; without it, the primary button")
@@ -288,12 +308,155 @@ struct WelcomeFocusTargetTests {
     #expect(vm.focusTarget(permissionActionAvailable: false) == .primaryButton)
   }
 
-  @Test("granting (step change) and moving to step 2 refocus the primary button")
+  @Test("granting (step change) refocuses the open-at-login switch; the last step the primary")
   func afterStepChange() {
     let vm = make()
     vm.updatePermission(isComplete: true, announcement: nil)
+    #expect(vm.activeStep == .openAtLogin)
+    #expect(vm.focusTarget(permissionActionAvailable: true) == .launchAtLoginToggle)
+    _ = vm.continueTapped()
     #expect(vm.activeStep == .tryIt)
     #expect(vm.focusTarget(permissionActionAvailable: true) == .primaryButton)
     #expect(make(complete: true).focusTarget(permissionActionAvailable: true) == .primaryButton)
+  }
+}
+
+// MARK: - T-WELCOMELOGIN1: the "Open Clipnest at login" step
+
+@MainActor
+@Suite("WelcomeViewModel open at login (T-WELCOMELOGIN1)")
+struct WelcomeOpenAtLoginTests {
+  private struct Boom: Error, LocalizedError {
+    var errorDescription: String? { "not allowed here" }
+  }
+
+  /// In-memory stand-in for the shared backend (SMAppService / autostart file).
+  @MainActor
+  private final class Backend {
+    var enabled: Bool
+    var failWrites = false
+    var writes: [Bool] = []
+    var recorded = 0
+    init(enabled: Bool = false) { self.enabled = enabled }
+
+    var login: WelcomeLaunchAtLogin {
+      WelcomeLaunchAtLogin(
+        isEnabled: { self.enabled },
+        setEnabled: { value in
+          if self.failWrites { throw Boom() }
+          self.writes.append(value)
+          self.enabled = value
+        },
+        recordChoice: { self.recorded += 1 })
+    }
+  }
+
+  private func make(_ backend: Backend, preChecked: Bool = true) -> WelcomeViewModel {
+    let vm = WelcomeViewModel(
+      platform: .macOS,
+      hotkey: .macOS(command: true, option: true, control: false, shift: false, key: "V"),
+      isPermissionComplete: true, launchAtLogin: backend.login, launchAtLoginPreChecked: preChecked)
+    _ = vm.continueTapped()  // permission -> open at login
+    return vm
+  }
+
+  @Test("starts pre-checked (recommended) with plain copy; nothing written until Continue")
+  func preChecked() {
+    let backend = Backend()
+    let vm = make(backend)
+    #expect(vm.activeStep == .openAtLogin)
+    #expect(vm.wantsLaunchAtLogin)
+    #expect(
+      vm.openAtLoginBodyText == "Start Clipnest when you log in so nothing you copy is missed.")
+    #expect(backend.writes.isEmpty)
+    #expect(vm.primaryTitle == "Continue")
+  }
+
+  @Test("Continue applies the choice through the shared backend, records it, and advances")
+  func continueApplies() {
+    let backend = Backend()
+    let vm = make(backend)
+    #expect(vm.continueTapped() == .advanced)
+    #expect(backend.enabled)
+    #expect(backend.writes == [true])
+    #expect(backend.recorded == 1)
+    #expect(vm.state(of: .openAtLogin) == .done)
+    #expect(vm.activeStep == .tryIt)
+    #expect(vm.collapsedStatusText(for: .openAtLogin) == "On")
+    #expect(vm.announcement == "Clipnest will open at login")
+  }
+
+  @Test("already enabled and still checked: no redundant write, still recorded")
+  func alreadyEnabled() {
+    let backend = Backend(enabled: true)
+    let vm = make(backend)
+    #expect(vm.continueTapped() == .advanced)
+    #expect(backend.writes.isEmpty)
+    #expect(backend.recorded == 1)
+  }
+
+  @Test("unchecking then Continue turns the login item off and reads Off")
+  func uncheckDisables() {
+    let backend = Backend(enabled: true)
+    let vm = make(backend)
+    vm.setWantsLaunchAtLogin(false)
+    #expect(vm.continueTapped() == .advanced)
+    #expect(backend.enabled == false)
+    #expect(vm.state(of: .openAtLogin) == .skipped)
+    #expect(vm.collapsedStatusText(for: .openAtLogin) == "Off")
+  }
+
+  @Test("Skip leaves the system untouched but records that the user answered")
+  func skipLeavesSystemAlone() {
+    let backend = Backend()
+    let vm = make(backend)
+    #expect(vm.skipTapped() == .advanced)
+    #expect(backend.writes.isEmpty)
+    #expect(backend.recorded == 1)
+    #expect(backend.enabled == false)
+    #expect(vm.state(of: .openAtLogin) == .skipped)
+    #expect(vm.activeStep == .tryIt)
+  }
+
+  @Test("a failed registration stays on the step, shows why, and reverts the switch to reality")
+  func failureStays() {
+    let backend = Backend()
+    backend.failWrites = true
+    let vm = make(backend)
+    #expect(vm.continueTapped() == .stayed)
+    #expect(vm.activeStep == .openAtLogin)
+    #expect(vm.launchAtLoginError == "not allowed here")
+    #expect(vm.wantsLaunchAtLogin == false)
+    #expect(backend.recorded == 0)
+    // Continue again now means "leave it off": advances, error cleared.
+    #expect(vm.continueTapped() == .advanced)
+    #expect(vm.launchAtLoginError == nil)
+  }
+
+  @Test("toggling clears a stale error; focus lands on the switch while the step is active")
+  func toggleClearsErrorAndFocus() {
+    let backend = Backend()
+    backend.failWrites = true
+    let vm = make(backend)
+    _ = vm.continueTapped()
+    vm.setWantsLaunchAtLogin(true)
+    #expect(vm.launchAtLoginError == nil)
+    #expect(vm.focusTarget(permissionActionAvailable: false) == .launchAtLoginToggle)
+  }
+
+  @Test("the picker opening on the open-at-login step does not count as trying the hotkey")
+  func pickerIgnoredOnLoginStep() {
+    let vm = make(Backend())
+    vm.pickerDidShow()
+    #expect(!vm.hasDetectedHotkey)
+  }
+
+  @Test("macOS permission copy: hotkey needs no Accessibility; paste and expansion do")
+  func accurateAccessibilityCopy() {
+    let body = WelcomeCopy.permissionBody(platform: .macOS)
+    #expect(body.contains("opens with your hotkey without any permission"))
+    #expect(body.contains("paste items directly"))
+    #expect(body.contains("expand snippets"))
+    #expect(!body.contains("open Clipnest with your hotkey from other apps"))
   }
 }

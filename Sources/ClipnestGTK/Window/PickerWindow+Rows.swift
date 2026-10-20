@@ -157,14 +157,20 @@ extension PickerWindow {
   private func appendClipItemRows(_ items: [ClipItem], searchText: String) {
     for item in items {
       let content = ClipItemRowContent(item: item, searchText: searchText)
-      gtk_list_box_append(listBox, makeClipItemRowWidget(content, item: item))
+      let rowWidget = makeClipItemRowWidget(content, item: item)
+      gtk_list_box_append(listBox, rowWidget)
+      let relativeTime = RelativeTimeText.string(from: item.createdAt)
+      labelListBoxRow(
+        rowWidget, RowAccessibility.itemLabel(for: item, relativeTime: relativeTime))
     }
   }
 
   private func appendSnippetRowsSuffix(_ snippets: [Snippet], searchText: String) {
     for snippet in snippets {
       let content = SnippetRowContent(snippet: snippet, searchText: searchText)
-      gtk_list_box_append(listBox, makeSnippetRowWidget(content, snippet: snippet))
+      let rowWidget = makeSnippetRowWidget(content, snippet: snippet)
+      gtk_list_box_append(listBox, rowWidget)
+      labelListBoxRow(rowWidget, RowAccessibility.snippetLabel(for: snippet))
     }
   }
 
@@ -190,6 +196,16 @@ extension PickerWindow {
   static func appendedSuffixStart<T: Equatable>(old: [T], new: [T]) -> Int? {
     guard new.count > old.count, Array(new.prefix(old.count)) == old else { return nil }
     return old.count
+  }
+
+  /// T-AUD-VO: gives the `GtkListBoxRow` that `gtk_list_box_append` wrapped
+  /// around `content` one spoken label (Orca reads it instead of the row's
+  /// unlabeled children). GTK has no custom-action API; the per-row action
+  /// buttons carry their own accessible labels (see the `makeXRowActionButton`s).
+  private func labelListBoxRow(_ content: OpaquePointer, _ label: String) {
+    let contentWidget: UnsafeMutablePointer<GtkWidget> = gtkPointer(content)
+    guard let parent = gtk_widget_get_parent(contentWidget) else { return }
+    GTKAccessibility.setLabel(OpaquePointer(parent), label)
   }
 
   /// T-ROWLINES1: wraps a row's text label and ellipsizes it at the end of the
@@ -335,6 +351,7 @@ extension PickerWindow {
       gtk_widget_add_css_class(button, "destructive-action")
     }
     gtk_widget_set_tooltip_text(button, entry.label)
+    GTKAccessibility.setLabel(button, entry.label)
     gtkConnect(
       button, signal: "clicked",
       context: ClosureContext<Void> { [weak self] in
@@ -355,6 +372,7 @@ extension PickerWindow {
       gtk_widget_add_css_class(button, "destructive-action")
     }
     gtk_widget_set_tooltip_text(button, entry.label)
+    GTKAccessibility.setLabel(button, entry.label)
     gtkConnect(
       button, signal: "clicked",
       context: ClosureContext<Void> { [weak self] in

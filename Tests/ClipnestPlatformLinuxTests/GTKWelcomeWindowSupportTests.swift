@@ -42,6 +42,14 @@ struct GTKWelcomeWindowSupportTests {
         tryItStatus: "It works.")
     }
     #expect(text(.tryIt, .current) == nil)
+    #expect(
+      WelcomeRowSummary.text(
+        step: .openAtLogin, state: .done, hotkeyText: nil, permissionSummary: "P", tryItStatus: "",
+        openAtLoginStatus: "On") == "On")
+    #expect(
+      WelcomeRowSummary.text(
+        step: .openAtLogin, state: .current, hotkeyText: nil, permissionSummary: "P",
+        tryItStatus: "", openAtLoginStatus: "On") == nil)
     #expect(text(.permission, .upcoming) == nil)
     #expect(text(.tryIt, .upcoming) == "Alt + Super + V")
     #expect(text(.permission, .done) == "P")

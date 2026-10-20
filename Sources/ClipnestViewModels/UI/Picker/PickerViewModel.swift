@@ -527,7 +527,18 @@ public final class PickerViewModel: ObservableObject {
   /// `private` — see `hoveredItemID`'s doc comment above for why.
   var previewTask: Task<Void, Never>?
 
-  var selectionPreviewArmed = false
+  var selectionPreviewArmed = false {
+    didSet {
+      // Every site that disarms the selection preview (open, hide, tab switch,
+      // search change) also ends a user-forced preview (`togglePreviewForHighlighted()`).
+      if !selectionPreviewArmed { selectionPreviewForced = false }
+    }
+  }
+  /// T-AUD-KBD: set by the explicit "toggle preview" shortcut so the keyboard
+  /// selection preview shows even when the "show preview on keyboard
+  /// selection" setting is OFF (the setting only governs the AUTOMATIC
+  /// preview while arrowing). Cleared whenever `selectionPreviewArmed` clears.
+  var selectionPreviewForced = false
   /// Live read of `SettingsStore.showPreviewOnKeyboardSelection` — required
   /// at init, no default (cross-platform seam rule, coding-standards.md).
   /// Read on every resolve, so the Settings toggle applies immediately.
@@ -1273,6 +1284,14 @@ public final class PickerViewModel: ObservableObject {
   /// Shows the Snippets tab's edit form, pre-filled from `snippet`.
   public func presentEditSnippetForm(_ snippet: Snippet) {
     presentSnippetEditor(.edit(snippet))
+  }
+
+  /// T-AUD-KBD: opens the editor for the highlighted snippet (⌘E on macOS,
+  /// Ctrl+Shift+E on Linux). No-op outside the Snippets tab or with nothing
+  /// highlighted.
+  public func editHighlightedSnippet() {
+    guard activeTab == .snippets, let snippet = highlightedSnippet else { return }
+    presentEditSnippetForm(snippet)
   }
 
   /// Creates a new snippet via the real `SnippetStore`, then re-queries the

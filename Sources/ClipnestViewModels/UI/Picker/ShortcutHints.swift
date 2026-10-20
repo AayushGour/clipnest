@@ -108,18 +108,10 @@
 // in this bar needs the same re-measurement — the margin is real but no
 // longer the +85/+89pt this file's T-SET4 round left.
 //
-// Linux Delete parity fix: `KeyEventMapping.swift`'s `Keyval.delete` case
-// used to require Ctrl (an inconsistency with no platform reason — macOS's
-// own `.delete` case has always matched bare Delete unconditionally). Now
-// that bare Delete works on Linux too, `ShortcutModifierVocabulary
-// .platformDefault`'s Linux `delete` hint changed from `"Ctrl+Delete
-// delete"` to `"Delete delete"` — see that property's own doc comment
-// below for why Ctrl+Delete (still accepted, just no longer advertised)
-// isn't listed as a second alias. Text-length-only change (19 chars ->
-// 13), so it can only shrink this footer's total width, never grow it — no
-// re-measurement against the width budget above is needed (that budget is
-// macOS-only in the first place; this file's Linux branch renders in
-// `ClipnestGTK`'s own window, not `PickerPanel`'s fixed-width one).
+// T-BKSPDEL1: Linux delete requires Ctrl (hint "Ctrl+Delete delete") —
+// bare Delete/Backspace never delete a clip, matching macOS's ⌘⌫. This
+// supersedes the earlier "Linux Delete parity fix" that made bare Delete
+// delete (a data-loss footgun).
 //
 // Keyboard-parity pass (routed follow-up): closes the last real gap between
 // the two platforms' footers — `save`/`newSnippet`/`replaceSnippet`/
@@ -133,6 +125,15 @@
 // entry already uses (no spaces around `+`, matching `Ctrl+1/2/3`). As with
 // the Delete fix above, this file's Linux branch has no fixed-width budget
 // to re-measure against.
+//
+// T-AUD-KBD: adds "⌘[/] filter" (History/Pinned) and "⌘E edit" (Snippets) and
+// drops macOS's "↑↓ move" (obvious; frees ~45pt). Re-measured with
+// NSAttributedString + 10pt system font (a close proxy for the NSHostingView
+// method above, within ~2% on the Snippets line): worst case History with an
+// OCR-bearing image highlighted = 462pt, Snippets = 456pt, both inside the
+// 493pt budget (+31pt / +37pt). ⌘Y (preview) is deliberately NOT in the bar —
+// it lives in the footer's `.help`, README and docs/usage.md; a separate task
+// redesigns the bar.
 import ClipnestCore
 import Foundation
 
@@ -226,7 +227,10 @@ public struct HighlightedItemCapabilities: Equatable, Sendable {
 /// binding) is `nil`, which `text(for:capabilities:vocabulary:)` omits
 /// entirely rather than rendering a nonexistent shortcut.
 public struct ShortcutModifierVocabulary: Sendable {
-  let move: String
+  /// `nil` on macOS: "↑↓ move" was dropped from the footer (T-AUD-KBD) to pay
+  /// for the filter/edit hints within the fixed one-line width budget above;
+  /// arrow navigation needs no reminder. Linux has no width budget and keeps it.
+  let move: String?
   let paste: String
   let altEnterPlain: String
   let altEnterOCRText: String
@@ -236,6 +240,15 @@ public struct ShortcutModifierVocabulary: Sendable {
   let delete: String
   let newSnippet: String?
   let replaceSnippet: String?
+  /// T-AUD-KBD: cycle the type filter (History/Pinned only).
+  let filter: String?
+  /// T-AUD-KBD: edit the highlighted snippet (Snippets only).
+  let editSnippet: String?
+  /// T-AUD-KBD: toggle the preview of the highlighted row.
+  let preview: String
+  /// Whether `preview` is spelled out in the one-line bar (Linux: yes; macOS:
+  /// no, width budget — it is in `ShortcutHints.helpText` instead).
+  let previewInFooter: Bool
   let tabs: String
   let settings: String?
 }
@@ -246,7 +259,7 @@ extension ShortcutModifierVocabulary {
     /// hardcoded strings; `ShortcutHintsTests.swift`'s exact-string
     /// assertions are the guard.
     public static let platformDefault = ShortcutModifierVocabulary(
-      move: "↑↓ move",
+      move: nil,
       paste: "⏎ paste",
       altEnterPlain: "⌥⏎ plain",
       altEnterOCRText: "⌥⏎ OCR text",
@@ -256,6 +269,10 @@ extension ShortcutModifierVocabulary {
       delete: "⌘⌫ delete",
       newSnippet: "⌘N new",
       replaceSnippet: "⌥⌘E replace",
+      filter: "⌘[/] filter",
+      editSnippet: "⌘E edit",
+      preview: "⌘Y preview",
+      previewInFooter: false,
       tabs: "⌘1/2/3 tabs",
       settings: "⌘, settings"
     )
@@ -275,20 +292,8 @@ extension ShortcutModifierVocabulary {
     /// the same "advertise only what's actually bound" rule that made them
     /// `nil` before now requires naming them.
     ///
-    /// `delete: "Delete delete"` (not "Ctrl+Delete delete"): `KeyEventMapping
-    /// .action(keyval:state:)`'s `Keyval.delete` case now matches bare
-    /// Delete regardless of modifiers (parity fix — it used to require
-    /// Ctrl, an inconsistency with macOS with no platform reason behind
-    /// it). Ctrl+Delete is still ALSO accepted (kept as an alias, not
-    /// dropped, for anyone who already learned it), but the footer
-    /// advertises only the simpler, canonical form actually bound — the
-    /// same "one hint per action, not a list of every accepted alias"
-    /// precedent macOS's own `delete: "⌘⌫ delete"` already sets one line
-    /// up: mac's `.delete` case *also* matches bare Delete unconditionally
-    /// (see `PickerView.handle(_:)`'s own doc comment), yet the mac hint
-    /// only ever names ⌘⌫, its own platform's conventional chord for
-    /// deleting a list item — Linux's convention is the bare key itself, so
-    /// that's what this hint names.
+    /// `delete: "Ctrl+Delete delete"` (T-BKSPDEL1): deleting requires Ctrl on
+    /// Linux (parity with macOS's ⌘⌫); bare Delete/Backspace never delete a clip.
     public static let platformDefault = ShortcutModifierVocabulary(
       move: "↑/↓ move",
       paste: "Enter paste",
@@ -297,9 +302,15 @@ extension ShortcutModifierVocabulary {
       search: "Ctrl+F search",
       pin: "Ctrl+P pin",
       save: "Ctrl+S save",
-      delete: "Delete delete",
+      delete: "Ctrl+Delete delete",
       newSnippet: "Ctrl+N new",
-      replaceSnippet: "Ctrl+Shift+E replace",
+      // Ctrl+Shift+E has always EDITED the highlighted snippet on Linux (see
+      // `PickerWindow+Keyboard`); the old "replace" label was wrong.
+      replaceSnippet: nil,
+      filter: "Ctrl+[/] filter",
+      editSnippet: "Ctrl+Shift+E edit",
+      preview: "Ctrl+Y preview",
+      previewInFooter: true,
       tabs: "Ctrl+1/2/3 tabs",
       settings: "Ctrl+, settings"
     )
@@ -307,6 +318,14 @@ extension ShortcutModifierVocabulary {
 }
 
 public enum ShortcutHints {
+  /// Shortcuts that don't fit the one-line bar but should still be
+  /// discoverable — the bar's tooltip / accessibility hint (T-AUD-KBD).
+  public static func helpText(
+    vocabulary: ShortcutModifierVocabulary = .platformDefault
+  ) -> String {
+    vocabulary.preview
+  }
+
   /// Builds the picker footer's tab-aware shortcut-hint string.
   ///
   /// - Parameters:
@@ -336,7 +355,7 @@ public enum ShortcutHints {
     capabilities: HighlightedItemCapabilities,
     vocabulary: ShortcutModifierVocabulary = .platformDefault
   ) -> String {
-    var parts = [vocabulary.move, vocabulary.paste]
+    var parts = [vocabulary.move, vocabulary.paste].compactMap { $0 }
     switch capabilities.altEnterHint {
     case .plain:
       parts.append(vocabulary.altEnterPlain)
@@ -353,6 +372,9 @@ public enum ShortcutHints {
         parts.append(save)
       }
       parts.append(vocabulary.delete)
+      if let filter = vocabulary.filter {
+        parts.append(filter)
+      }
     case .snippets:
       if let newSnippet = vocabulary.newSnippet {
         parts.append(newSnippet)
@@ -360,7 +382,13 @@ public enum ShortcutHints {
       if let replaceSnippet = vocabulary.replaceSnippet {
         parts.append(replaceSnippet)
       }
+      if let editSnippet = vocabulary.editSnippet {
+        parts.append(editSnippet)
+      }
       parts.append(vocabulary.delete)
+    }
+    if vocabulary.previewInFooter {
+      parts.append(vocabulary.preview)
     }
     parts.append(vocabulary.tabs)
     if let settings = vocabulary.settings {

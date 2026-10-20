@@ -73,7 +73,7 @@ sha256sum -c SHA256SUMS
 
 </div>
 
-The bundled `install.sh` checks the architecture and installs three packages with `apt`: `clipnest`, plus `clipnest-ocr` and `clipnest-ocr-data` for text recognition in images. To skip OCR (about 26 MB), install only the app: `sudo apt-get install --no-install-recommends ./clipnest_*.deb`.
+The bundled `install.sh` checks the architecture and installs three packages with `apt`: `clipnest`, plus `clipnest-ocr` and `clipnest-ocr-data` for text recognition in images. To skip OCR (about 26 MB), install only the app: `sudo apt-get install --no-install-recommends ./clipnest_*.deb`. On GNOME, `apt` also prints a one-line notice at install time: the Clipnest Shell extension is set up automatically the first time you open Clipnest, and you log out and back in once to activate the hotkey.
 
 ## Installer options
 {: #installer-options}
@@ -97,6 +97,8 @@ curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/in
 | `CLIPNEST_DRY_RUN=1` | `install.sh`, `uninstall.sh` | Do everything except the actual change: detect, download and verify for install; print each action for uninstall. |
 | `CLIPNEST_FORCE=1` | `install.sh`, Linux | Continue on a system that isn't Ubuntu 22.04/24.04 with GNOME. Unsupported; it may not work. |
 | `GITHUB_TOKEN` | `install.sh`, `update.sh` | A GitHub personal access token (no scopes needed for a public repo). Only raises the GitHub API rate limit from 60 to 5000 requests an hour per IP. Never printed or written to disk. |
+| `CLIPNEST_VERSION=vX.Y.Z` | `update.sh`, macOS | Install exactly that release instead of the latest. Must match `vN.N.N` or the script exits. The in-app updater sets this and fetches the script from the same tag. |
+| `CLIPNEST_RELEASE_IDENTITY` | `install.sh`, `update.sh`, macOS | Signing-identity name expected on the new app when there is no installed app to compare against (default `Clipnest Release`). |
 | `REQUIRE_CHECKSUM=false` | `install.sh`, `update.sh`, macOS | By default the install stops if a release has no published checksum. `false` allows an unverified `.dmg` from an old release that predates checksums. Not recommended. A checksum mismatch always stops the install. |
 | `--purge` or `CLIPNEST_PURGE=1` | `uninstall.sh` | Also delete your history, snippets and settings. Pass it as `bash -s -- --purge`. On Linux it also removes the `clipnest-input` group, so log out and back in afterwards. |
 
@@ -107,7 +109,8 @@ The installer needs `curl`, plus `tar`, `sha256sum` (or `shasum`), `sudo` and `a
 ## Updating
 {: #updating}
 
-On a Mac, run the update script. It installs the latest version if a newer one exists, with the same checksum verification as the installer:
+On a Mac, run the update script. It installs the latest version if a newer one exists, with the same checksum verification as the installer. Before replacing anything it checks that the new app's version matches the release and that its code signature is valid and made by the same signer as your installed copy (a mismatch aborts with a `SECURITY` message and leaves your app untouched). The new app is copied next to the old one and swapped in only after those checks pass, and the old one is restored if the swap fails.
+
 
 <div class="install-card" markdown="1">
 
@@ -119,7 +122,7 @@ curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/up
 
 </div>
 
-You can also click the version number in the picker footer (it shows a small dot when an update is available) and confirm: Clipnest opens Terminal, runs this script, then relaunches itself.
+You can also click the version number in the picker footer (it shows a small dot when an update is available) and confirm: Clipnest opens Terminal, runs the update script from the release tag being installed (not `main`), then relaunches itself.
 
 On Linux, run the install command again (it installs the latest release over the current one), or download the newer tarball and run its `install.sh`. Or use Settings → General → **Check for Updates Now**: for a tarball install, Clipnest can download, checksum-verify and install the update after you confirm with **Install Update…**. It never installs anything on its own.
 

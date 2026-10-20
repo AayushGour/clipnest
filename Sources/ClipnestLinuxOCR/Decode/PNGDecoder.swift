@@ -14,6 +14,20 @@
 // real capture proves otherwise.
 enum PNGDecoder {
 
+  /// T-PNGBOMB1: total-pixel ceiling (width x height), checked from IHDR
+  /// BEFORE any inflate or buffer allocation. Mirrors macOS's
+  /// `PasteboardReader.maxPixelHashPixelCount` (40 MP): beyond it the
+  /// RGBA expansion alone (4 B/px) would exceed ~160 MB. The per-axis
+  /// 20,000 px check in `OnnxTextRecognizer` alone still admits 400 MP.
+  static let maxDecodedPixelCount = 40_000_000
+
+  /// True when `width x height` is within `maxDecodedPixelCount`
+  /// (overflow-safe).
+  static func isWithinPixelBudget(width: Int, height: Int) -> Bool {
+    let (product, overflow) = width.multipliedReportingOverflow(by: height)
+    return !overflow && product <= maxDecodedPixelCount
+  }
+
   /// The 8-byte magic every PNG file starts with (RFC/ISO PNG spec §5.2).
   private static let signature: [UInt8] = [137, 80, 78, 71, 13, 10, 26, 10]
 
@@ -64,6 +78,7 @@ enum PNGDecoder {
   /// is the one production call site and enforces exactly that order.
   static func decode(_ data: [UInt8]) -> RGBAImageBuffer? {
     guard let header = readHeader(data) else { return nil }
+    guard isWithinPixelBudget(width: header.width, height: header.height) else { return nil }
     guard header.bitDepth == 8 else { return nil }
     guard header.interlaceMethod == 0 else { return nil }
     guard let channels = channelCount(forColorType: header.colorType) else { return nil }
@@ -95,11 +110,15 @@ enum PNGDecoder {
     let presetDictionaryFlag = compressedData[1] & 0x20
     guard compressionMethod == 8, presetDictionaryFlag == 0 else { return nil }
 
-    guard let rawScanlines = Inflate.decompress(Array(compressedData[2...])) else { return nil }
-
     let bytesPerPixel = channels
     let stride = header.width * bytesPerPixel
     let expectedByteCount = header.height * (stride + 1)
+    // Inflate output is capped at the IHDR-derived size so a bomb IDAT
+    // (tiny input, huge expansion) fails closed instead of exhausting memory.
+    guard
+      let rawScanlines = Inflate.decompress(
+        Array(compressedData[2...]), maxOutputBytes: expectedByteCount)
+    else { return nil }
     guard rawScanlines.count == expectedByteCount else { return nil }
 
     guard

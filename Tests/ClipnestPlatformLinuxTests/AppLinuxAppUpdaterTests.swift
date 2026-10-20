@@ -282,11 +282,58 @@ struct AppLinuxAppUpdaterTests {
     #expect(args.contains("https://example.com"))
   }
 
-  @Test("pkexecAptGetInstallArguments installs the exact given path, non-interactively")
-  func pkexecAptGetInstallArgumentsShape() {
+  @Test("curlArguments restricts to https, including redirects")
+  func curlArgumentsAreHTTPSOnly() {
+    let args = LinuxAppUpdater.curlArguments(for: "https://example.com")
+    #expect(args.contains("--proto"))
+    #expect(args.contains("=https"))
+    #expect(args.contains("--proto-redir"))
+  }
+
+  @Test("isValidSHA256Hex accepts only 64 lowercase hex chars")
+  func sha256Validation() {
+    let good = String(repeating: "ab12", count: 16)
+    #expect(LinuxAppUpdater.isValidSHA256Hex(good))
+    #expect(!LinuxAppUpdater.isValidSHA256Hex(good.uppercased()))
+    #expect(!LinuxAppUpdater.isValidSHA256Hex(String(good.dropLast())))
+    #expect(!LinuxAppUpdater.isValidSHA256Hex(good + "0"))
+    #expect(!LinuxAppUpdater.isValidSHA256Hex(String(good.dropLast()) + "g"))
+    #expect(!LinuxAppUpdater.isValidSHA256Hex(String(good.dropLast()) + " "))
+    #expect(!LinuxAppUpdater.isValidSHA256Hex(""))
+  }
+
+  @Test("pkexecInstallUpdateArguments is helper + digest only; rejects bad digests")
+  func pkexecInstallUpdateArgumentsShape() {
+    let good = String(repeating: "0f", count: 32)
     #expect(
-      LinuxAppUpdater.pkexecAptGetInstallArguments(debPath: "/tmp/clipnest.deb")
-        == ["apt-get", "install", "-y", "/tmp/clipnest.deb"])
+      LinuxAppUpdater.pkexecInstallUpdateArguments(digest: good)
+        == ["/usr/libexec/clipnest/clipnest-install-update", good])
+    #expect(LinuxAppUpdater.pkexecInstallUpdateArguments(digest: "; rm -rf /") == nil)
+  }
+
+  @Test("privateBaseDirectory prefers XDG_RUNTIME_DIR, then XDG_CACHE_HOME, never /tmp")
+  func privateBaseDirectoryChoice() {
+    #expect(
+      LinuxAppUpdater.privateBaseDirectory(environment: [
+        "XDG_RUNTIME_DIR": "/run/user/1000", "XDG_CACHE_HOME": "/c",
+      ]).path == "/run/user/1000")
+    #expect(
+      LinuxAppUpdater.privateBaseDirectory(environment: ["XDG_CACHE_HOME": "/c"]).path == "/c")
+    #expect(
+      LinuxAppUpdater.privateBaseDirectory(environment: ["XDG_RUNTIME_DIR": "rel"]).path
+        .hasSuffix(".cache"))
+  }
+
+  @Test("privateStdinHandle yields the bytes and leaves nothing on disk")
+  func privateStdinHandleRoundTrip() throws {
+    let base = FileManager.default.temporaryDirectory
+      .appendingPathComponent("clipnest-test-\(UUID().uuidString)")
+    try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: base) }
+    let handle = try LinuxAppUpdater.privateStdinHandle(for: Data("deb-bytes".utf8), base: base)
+    defer { try? handle.close() }
+    #expect(try FileManager.default.contentsOfDirectory(atPath: base.path).isEmpty)
+    #expect(try handle.readToEnd() == Data("deb-bytes".utf8))
   }
 
   @Test("The shipped package name constant matches debian/control")

@@ -19,7 +19,7 @@
 # release asset (see REQUIRE_CHECKSUM below) BEFORE the .dmg is ever mounted.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash
+#   curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash
 #
 # Or download it and run `bash install.sh`.
 #
@@ -62,9 +62,160 @@ CURL_SEC=(--proto '=https' --proto-redir '=https' --tlsv1.2)
 # always aborts, regardless of this setting.
 REQUIRE_CHECKSUM="${REQUIRE_CHECKSUM:-true}"
 
+# --- Stage-then-swap + signature continuity ---------------------------------
+# BEGIN swap block (keep byte-identical with the same block in scripts/install.sh;
+# scripts/update.sh and install.sh are each run standalone via `curl | bash`, so
+# they cannot share a sourced file. The fixture test diffs the two blocks.)
+#
+# Why: the old flow was `rm -rf /Applications/Clipnest.app && cp -R new …`; a
+# failed copy (full disk, permissions, kill) left NO app and no way back. Now
+# the new app is copied NEXT TO the old one (same volume, hidden temp name),
+# fully verified, and only then swapped with two renames; any failure puts the
+# old app back. Nothing destructive happens before verification passes.
+#
+# Signature continuity (SECURITY): the SHA-256 check only proves the .dmg is
+# the one the release published; it does not prove the app inside is signed
+# by the same party as the app already installed. Before swapping we require:
+#   1. the staged app's version == the expected release version,
+#   2. `codesign --verify --deep --strict` passes on the staged app,
+#   3. identity continuity:
+#        - if the installed app is validly signed with a certificate-based
+#          designated requirement (DR), the staged app MUST satisfy that exact
+#          DR (same release certificate — also what keeps users' Accessibility
+#          grant alive across updates);
+#        - otherwise (nothing installed, unsigned, or ad-hoc/cdhash-only DR,
+#          which cannot be compared across builds) the staged app's leaf
+#          signing authority MUST equal the release identity name below
+#          ("Clipnest Release", the CN created by scripts/release-cert.sh).
+#          NOTE: that release cert is self-signed, so this fallback proves
+#          "signed by a cert with the expected name", not a trusted CA chain —
+#          it is defence in depth on top of the checksum, not a replacement.
+# A mismatch aborts with a loud SECURITY message and the old app is untouched.
+RELEASE_IDENTITY="${CLIPNEST_RELEASE_IDENTITY:-Clipnest Release}"
+SWAP_STAGED=""
+SWAP_BACKUP=""
+SWAP_DEST=""
+
+app_plist_version() {
+  /usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$1/Contents/Info.plist" 2>/dev/null || echo 'unknown'
+}
+
+# Put the old app back if we died between the two renames, and drop the
+# staging dir. Safe to call repeatedly / when nothing is in flight.
+swap_cleanup() {
+  if [ -n "${SWAP_BACKUP}" ] && [ -e "${SWAP_BACKUP}" ] && [ ! -e "${SWAP_DEST}" ]; then
+    mv "${SWAP_BACKUP}" "${SWAP_DEST}" 2>/dev/null || true
+  fi
+  if [ -n "${SWAP_STAGED}" ]; then rm -rf "${SWAP_STAGED}"; fi
+  SWAP_STAGED=""
+  SWAP_BACKUP=""
+}
+
+# verify_signature_continuity <new.app> <installed.app>; 0 = same signer.
+verify_signature_continuity() {
+  local new="$1" old="$2" dr="" authority=""
+  if [ -d "${old}" ] && codesign --verify --deep --strict "${old}" >/dev/null 2>&1; then
+    dr="$(codesign -d -r- "${old}" 2>&1 | sed -n 's/^designated => //p' | head -1 || true)"
+  fi
+  case "${dr}" in *cdhash*) dr="" ;; esac
+  if [ -n "${dr}" ]; then
+    if codesign --verify --deep --strict -R="${dr}" "${new}" >/dev/null 2>&1; then
+      echo "    signature OK: new app satisfies the installed app's designated requirement"
+      return 0
+    fi
+    echo "" >&2
+    echo "############################################################" >&2
+    echo "# SECURITY: SIGNATURE MISMATCH — REFUSING TO UPDATE         #" >&2
+    echo "############################################################" >&2
+    echo "The new app is NOT signed by the same identity as the installed" >&2
+    echo "Clipnest. It will NOT be installed; your existing app is untouched." >&2
+    echo "  installed requirement: ${dr}" >&2
+    echo "Report this at https://github.com/${REPO}/issues if it persists." >&2
+    return 1
+  fi
+  authority="$(codesign -dvv "${new}" 2>&1 | sed -n 's/^Authority=//p' | head -1 || true)"
+  if [ "${authority}" = "${RELEASE_IDENTITY}" ]; then
+    echo "    signature OK: new app is signed by '${authority}'"
+    return 0
+  fi
+  echo "" >&2
+  echo "############################################################" >&2
+  echo "# SECURITY: UNEXPECTED SIGNER — REFUSING TO INSTALL         #" >&2
+  echo "############################################################" >&2
+  echo "No comparable signature on the installed app, and the new app's" >&2
+  echo "signing authority is not the Clipnest release identity." >&2
+  echo "  expected: ${RELEASE_IDENTITY}" >&2
+  echo "  actual:   ${authority:-<none / unsigned>}" >&2
+  echo "Nothing was installed; any existing app is untouched." >&2
+  return 1
+}
+
+# stage_app <src.app> <dest.app> <expected_version>: copy next to dest, verify.
+# On success SWAP_STAGED is set and nothing at dest has been touched.
+stage_app() {
+  local src="$1" dest="$2" expected="$3" dir base staged actual
+  dir="$(dirname "${dest}")"
+  base="$(basename "${dest}")"
+  staged="${dir}/.${base}.new-$$"
+  SWAP_DEST="${dest}"
+  SWAP_STAGED="${staged}"
+  SWAP_BACKUP=""
+  rm -rf "${staged:?}"
+  if ! cp -R "${src}" "${staged}"; then
+    echo "error: could not copy the new app to ${dir} (disk full / not writable?). Existing app untouched." >&2
+    swap_cleanup
+    return 1
+  fi
+  actual="$(app_plist_version "${staged}")"
+  if [ "${actual}" != "${expected}" ]; then
+    echo "error: new app version (${actual}) does not match expected (${expected}). Existing app untouched." >&2
+    swap_cleanup
+    return 1
+  fi
+  if ! codesign --verify --deep --strict "${staged}" >/dev/null 2>&1; then
+    echo "error: SECURITY — the new app's code signature is missing or invalid. Existing app untouched." >&2
+    swap_cleanup
+    return 1
+  fi
+  if ! verify_signature_continuity "${staged}" "${dest}"; then
+    swap_cleanup
+    return 1
+  fi
+  /usr/bin/xattr -dr com.apple.quarantine "${staged}" 2>/dev/null || true
+  return 0
+}
+
+# commit_swap: rename old -> .old-$$, staged -> dest, then drop old. Rolls back on failure.
+commit_swap() {
+  local dest="${SWAP_DEST}" staged="${SWAP_STAGED}" dir base backup
+  dir="$(dirname "${dest}")"
+  base="$(basename "${dest}")"
+  backup="${dir}/.${base}.old-$$"
+  if [ -e "${dest}" ]; then
+    rm -rf "${backup:?}"
+    if ! mv "${dest}" "${backup}"; then
+      echo "error: could not move the old app aside. Existing app untouched." >&2
+      swap_cleanup
+      return 1
+    fi
+    SWAP_BACKUP="${backup}"
+  fi
+  if ! mv "${staged}" "${dest}"; then
+    echo "error: could not move the new app into place — restoring the previous version." >&2
+    swap_cleanup
+    return 1
+  fi
+  SWAP_STAGED=""
+  rm -rf "${backup:?}"
+  SWAP_BACKUP=""
+  return 0
+}
+# END swap block
+
 TMP=""
 MNT=""
 cleanup() {
+  swap_cleanup
   if [ -n "${MNT}" ]; then
     hdiutil detach "${MNT}" -quiet 2>/dev/null || true
   fi
@@ -124,7 +275,7 @@ fetch_release() {
       echo "       access token (no scopes needed for a public repo) to raise the" >&2
       echo "       limit to 5000/hour, e.g.:" >&2
       echo "         export GITHUB_TOKEN=ghp_xxx" >&2
-      echo "         curl -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh | bash" >&2
+      echo "         curl --proto '=https' --tlsv1.2 -fsSL https://raw.githubusercontent.com/${REPO}/main/scripts/install.sh | bash" >&2
     else
       echo "GitHub's response body:" >&2
       cat "${API_BODY_FILE}" >&2 2>/dev/null || true
@@ -290,13 +441,15 @@ install_macos() {
   fi
 
   echo "==> Mounting…"
+  # `-noverify` was removed: the SHA-256 above authenticates the file, and now
+  # hdiutil also verifies the image's own UDIF checksum while attaching.
   # NOTE: `-quiet` here was the root cause of a silent-exit bug — it suppresses
   # ALL of hdiutil's stdout (the mount table), so the grep below always came up
   # empty, grep exited 1, and under `set -euo pipefail` that killed the script
   # at this assignment line — BEFORE the `[ -z "${MNT}" ]` guard below ever ran.
   # Fix: capture the (now non-empty) attach output first, parse it second, and
   # never let the parse pipeline itself trigger set -e (see `|| true` above).
-  ATTACH_OUT="$(hdiutil attach "${TMP}/Clipnest.dmg" -nobrowse -noverify -noautoopen)"
+  ATTACH_OUT="$(hdiutil attach "${TMP}/Clipnest.dmg" -nobrowse -noautoopen)"
   MNT="$(printf '%s' "${ATTACH_OUT}" | grep -oE '/Volumes/.+$' | tail -1 || true)"
   if [ -z "${MNT}" ] || [ ! -d "${MNT}/${APP}" ]; then
     echo "error: mounted the DMG but couldn't find ${APP} inside it" >&2
@@ -305,18 +458,17 @@ install_macos() {
     exit 1
   fi
 
+  # Stage-then-swap (see the swap block near the top): the new app is verified
+  # (version, code signature, same signer as any existing install) BEFORE an
+  # existing copy is touched, and the old copy is restored if the swap fails.
+  EXPECTED_VERSION="$(printf '%s' "${RELEASE_JSON}" | grep -o '"tag_name": *"[^"]*"' | head -1 | sed -E 's/.*"([^"]+)"/\1/' || true)"
+  EXPECTED_VERSION="${EXPECTED_VERSION#v}"
+  [ -n "${EXPECTED_VERSION}" ] || die "could not determine the release version"
   echo "==> Installing to ${DEST}…"
-  rm -rf "${DEST:?}/${APP}"
-  cp -R "${MNT}/${APP}" "${DEST}/"
-  # Belt-and-suspenders: strip quarantine in case a previous browser download set it.
-  # (Runs only after the checksum above has been verified.)
-  xattr -dr com.apple.quarantine "${DEST}/${APP}" 2>/dev/null || true
-
-  if [ ! -d "${DEST}/${APP}" ]; then
-    echo "error: install failed — ${DEST}/${APP} does not exist after copy" >&2
-    exit 1
-  fi
-  INSTALLED_VERSION="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "${DEST}/${APP}/Contents/Info.plist" 2>/dev/null || echo 'unknown')"
+  stage_app "${MNT}/${APP}" "${DEST}/${APP}" "${EXPECTED_VERSION}" \
+    || die "install aborted; any existing ${DEST}/${APP} was NOT modified."
+  commit_swap || die "install failed; any previous ${DEST}/${APP} was restored."
+  INSTALLED_VERSION="$(app_plist_version "${DEST}/${APP}")"
 
   echo "==> Launching Clipnest…"
   open "${DEST}/${APP}"

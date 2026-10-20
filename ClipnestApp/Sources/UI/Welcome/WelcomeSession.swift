@@ -38,8 +38,18 @@ final class WelcomeSession: ObservableObject {
     let state = WelcomeAccessibilityPresentation.state(
       isGranted: PermissionsManager.isGranted, hasPressedAllow: pressed)
     self.accessibilityState = state
+    // Step 2 shares Settings -> General's backend (SMAppService), so both
+    // switches always agree. Pre-checked (recommended) until the user has
+    // answered once; after that it shows the real state.
+    let launchAtLogin = WelcomeLaunchAtLogin(
+      isEnabled: { LaunchAtLoginController.isEnabled },
+      setEnabled: { try LaunchAtLoginController.setEnabled($0) },
+      recordChoice: { [settings] in settings.hasChosenLaunchAtLogin = true })
     self.viewModel = WelcomeViewModel(
-      platform: .macOS, hotkey: Self.currentHotkey(), isPermissionComplete: state == .allowed)
+      platform: .macOS, hotkey: Self.currentHotkey(), isPermissionComplete: state == .allowed,
+      launchAtLogin: launchAtLogin,
+      launchAtLoginPreChecked: settings.hasChosenLaunchAtLogin
+        ? LaunchAtLoginController.isEnabled : true)
 
     viewModel.$activeStep
       .removeDuplicates()

@@ -11,6 +11,7 @@
 // complete).
 
 import ClipnestCore
+import Foundation
 
 #if canImport(Combine)
   import Combine
@@ -20,8 +21,11 @@ import ClipnestCore
 
 public enum WelcomeStep: Int, CaseIterable, Sendable {
   case permission = 1
-  /// Step 2: "Try your hotkey" (shows the hotkey, then detects it being used).
-  case tryIt = 2
+  /// Step 2: "Open Clipnest at login" (T-WELCOMELOGIN1): a pre-checked switch,
+  /// applied when the user continues, so capture survives a reboot.
+  case openAtLogin = 2
+  /// Step 3: "Try your hotkey" (shows the hotkey, then detects it being used).
+  case tryIt = 3
 
   public var number: Int { rawValue }
   public static var count: Int { allCases.count }
@@ -29,17 +33,20 @@ public enum WelcomeStep: Int, CaseIterable, Sendable {
   public var heading: String {
     switch self {
     case .permission: return WelcomeCopy.permissionHeading
+    case .openAtLogin: return WelcomeCopy.openAtLoginHeading
     case .tryIt: return WelcomeCopy.tryItHeading
     }
   }
 }
 
-/// Where keyboard focus starts on step 1 (never Skip).
+/// Where keyboard focus belongs (never Skip).
 public enum WelcomeInitialFocus: Equatable, Sendable {
   /// The step's own action (macOS "Allow Accessibility…") - permission missing.
   case permissionAction
   /// The footer primary button (Continue) - permission already granted.
   case primaryButton
+  /// The "Open Clipnest at login" switch, while that step is active.
+  case launchAtLoginToggle
 }
 
 public enum WelcomeStepState: Equatable, Sendable {
@@ -61,6 +68,37 @@ public enum WelcomeStepState: Equatable, Sendable {
 public enum WelcomeNavigation: Equatable, Sendable {
   case advanced
   case close
+  /// The step could not be completed (launch-at-login registration failed):
+  /// stay put; `launchAtLoginError` says why.
+  case stayed
+}
+
+/// The system boundary behind step 2, injected so the VM stays platform-free.
+/// macOS: `LaunchAtLoginController` (SMAppService); Linux: the autostart
+/// `.desktop` file. Both are the SAME state Settings -> General edits, so the
+/// welcome switch and the Settings switch can never disagree.
+@MainActor
+public struct WelcomeLaunchAtLogin {
+  public var isEnabled: @MainActor () -> Bool
+  public var setEnabled: @MainActor (Bool) throws -> Void
+  /// Called once the user's answer is in effect (feeds
+  /// `SettingsStore.hasChosenLaunchAtLogin`).
+  public var recordChoice: @MainActor () -> Void
+
+  public init(
+    isEnabled: @escaping @MainActor () -> Bool,
+    setEnabled: @escaping @MainActor (Bool) throws -> Void,
+    recordChoice: @escaping @MainActor () -> Void
+  ) {
+    self.isEnabled = isEnabled
+    self.setEnabled = setEnabled
+    self.recordChoice = recordChoice
+  }
+
+  /// No backing store (tests only): reads off, writes and choices drop. Always
+  /// passed explicitly; production seams must wire the real backend.
+  public static let inert = WelcomeLaunchAtLogin(
+    isEnabled: { false }, setEnabled: { _ in }, recordChoice: {})
 }
 
 @MainActor
@@ -83,10 +121,26 @@ public final class WelcomeViewModel: ObservableObject {
   /// ticks. Platforms read it, announce it, then `clearAnnouncement()`.
   @Published public private(set) var announcement: String?
   @Published public private(set) var isHotkeyPendingSetup = false
+  /// Step 2's switch. Applied to the system only when the user continues.
+  @Published public private(set) var wantsLaunchAtLogin: Bool
+  @Published public private(set) var launchAtLoginError: String?
 
+  private let launchAtLogin: WelcomeLaunchAtLogin
   private var outcomes: [WelcomeStep: WelcomeStepState] = [:]
 
-  public init(platform: WelcomePlatform, hotkey: WelcomeHotkey, isPermissionComplete: Bool) {
+  /// - Parameter launchAtLoginPreChecked: the switch's starting value. Platforms
+  ///   pass `true` (recommended) until the user has chosen once, then the real
+  ///   system state, so reopening "Getting Started…" never re-enables a
+  ///   login item the user turned off in Settings. Both Continue and Skip on
+  ///   the open-at-login step call `launchAtLogin.recordChoice` (Skip leaves the
+  ///   login state itself untouched), so "until the user has chosen" means
+  ///   "has answered that step either way".
+  public init(
+    platform: WelcomePlatform, hotkey: WelcomeHotkey, isPermissionComplete: Bool,
+    launchAtLogin: WelcomeLaunchAtLogin, launchAtLoginPreChecked: Bool = true
+  ) {
+    self.launchAtLogin = launchAtLogin
+    wantsLaunchAtLogin = launchAtLoginPreChecked
     self.platform = platform
     self.hotkey = hotkey
     self.isPermissionComplete = isPermissionComplete
@@ -103,8 +157,12 @@ public final class WelcomeViewModel: ObservableObject {
   /// 1's action button. Platforms re-apply it when the active step changes or
   /// the button disappears, so focus never lands on nothing (or on Skip).
   public func focusTarget(permissionActionAvailable: Bool) -> WelcomeInitialFocus {
-    activeStep == .permission && !isPermissionComplete && permissionActionAvailable
-      ? .permissionAction : .primaryButton
+    switch activeStep {
+    case .permission:
+      return !isPermissionComplete && permissionActionAvailable ? .permissionAction : .primaryButton
+    case .openAtLogin: return .launchAtLoginToggle
+    case .tryIt: return .primaryButton
+    }
   }
 
   // MARK: State
@@ -125,7 +183,7 @@ public final class WelcomeViewModel: ObservableObject {
   }
 
   public var primaryTitle: String {
-    activeStep == .tryIt ? WelcomeCopy.doneTitle : WelcomeCopy.continueTitle
+    activeStep == WelcomeStep.allCases.last ? WelcomeCopy.doneTitle : WelcomeCopy.continueTitle
   }
 
   public func accessibilityLabel(for step: WelcomeStep) -> String {
@@ -138,6 +196,8 @@ public final class WelcomeViewModel: ObservableObject {
   // MARK: Copy
 
   public var permissionBodyText: String { WelcomeCopy.permissionBody(platform: platform) }
+
+  public var openAtLoginBodyText: String { WelcomeCopy.openAtLoginBody }
 
   public var tryItBodyText: String {
     WelcomeCopy.tryItBody(
@@ -162,7 +222,7 @@ public final class WelcomeViewModel: ObservableObject {
   /// already-granted step 1). `nil` for the active row, whose detail view
   /// carries its own status.
   public func collapsedStatusText(for step: WelcomeStep) -> String? {
-    // Keyed on the ACTIVE step, not `.current` state: step 2 stays expanded
+    // Keyed on the ACTIVE step, not `.current` state: step 3 stays expanded
     // after success ("It works. Press Esc…") even though its state is `.done`.
     guard step != activeStep else { return nil }
     let state = state(of: step)
@@ -173,6 +233,8 @@ public final class WelcomeViewModel: ObservableObject {
       case .skipped: return WelcomeCopy.permissionSkippedStatus
       case .upcoming, .current: return WelcomeCopy.permissionNotAllowedYetStatus
       }
+    case .openAtLogin:
+      return wantsLaunchAtLogin ? WelcomeCopy.openAtLoginOnStatus : WelcomeCopy.openAtLoginOffStatus
     case .tryIt:
       if state == .done { return WelcomeCopy.tryItWorksShort }
       return hotkey.displayText ?? WelcomeCopy.noHotkeyShort
@@ -190,22 +252,28 @@ public final class WelcomeViewModel: ObservableObject {
 
   // MARK: Buttons
 
-  /// Primary button (Return). Advances; on step 2 there is nothing further, so
-  /// it closes (marking an unfinished step 2 skipped).
+  /// Primary button (Return). Advances; on the last step (try your hotkey) there is nothing
+  /// further, so it closes (marking it skipped if unfinished). On step 2 it
+  /// first applies the login-item choice.
   public func continueTapped() -> WelcomeNavigation {
     switch activeStep {
     case .permission:
       outcomes[.permission] = isPermissionComplete ? .done : .skipped
       return advance()
+    case .openAtLogin:
+      return applyLaunchAtLogin()
     case .tryIt:
       return closeFromTryIt()
     }
   }
 
-  /// "Skip": skips the current step; on step 2 it closes.
+  /// "Skip": skips the current step; on the last step it closes.
   public func skipTapped() -> WelcomeNavigation {
     switch activeStep {
-    case .permission:
+    case .permission, .openAtLogin:
+      // Skipping step 2 leaves the system untouched (nothing is applied) but
+      // still counts as an answer, so the next Getting Started shows reality.
+      if activeStep == .openAtLogin { launchAtLogin.recordChoice() }
       outcomes[activeStep] = .skipped
       return advance()
     case .tryIt:
@@ -217,6 +285,33 @@ public final class WelcomeViewModel: ObservableObject {
     guard let next = WelcomeStep(rawValue: activeStep.rawValue + 1) else { return .close }
     activeStep = next
     return .advanced
+  }
+
+  /// Step 2's Continue: write the choice through the shared backend. A failure
+  /// (e.g. macOS refuses to register an app outside /Applications) keeps the
+  /// user on the step with the reason and the switch reverted to reality, so it
+  /// never claims something the system did not do.
+  private func applyLaunchAtLogin() -> WelcomeNavigation {
+    if wantsLaunchAtLogin != launchAtLogin.isEnabled() {
+      do {
+        try launchAtLogin.setEnabled(wantsLaunchAtLogin)
+      } catch {
+        launchAtLoginError = error.localizedDescription
+        wantsLaunchAtLogin = launchAtLogin.isEnabled()
+        return .stayed
+      }
+    }
+    launchAtLoginError = nil
+    launchAtLogin.recordChoice()
+    outcomes[.openAtLogin] = wantsLaunchAtLogin ? .done : .skipped
+    if wantsLaunchAtLogin { announcement = WelcomeCopy.openAtLoginSavedAnnouncement }
+    return advance()
+  }
+
+  public func setWantsLaunchAtLogin(_ wants: Bool) {
+    guard wants != wantsLaunchAtLogin else { return }
+    wantsLaunchAtLogin = wants
+    launchAtLoginError = nil
   }
 
   private func closeFromTryIt() -> WelcomeNavigation {
@@ -243,11 +338,11 @@ public final class WelcomeViewModel: ObservableObject {
     self.announcement = announcement
     if activeStep == .permission {
       outcomes[.permission] = .done
-      activeStep = .tryIt
+      _ = advance()
     }
   }
 
-  /// The picker became visible (menu item or hotkey). Only counts on step 2:
+  /// The picker became visible (menu item or hotkey). Only counts on step 3:
   /// opening it while still on the permission step is not "trying the hotkey".
   public func pickerDidShow() {
     guard activeStep == .tryIt, hotkey.isBound, !hasDetectedHotkey else { return }
@@ -257,7 +352,7 @@ public final class WelcomeViewModel: ObservableObject {
       ? WelcomeCopy.tryItOpenedAnnouncement : WelcomeCopy.tryItDetectedAnnouncement
   }
 
-  /// Platform timer fired `WelcomeCopy.tryItHintDelaySeconds` after step 2
+  /// Platform timer fired `WelcomeCopy.tryItHintDelaySeconds` after step 3
   /// became active.
   public func tryItHintTimedOut() {
     guard !hasDetectedHotkey else { return }

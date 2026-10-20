@@ -125,7 +125,7 @@ final class LinuxAppEnvironment {
   /// second reader, in `ClipnestLinuxAppKit` alongside this file — the
   /// existing source of truth, so `--version` never grows a second
   /// hardcoded copy of the version string.
-  nonisolated static let installedVersion = "1.4.0"
+  nonisolated static let installedVersion = "1.5.0"
 
   /// Resolves this process's own absolute executable path for
   /// `AutostartDesktopFile.setEnabled(_:executablePath:)`'s `.desktop`
@@ -915,6 +915,15 @@ final class LinuxAppEnvironment {
     } else {
       settingsWindow.show()
     }
+  }
+
+  /// The tray's "Check for Updates…": opens Settings → General (whose update
+  /// section shows "You're up to date (x)", the failure, or the available
+  /// update with its Install/apt guidance) and runs an immediate check there.
+  /// Works even when automatic checking is off.
+  func checkForUpdatesFromTray() {
+    openSettings(tab: .general)
+    settingsWindow.checkForUpdatesFromUI()
   }
 
   /// The tray's "Pause Capture" toggle — the inverse of Settings → General

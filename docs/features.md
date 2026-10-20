@@ -275,6 +275,7 @@ ID` (`:82`), `Rejects a caller-supplied custom excluded bundle ID` (`:95`).
   `ClipboardMonitor.checkNow()` (`ClipboardMonitor.swift:215-226`) — a
   rejected change is never classified or hashed, so no content from a
   privacy-filtered app is ever even briefly held in memory as a `ClipItem`.
+- **macOS: picker, item preview and snippet editor windows opt out of screen sharing/recording** (`NSWindow.sharingType = .none`, via `excludeFromScreenSharing()`), since clipboard contents may include secrets. Best effort: on macOS 15+ ScreenCaptureKit-based capture may still include them in some modes.
 - Bundle-ID list is verified/hardcoded, not user-visible/editable yet beyond
   the `customExcludedBundleIDs` injection point.
 - **Linux (1.0.0): GNOME re-publishes a released copy without its privacy
@@ -873,7 +874,7 @@ visible 8 px gap.
 **How it works — keyboard.** `PickerView.handle(_:)`
 (`PickerView.swift:154-199`) is the single `.onKeyPress` handler for
 Esc (dismiss), Return / ⌥-Return (paste rich / paste plain), ↑/↓ (move
-selection), Delete (delete highlighted), ⌘F (focus search), ⌘P (toggle pin),
+selection), ⌘⌫ (delete highlighted; plain ⌫ is ignored, T-BKSPDEL1), ⌘F (focus search), ⌘P (toggle pin),
 ⌘S (save as snippet), ⌘N (new snippet, Snippets tab only), ⌘1/⌘2/⌘3 (switch
 tabs). Return is handled both here *and* via the search field's own
 `.onSubmit` (`:231`) — belt-and-suspenders, since which of the two actually

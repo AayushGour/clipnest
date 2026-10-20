@@ -39,10 +39,21 @@ final class WelcomeCoordinator {
       isAutoPasteAvailable: environment.eventSynthesizerKind != .clipboardOnly,
       isAlreadyInInputGroup: uinput.isInClipnestInputGroup || uinput.isUInputAccessible)
     let environment = self.environment
+    // Step 2 shares Settings -> General's backend (the autostart .desktop
+    // file). Pre-checked until the user has answered once, then the real state.
+    let executablePath = OwnExecutablePath.resolve()
+    let settings = environment.settingsStore
+    let launchAtLogin = WelcomeLaunchAtLogin(
+      isEnabled: { AutostartDesktopFile.isEnabled() },
+      setEnabled: { try AutostartDesktopFile.setEnabled($0, executablePath: executablePath) },
+      recordChoice: { settings.hasChosenLaunchAtLogin = true })
     let newWindow = WelcomeWindow(
       configuration: .init(
         keyboardAccess: keyboard,
         extensionStatus: environment.gnomeExtensionStatus,
+        launchAtLogin: launchAtLogin,
+        launchAtLoginPreChecked: settings.hasChosenLaunchAtLogin
+          ? AutostartDesktopFile.isEnabled() : true,
         readHotkey: { WelcomeWindow.currentHotkey() },
         requestUInputGrant: { completion in
           GrantInputHelperClient.requestGrant(completion: completion)

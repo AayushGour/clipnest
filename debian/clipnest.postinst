@@ -52,6 +52,12 @@ case "$1" in
     if command -v modprobe >/dev/null 2>&1; then
       modprobe uinput >/dev/null 2>&1 || true
     fi
+
+    # Visible heads-up (stdout only, never fails the install). We run as root
+    # and cannot tell whether a GNOME session exists, so the wording is
+    # generic. The extension itself is installed per-user by the app on first
+    # launch (GnomeExtensionInstaller) — never by this package.
+    echo "Clipnest: on GNOME, the Clipnest Shell extension is set up automatically the first time you open Clipnest; log out and back in once to activate the hotkey."
     ;;
 
   abort-upgrade | abort-remove | abort-deconfigure) ;;

@@ -75,7 +75,7 @@ public enum WelcomeGnomeExtensionPresentation {
     }
   }
 
-  /// Step 2 must not promise a hotkey that will not fire: true while the
+  /// The try-it step (3) must not promise a hotkey that will not fire: true while the
   /// extension is not (yet) delivering it. Feed to `setHotkeyPendingSetup`.
   public static func hotkeyIsPendingSetup(_ status: GnomeExtensionStatus) -> Bool {
     switch status {

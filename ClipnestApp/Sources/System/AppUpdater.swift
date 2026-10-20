@@ -1,15 +1,21 @@
 // AppUpdater.swift
 //
 // Self-update, triggered by clicking the version label in
-// `PickerView.shortcutHintBar`. Per coding-standards.md's "Local-only,
-// always" privacy must (no `URLSession`, no sockets anywhere in the
-// codebase), this type makes **no network calls itself** — it shells out,
-// via Terminal, to the exact same public `scripts/update.sh` curl one-liner
-// a user could already run by hand (see that script's own top doc comment
-// for the update flow: check the latest GitHub release, download+install
-// the `.dmg`, relaunch). No clipboard/user data is sent; the only network
-// traffic is the script downloading a public GitHub release, which happens
-// entirely outside this process.
+// `PickerView.shortcutHintBar`. This type makes **no network calls itself**
+// (no `URLSession`, no sockets) — it shells out, via Terminal, to the public
+// `scripts/update.sh` (see that script's own top doc comment for the update
+// flow: download + checksum-verify the release `.dmg`, verify the new app's
+// code signature matches the installed one, stage-then-swap, relaunch). No
+// clipboard/user data is sent; the only network traffic is the script
+// downloading a public GitHub release, entirely outside this process.
+//
+// Security (T-AUD-UPDPIN): the script is fetched from the release TAG being
+// installed (`.../<vX.Y.Z>/scripts/update.sh`), NOT the mutable `main`
+// branch, and the same tag is handed to it via `CLIPNEST_VERSION`. The tag is
+// strictly validated (`UpdateCommand.validatedTag`) before it reaches any URL
+// or command line; with no valid tag we open the releases page instead and
+// never fall back to `main`. The command builder lives in
+// `ClipnestViewModels/System/UpdateCommand.swift` (SwiftPM-testable).
 //
 // `runUpdate()` writes a throwaway `.command` file and hands it to
 // `NSWorkspace.shared.open(_:)` rather than launching `Process`/`Task`
@@ -20,6 +26,7 @@
 // script itself quits and relaunches Clipnest — see `scripts/update.sh`).
 
 import AppKit
+import ClipnestViewModels
 import Foundation
 
 enum AppUpdater {
@@ -29,26 +36,25 @@ enum AppUpdater {
     Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
   }
 
-  /// The public, versionless URL to `scripts/update.sh` on `main` — same
-  /// script + same URL documented in that script's own "Usage" doc comment,
-  /// so there is exactly one place this URL is defined.
-  private static let updateScriptURL =
-    "https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/update.sh"
-
-  /// The one-liner run by `runUpdate()`, factored out as its own property so
-  /// it's unit-testable without actually shelling out (`runUpdate()` itself
-  /// is a side effect — opens Terminal — and isn't called from tests).
-  static var updateCommand: String {
-    "curl -fsSL \(updateScriptURL) | bash"
+  /// The Terminal one-liner pinned to `latestVersion` (`"1.4.1"` or
+  /// `"v1.4.1"`), or `nil` if it isn't a strict `vX.Y.Z` tag. Factored out
+  /// (and delegated to the pure `UpdateCommand`) so it's unit-testable
+  /// without shelling out.
+  static func updateCommand(forVersion latestVersion: String?) -> String? {
+    UpdateCommand.command(forTag: latestVersion)
   }
 
-  /// Writes `updateCommand` to a throwaway executable `.command` file in the
+  /// Writes the pinned update command to a throwaway executable `.command` file in the
   /// temp directory and opens it — macOS runs `.command` files in Terminal.
   /// Falls back to opening the GitHub releases page in the default browser
-  /// if writing/opening the script fails for any reason (e.g. an unwritable
+  /// if `latestVersion` isn't a valid tag or writing/opening the script fails for any reason (e.g. an unwritable
   /// temp directory), so the user always has a path to updating manually.
-  static func runUpdate() {
-    let script = "#!/bin/bash\n\(updateCommand)"
+  static func runUpdate(latestVersion: String?) {
+    guard let command = updateCommand(forVersion: latestVersion) else {
+      openReleasesPage()
+      return
+    }
+    let script = "#!/bin/bash\n\(command)"
     let scriptURL = FileManager.default.temporaryDirectory
       .appendingPathComponent("clipnest-update-\(UUID().uuidString)")
       .appendingPathExtension("command")
@@ -59,9 +65,13 @@ enum AppUpdater {
         [.posixPermissions: 0o755], ofItemAtPath: scriptURL.path)
       NSWorkspace.shared.open(scriptURL)
     } catch {
-      if let releasesURL = URL(string: "https://github.com/AayushGour/clipnest/releases") {
-        NSWorkspace.shared.open(releasesURL)
-      }
+      openReleasesPage()
+    }
+  }
+
+  private static func openReleasesPage() {
+    if let releasesURL = URL(string: "https://github.com/AayushGour/clipnest/releases") {
+      NSWorkspace.shared.open(releasesURL)
     }
   }
 }

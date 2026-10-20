@@ -188,7 +188,8 @@ final class ItemPreviewController {
       height: max(display.height + chrome, Self.minPanelHeight))
   }
 
-  private func makePanel() -> NSPanel {
+  /// Internal (not private) so tests can assert the screen-sharing exclusion.
+  func makePanel() -> NSPanel {
     let panel = NSPanel(
       contentRect: .zero,
       styleMask: [.nonactivatingPanel, .borderless],
@@ -198,6 +199,9 @@ final class ItemPreviewController {
     panel.hasShadow = true
     panel.backgroundColor = .clear
     panel.isReleasedWhenClosed = false
+    // Previews show clipboard contents (may include secrets) — keep them out
+    // of screen sharing/recording (best effort; see `excludeFromScreenSharing()`).
+    panel.excludeFromScreenSharing()
     panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
     return panel
   }

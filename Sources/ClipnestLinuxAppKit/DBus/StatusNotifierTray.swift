@@ -107,6 +107,7 @@ public final class StatusNotifierTray: @unchecked Sendable {
 
   public var onOpenClipnest: () -> Void = {}
   public var onOpenSettings: () -> Void = {}
+  public var onCheckForUpdates: () -> Void = {}
   /// "Getting Started…": reopens the welcome window (never touches the seen flag).
   public var onOpenGettingStarted: () -> Void = {}
   public var onQuit: () -> Void = {}
@@ -140,6 +141,7 @@ public final class StatusNotifierTray: @unchecked Sendable {
       DBusMenuItem(id: DBusMenuItemID.openClipnest, label: "Open Clipnest"),
       DBusMenuItem(id: DBusMenuItemID.pauseCapture, label: "Pause Capture", toggleState: isPaused),
       DBusMenuItem(id: DBusMenuItemID.openSettings, label: "Settings…"),
+      DBusMenuItem(id: DBusMenuItemID.checkForUpdates, label: UpdateCheckFeedback.menuItemTitle),
       DBusMenuItem(id: DBusMenuItemID.gettingStarted, label: WelcomeCopy.menuItemTitle),
       DBusMenuItem(id: DBusMenuItemID.quit, label: "Quit Clipnest"),
     ]
@@ -253,6 +255,7 @@ public final class StatusNotifierTray: @unchecked Sendable {
       switch itemID {
       case DBusMenuItemID.openClipnest: onOpenClipnest()
       case DBusMenuItemID.openSettings: onOpenSettings()
+      case DBusMenuItemID.checkForUpdates: onCheckForUpdates()
       case DBusMenuItemID.gettingStarted: onOpenGettingStarted()
       case DBusMenuItemID.quit: onQuit()
       case DBusMenuItemID.pauseCapture:
