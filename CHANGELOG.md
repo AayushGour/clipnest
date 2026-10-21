@@ -10,6 +10,32 @@ at any time.
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-10-21
+
+### Fixed
+
+- macOS: "Check for Updates…" could leave Clipnest frozen behind an invisible
+  alert when a full-screen app was in front. The result now appears in a small
+  non-blocking window on your current desktop, including over full-screen
+  apps; Return and Esc work, and the app stays usable even if the window is
+  missed.
+- Linux: Settings → General "Launch Clipnest at login" now shows the real
+  autostart state when Settings opens, including a change made in the
+  Welcome window.
+- Linux: after a successful in-app update, Settings shows "Installed vX —
+  restart Clipnest to finish updating", hides the Install button and the
+  picker's update dot, and doesn't offer the same version again until
+  restart. A failed install stays retryable.
+- Linux: the Welcome window moves focus to the step's button (e.g. Turn On)
+  once the GNOME extension check finishes, unless you already moved focus.
+- Linux: "Log Out Now" closes the Welcome window once the log-out request is
+  accepted; if it fails, the window stays open and shows an error.
+
+### Documentation
+
+- Picker row labels are exposed as `AXDescription` for automation clients
+  (System Events' `description` returns the role description, "button").
+
 ## [1.6.0] - 2026-10-21
 
 ### Added
@@ -552,7 +578,8 @@ release (0.5.0, above). None of them were ever installed by a user.
 
 - `Sendable` conformance for `NSPasteboard` access, required by Swift 6.
 
-[Unreleased]: https://github.com/AayushGour/clipnest/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/AayushGour/clipnest/compare/v1.6.1...HEAD
+[1.6.1]: https://github.com/AayushGour/clipnest/compare/v1.6.0...v1.6.1
 [1.6.0]: https://github.com/AayushGour/clipnest/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/AayushGour/clipnest/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/AayushGour/clipnest/compare/v1.3.0...v1.4.0

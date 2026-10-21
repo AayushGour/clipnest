@@ -1,3 +1,16 @@
+clipnest (1.6.1) jammy; urgency=medium
+
+  * fix: Settings shows the real "Launch Clipnest at login" state when
+    opened, including a change made in the Welcome window.
+  * fix: after a successful in-app update, Settings asks you to restart
+    and stops offering the same version again.
+  * fix: the Welcome window moves focus to the step's button once the
+    GNOME extension check finishes.
+  * fix: "Log Out Now" closes the Welcome window once the request is
+    accepted, and shows an error if it fails.
+
+ -- Aayush Gour <ag14906@gmail.com>  Wed, 21 Oct 2026 00:00:00 +0000
+
 clipnest (1.6.0) jammy; urgency=medium
 
   * feat: the Welcome window now requires the permissions to be set up

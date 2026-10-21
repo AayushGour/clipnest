@@ -13,6 +13,12 @@ struct GTKUpdateSettingsPresentationTests {
     #expect(UpdateSettingsPresentation.versionLine(installedVersion: "0.9.1") == "Clipnest v0.9.1")
   }
 
+  @Test("restartPendingLine says installed and restart, not 'available'")
+  func restartPendingLine() {
+    let text = UpdateSettingsPresentation.restartPendingLine(installedVersion: "1.2.0")
+    #expect(text == "Installed v1.2.0 — restart Clipnest to finish updating.")
+  }
+
   @Test("updateAvailableLine names the latest version")
   func updateAvailableLineNamesLatestVersion() {
     #expect(

@@ -81,7 +81,8 @@ public enum WelcomeNavigation: Equatable, Sendable {
   /// stay put; `launchAtLoginError` says why.
   case stayed
   /// The log-out step's primary button: the platform asks the session manager to
-  /// log out (with its own confirmation) and leaves the window open.
+  /// log out (with its own confirmation), then reports back through
+  /// `logOutFinished(succeeded:)`, which says whether to close the window.
   case logOut
 }
 
@@ -145,9 +146,14 @@ public final class WelcomeViewModel: ObservableObject {
   /// Linux: a log-out is still needed (pending re-login), so the last step is
   /// `.logOut` instead of `.tryIt`. Always false on macOS.
   @Published public private(set) var needsRelogin = false
+  /// Linux: why the last "Log Out Now" request failed; `nil` otherwise.
+  @Published public private(set) var logOutError: String?
 
   private let launchAtLogin: WelcomeLaunchAtLogin
   private var outcomes: [WelcomeStep: WelcomeStepState] = [:]
+  /// Focus bookkeeping (not published: the platform reads it, never renders it).
+  private var appliedFocus: WelcomeInitialFocus?
+  private var userMovedFocus = false
 
   /// - Parameter launchAtLoginPreChecked: the switch's starting value. Platforms
   ///   pass `true` (recommended) until the user has chosen once, then the real
@@ -200,6 +206,26 @@ public final class WelcomeViewModel: ObservableObject {
     case .openAtLogin: return .launchAtLoginToggle
     case .tryIt, .logOut: return .primaryButton
     }
+  }
+
+  /// The platform put focus on `target` itself (initial focus, a step change).
+  /// This starts a fresh "has the user moved focus since?" window.
+  public func focusApplied(_ target: WelcomeInitialFocus) {
+    appliedFocus = target
+    userMovedFocus = false
+  }
+
+  /// Focus moved for a reason the platform did not cause (Tab, a click).
+  public func userDidMoveFocus() { userMovedFocus = true }
+
+  /// A better focus target that became available AFTER focus was applied: the
+  /// window opened on the fallback "Set up later" (step 1's action was still
+  /// being checked) and the action has since appeared. `nil` = leave focus
+  /// alone, including whenever the user moved it themselves.
+  public func lateFocusTarget(permissionActionAvailable: Bool) -> WelcomeInitialFocus? {
+    guard !userMovedFocus, appliedFocus == .secondaryButton else { return nil }
+    let target = focusTarget(permissionActionAvailable: permissionActionAvailable)
+    return target == .secondaryButton ? nil : target
   }
 
   // MARK: State
@@ -373,6 +399,21 @@ public final class WelcomeViewModel: ObservableObject {
       outcomes[.logOut] = .skipped
       return .close
     }
+  }
+
+  /// The platform's answer to a `.logOut` navigation. The request went out
+  /// (the desktop shows its own confirmation): this welcome is finished, close
+  /// it. It failed: stay open with `logOutError` so the user can retry or log
+  /// out from the desktop's menu.
+  public func logOutFinished(succeeded: Bool) -> WelcomeNavigation {
+    guard succeeded else {
+      logOutError = WelcomeCopy.logOutFailed
+      announcement = WelcomeCopy.logOutFailed
+      return .stayed
+    }
+    logOutError = nil
+    outcomes[.logOut] = .done
+    return .close
   }
 
   private func advance() -> WelcomeNavigation {

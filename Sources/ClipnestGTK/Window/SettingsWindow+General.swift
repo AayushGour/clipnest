@@ -113,6 +113,12 @@ public enum UpdateSettingsPresentation {
   }
 
   public static let upToDateText = "You're up to date."
+
+  /// Shown in place of the "update available" line once an in-app install
+  /// has succeeded and only a restart remains (T-LXUPDDONE1).
+  public static func restartPendingLine(installedVersion: String) -> String {
+    statusText(for: .succeeded(installedVersion: installedVersion))
+  }
   public static let detectingInstallSourceText = "Checking how Clipnest was installed…"
 
   public static func packageManagedExplanation(origin: String) -> String {
@@ -320,6 +326,20 @@ extension SettingsWindow {
       updateVersionLabel,
       text: UpdateSettingsPresentation.versionLine(installedVersion: installedVersionText))
 
+    if let pending = updateChecker.pendingRestartVersion, !updateChecker.isUpdateAvailable {
+      // T-LXUPDDONE1: installed, restart pending — no install control, no
+      // re-offer of the same version.
+      if let updateExplanationLabel {
+        setStatusLabel(
+          updateExplanationLabel,
+          text: UpdateSettingsPresentation.restartPendingLine(installedVersion: pending))
+      }
+      if let updateAptCommandLabel { setStatusLabel(updateAptCommandLabel, text: nil) }
+      if let updateInstallButton { gtk_widget_set_visible(updateInstallButton, 0) }
+      if let updateStatusLabel { setStatusLabel(updateStatusLabel, text: nil) }
+      return
+    }
+
     guard updateChecker.isUpdateAvailable, let latestVersion = updateChecker.latestVersion else {
       if let updateExplanationLabel {
         setStatusLabel(updateExplanationLabel, text: UpdateSettingsPresentation.upToDateText)
@@ -346,6 +366,8 @@ extension SettingsWindow {
     let detectProvenance = detectUpdateProvenance
     Task { @MainActor [weak self] in
       let provenance = await detectProvenance()
+      // An install may have completed while detection was in flight.
+      guard self?.updateChecker.isUpdateAvailable == true else { return }
       self?.applyDetectedProvenance(provenance, latestVersion: latestVersion)
     }
   }
@@ -396,6 +418,9 @@ extension SettingsWindow {
       // case is fully rendered by the refresh above).
       switch outcome {
       case .upToDate, .failed:
+        // Restart pending (T-LXUPDDONE1): keep the "Installed vX — restart"
+        // line the refresh just rendered rather than "You're up to date".
+        if self?.updateChecker.pendingRestartVersion != nil { break }
         if let label = self?.updateExplanationLabel {
           self?.setStatusLabel(label, text: UpdateCheckFeedback(outcome: outcome).title)
         }
@@ -456,7 +481,33 @@ extension SettingsWindow {
     if let updateStatusLabel {
       setStatusLabel(updateStatusLabel, text: UpdateSettingsPresentation.statusText(for: outcome))
     }
+    if case .succeeded(let version) = outcome {
+      // T-LXUPDDONE1: success disables/hides Install and replaces the
+      // "update available" line; the state lives in `updateChecker` so the
+      // picker footer and tray agree. Failure falls through: retryable.
+      updateChecker.markInstalledPendingRestart(version: version)
+      refreshUpdateAvailabilityUI()
+      if let updateStatusLabel {
+        setStatusLabel(updateStatusLabel, text: UpdateSettingsPresentation.statusText(for: outcome))
+      }
+      return
+    }
     if let updateInstallButton { gtk_widget_set_sensitive(updateInstallButton, 1) }
+  }
+
+  /// T-LXSETSTALE1: re-reads the REAL autostart state into the switch. The
+  /// welcome window's open-at-login step can change it while this window
+  /// already exists; called from `show()`. Only touches the widget when it
+  /// differs, and `isSyncingLaunchAtLogin` keeps the programmatic change
+  /// from firing a redundant write.
+  @MainActor
+  func refreshLaunchAtLoginUI() {
+    guard let launchAtLoginCheckButton else { return }
+    let actual = launchAtLoginProvider()
+    guard (gtk_check_button_get_active(launchAtLoginCheckButton) != 0) != actual else { return }
+    isSyncingLaunchAtLogin = true
+    gtk_check_button_set_active(launchAtLoginCheckButton, actual ? 1 : 0)
+    isSyncingLaunchAtLogin = false
   }
 
   /// Writes the launch-at-login `.desktop` file (or removes it) and, on
@@ -465,6 +516,7 @@ extension SettingsWindow {
   /// `GeneralSettingsView`'s identical `do`/`catch`/revert shape.
   @MainActor
   private func setLaunchAtLoginFromUI(_ isEnabled: Bool) {
+    guard !isSyncingLaunchAtLogin else { return }
     do {
       try setLaunchAtLogin(isEnabled)
       if let launchAtLoginErrorLabel {
@@ -474,9 +526,7 @@ extension SettingsWindow {
       if let launchAtLoginErrorLabel {
         setStatusLabel(launchAtLoginErrorLabel, text: String(describing: error))
       }
-      if let launchAtLoginCheckButton {
-        gtk_check_button_set_active(launchAtLoginCheckButton, launchAtLoginProvider() ? 1 : 0)
-      }
+      refreshLaunchAtLoginUI()
     }
   }
 }

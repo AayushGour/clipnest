@@ -8,6 +8,9 @@ import Foundation
 /// chance and the app never forces a session end. Runs on a background queue
 /// (a blocking `Process` must never run on the GTK thread, same rule as
 /// `GrantInputHelperClient`).
+///
+/// Reports whether the request was ACCEPTED, so the welcome window can close.
+/// Accepted is not "logged out": the user may still cancel GNOME's dialog.
 public enum SessionLogoutClient {
   // Fixed /usr/bin paths are deliberate: resolving through PATH would let a
   // hijacked PATH run an arbitrary binary. Non-standard layouts (e.g. NixOS)
@@ -51,13 +54,16 @@ public enum SessionLogoutClient {
       executableExists: { FileManager.default.isExecutableFile(atPath: $0) })
   }
 
-  /// Fire and forget: D-Bus first, `gnome-session-quit` if that fails.
-  public static func requestLogout() {
+  /// D-Bus first, `gnome-session-quit` if that fails. `completion` gets whether
+  /// the request was accepted; it runs on the background queue, so hop to the
+  /// main actor before touching UI.
+  public static func requestLogout(completion: @escaping @Sendable (Bool) -> Void) {
     processQueue.async {
-      if run(gdbusPath, gdbusArguments()) { return }
-      if !run(gnomeSessionQuitPath, quitArguments()) {
+      let succeeded = run(gdbusPath, gdbusArguments()) || run(gnomeSessionQuitPath, quitArguments())
+      if !succeeded {
         logger.error("session logout request failed (gdbus and gnome-session-quit)")
       }
+      completion(succeeded)
     }
   }
 

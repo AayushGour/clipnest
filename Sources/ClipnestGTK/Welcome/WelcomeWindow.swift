@@ -49,7 +49,10 @@ public final class WelcomeWindow: @unchecked Sendable {
     public var canLogOut: Bool
     /// Asks the session manager to log out WITH its own confirmation. Must not
     /// block the GTK thread (the real caller spawns it on a background queue).
-    public var requestLogOut: () -> Void
+    /// `completion(true)` = the request was accepted (the window then closes),
+    /// `false` = it failed (the window stays open and says so). May be called
+    /// from any thread.
+    public var requestLogOut: (_ completion: @escaping @Sendable (Bool) -> Void) -> Void
     public var onClosed: () -> Void
 
     public init(
@@ -63,7 +66,7 @@ public final class WelcomeWindow: @unchecked Sendable {
       refreshExtensionStatus: @escaping () -> Void,
       openShortcutsSettings: @escaping () -> Void,
       canLogOut: Bool,
-      requestLogOut: @escaping () -> Void,
+      requestLogOut: @escaping (_ completion: @escaping @Sendable (Bool) -> Void) -> Void,
       onClosed: @escaping () -> Void
     ) {
       self.keyboardAccess = keyboardAccess
@@ -119,6 +122,9 @@ public final class WelcomeWindow: @unchecked Sendable {
   var renderedActiveStep: WelcomeStep?
   /// The widget `render()` last gave focus to (see `refocusIfNeeded`).
   var focusedWidget: OpaquePointer?
+  /// True while `applyFocus` moves focus, so `notify::focus-widget` can tell
+  /// our own move from the user's.
+  var isApplyingFocus = false
 
   @MainActor
   public init(configuration: Configuration) {
@@ -152,27 +158,62 @@ public final class WelcomeWindow: @unchecked Sendable {
     if !hasPresented {
       hasPresented = true
       lastFocusedStep = viewModel.activeStep
-      let target = focusWidget
-      focusedWidget = target
-      gtk_window_set_focus(window, target)
+      applyFocus()
     }
+  }
+
+  /// Gives focus to what the view model currently wants and records that it
+  /// was us (not the user) who moved it.
+  @MainActor
+  func applyFocus() {
+    let target = focusWidget
+    focusedWidget = target
+    isApplyingFocus = true
+    gtk_window_set_focus(window, target)
+    isApplyingFocus = false
+    viewModel.focusApplied(focusTarget)
+  }
+
+  /// `notify::focus-widget`: a focus move we did not make is the user's.
+  @MainActor
+  func focusWidgetChanged() {
+    guard !isDismissed, hasPresented, !isApplyingFocus else { return }
+    // GTK re-announcing the widget we already focused is not a user move.
+    let current = gtk_window_get_focus(gtkPointer(window) as UnsafeMutablePointer<GtkWindow>).map {
+      OpaquePointer($0)
+    }
+    guard current != focusedWidget else { return }
+    viewModel.userDidMoveFocus()
   }
 
   /// Step 1's own action while permission is missing (never Skip), else the
   /// footer primary button. Mirrors `WelcomeViewModel.focusTarget`.
   @MainActor
   var focusWidget: OpaquePointer {
-    let keyboardAction =
-      permission.keyboard.buttonTitle != nil && permission.keyboard.isButtonEnabled
-    let extensionAction = permission.extensionContent.action != nil
-    let target = viewModel.focusTarget(permissionActionAvailable: keyboardAction || extensionAction)
-    switch target {
+    let keyboardAction = isKeyboardActionAvailable
+    switch focusTarget {
     case .primaryButton: return primaryButton
     case .launchAtLoginToggle: return openAtLoginStep.toggle
     case .secondaryButton: return skipButton
     case .permissionAction: break
     }
     return keyboardAction ? permissionStep.keyboard.button : permissionStep.extensionRow.button
+  }
+
+  @MainActor
+  private var isKeyboardActionAvailable: Bool {
+    permission.keyboard.buttonTitle != nil && permission.keyboard.isButtonEnabled
+  }
+
+  /// Whether step 1 currently shows an action button (keyboard or extension).
+  @MainActor
+  var isPermissionActionAvailable: Bool {
+    isKeyboardActionAvailable || permission.extensionContent.action != nil
+  }
+
+  @MainActor
+  var focusTarget: WelcomeInitialFocus {
+    viewModel.focusTarget(permissionActionAvailable: isPermissionActionAvailable)
   }
 
   public var isOpen: Bool { !isDismissed }
@@ -215,7 +256,13 @@ public final class WelcomeWindow: @unchecked Sendable {
     case .advanced, .stayed: render()
     case .logOut:
       announce(WelcomeCopy.logOutRequestedAnnouncement)
-      configuration.requestLogOut()
+      configuration.requestLogOut { succeeded in
+        Task { @MainActor [weak self] in
+          // Re-checked here: the user may have closed the window meanwhile.
+          guard let self, !self.isDismissed else { return }
+          self.navigate(self.viewModel.logOutFinished(succeeded: succeeded))
+        }
+      }
     case .close: gtk_window_close(window)
     }
   }

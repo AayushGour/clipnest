@@ -233,6 +233,9 @@ public final class SettingsWindow: @unchecked Sendable {
   var updateExplanationLabel: OpaquePointer?
   /// In-flight guard for `checkForUpdatesFromUI` (mirrors macOS `UpdateCheckAlert.isChecking`).
   var isCheckingForUpdates = false
+  /// T-LXSETSTALE1: set while `refreshLaunchAtLoginUI()` programmatically
+  /// moves the switch, so its `toggled` handler doesn't re-write the file.
+  var isSyncingLaunchAtLogin = false
   var updateAptCommandLabel: OpaquePointer?
   var updateInstallButton: OpaquePointer?
   var updateStatusLabel: OpaquePointer?
@@ -304,6 +307,9 @@ public final class SettingsWindow: @unchecked Sendable {
     // button.
     MainActor.assumeIsolated {
       refreshPermissionsStatus()
+      // T-LXSETSTALE1: the welcome window may have changed autostart since
+      // this window was built.
+      refreshLaunchAtLoginUI()
       // T-LXUPD: same re-read-every-show cadence as
       // `refreshPermissionsStatus()` above — see
       // `SettingsWindow+General.swift`'s `refreshUpdateAvailabilityUI()`
