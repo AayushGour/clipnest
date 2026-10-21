@@ -117,7 +117,7 @@ struct AppStatusNotifierRepliesTests {
   @Test("property(named:) resolves every documented SNI property")
   func propertyResolvesEveryDocumentedName() {
     let request = call(interface: "org.freedesktop.DBus.Properties", member: "Get")
-    for name in ["Category", "Id", "Title", "Status", "IconName", "Menu"] {
+    for name in ["Category", "Id", "Title", "Status", "IconName", "ToolTip", "Menu"] {
       #expect(
         StatusNotifierReplies.property(named: name, replyingTo: request) != nil,
         "expected a value for \(name)")
@@ -148,6 +148,21 @@ struct AppStatusNotifierRepliesTests {
     #expect(iconName == "app.clipnest.Clipnest-symbolic")
   }
 
+  @Test("icon name and ToolTip follow the paused state")
+  func iconAndToolTipFollowPausedState() {
+    #expect(StatusNotifierItemValue.iconName(isPaused: false) == "app.clipnest.Clipnest-symbolic")
+    #expect(
+      StatusNotifierItemValue.iconName(isPaused: true) == "app.clipnest.Clipnest-paused-symbolic")
+    #expect(
+      StatusNotifierReplies.toolTipValue(isPaused: true)
+        == .structure([
+          .string("app.clipnest.Clipnest-paused-symbolic"),
+          .emptyArray(elementSignature: "(iiay)"), .string("Clipnest"),
+          .string("Capture paused — copies are not being saved"),
+        ]))
+    #expect(StatusNotifierReplies.toolTipValue(isPaused: true).signatureCode == "(sa(iiay)ss)")
+  }
+
   @Test("allProperties() includes an entry for every documented property")
   func allPropertiesIncludesEveryName() {
     let request = call(interface: "org.freedesktop.DBus.Properties", member: "GetAll")
@@ -156,7 +171,7 @@ struct AppStatusNotifierRepliesTests {
       Issue.record("expected a{sv}")
       return
     }
-    #expect(entries.count == 6)
+    #expect(entries.count == 7)
   }
 
   @Test("introspect(path:replyingTo:) replies with a METHOD_RETURN carrying the XML string")

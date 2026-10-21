@@ -28,6 +28,14 @@ struct ScreenSharingExclusionTests {
     #expect(ItemPreviewController().makePanel().sharingType == .none)
   }
 
+  @Test("the snippet feedback HUD is excluded and never becomes key")
+  func feedbackHUDIsExcludedAndNonActivating() {
+    let panel = SnippetFeedbackHUD.makePanel()
+    #expect(panel.sharingType == .none)
+    #expect(panel.canBecomeKey == false)
+    #expect(panel.ignoresMouseEvents)
+  }
+
   @Test("excludeFromScreenSharing sets sharingType to none")
   func helperSetsNone() {
     let window = NSPanel(

@@ -38,6 +38,11 @@ import SwiftUI
 
 struct SnippetFormView: View {
   let mode: SnippetFormMode
+  /// T-SNIPFB1: inline error for a tag already used by another snippet
+  /// (`PickerViewModel.snippetTagError`), or nil if it can be saved.
+  let tagError: (_ tag: String) -> String?
+  /// The (rebindable) expand shortcut, shown in the Tag helper text.
+  let expandShortcut: String
   let onSave: (_ title: String, _ body: String, _ keyword: String?) -> Void
   let onCancel: () -> Void
 
@@ -53,10 +58,14 @@ struct SnippetFormView: View {
 
   init(
     mode: SnippetFormMode,
+    tagError: @escaping (String) -> String?,
+    expandShortcut: String,
     onSave: @escaping (String, String, String?) -> Void,
     onCancel: @escaping () -> Void
   ) {
     self.mode = mode
+    self.tagError = tagError
+    self.expandShortcut = expandShortcut
     self.onSave = onSave
     self.onCancel = onCancel
     switch mode {
@@ -77,7 +86,10 @@ struct SnippetFormView: View {
   private var isSaveDisabled: Bool {
     tag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       || bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      || currentTagError != nil
   }
+
+  private var currentTagError: String? { tagError(tag) }
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
@@ -87,6 +99,13 @@ struct SnippetFormView: View {
       TextField("Tag", text: $tag)
         .textFieldStyle(.roundedBorder)
         .focused($tagFocused)
+
+      let note = SnippetTagValidation.fieldNote(
+        error: currentTagError, expandShortcut: expandShortcut)
+      Text(note.text)
+        .font(.caption)
+        .foregroundStyle(note.isError ? Color.red : Color.secondary)
+        .fixedSize(horizontal: false, vertical: true)
 
       TextEditor(text: $bodyText)
         .font(.body)
@@ -116,6 +135,7 @@ struct SnippetFormView: View {
   }
 
   private func save() {
+    guard !isSaveDisabled else { return }
     let trimmedTag = tag.trimmingCharacters(in: .whitespacesAndNewlines)
     let trimmedBody = bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
     // The Tag is BOTH the snippet's label (`title`) and its expansion

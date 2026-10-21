@@ -18,17 +18,103 @@
 
 **Website & docs → [aayushgour.github.io/clipnest](https://aayushgour.github.io/clipnest/)** · [Changelog](CHANGELOG.md) · Clipnest by Aayush Gour — not affiliated with other apps named ClipNest.
 
+
 ## Why Clipnest?
 
-macOS 26 Tahoe added a basic clipboard history to Spotlight (⌘4) — but it's opt-in, caps out at 7 days, and can't organize, pin, or expand anything. Clipnest is a free, open-source, native menu-bar app that picks up where that leaves off: history you control, instant search, pinned favorites, and reusable snippets that expand by keyword in any app.
+macOS 26 Tahoe added a basic clipboard history to Spotlight (⌘4) — but it's opt-in, caps out at 7 days, and can't organize or pin anything. Clipnest is a free, open-source, native menu-bar app that picks up where that leaves off: history you control, instant search, pinned favorites, and reusable snippets you can drop into any app by their Tag.
 
 **Update Clipnest and you don't have to re-grant Accessibility — your permission survives, because every release is signed with the same certificate.** Most apps that rebuild or re-sign between versions quietly invalidate that grant, so a routine update leaves you back in System Settings, re-adding the app by hand. Clipnest doesn't do that to you, by design — see [Signing, honestly](#release) for exactly how.
 
-It's free and open source, built in pure SwiftUI/AppKit — no Electron, no web view, no account, no cloud, no telemetry. And its **snippets** expand by keyword in any app, so a reusable signature, boilerplate, or command replaces your text expander too, not just your clipboard history — see [Snippets & keyword expansion](#snippets--keyword-expansion).
+It's free and open source, built in pure SwiftUI/AppKit — no Electron, no web view, no account, no cloud, no telemetry. Its **snippets** are reusable text — a signature, boilerplate, a command — that you insert into any app in one keystroke: type the snippet's Tag, select it, press **⌥⌘E**. It's a deliberate shortcut, not as-you-type auto-expansion — see [Snippets & keyword expansion](#snippets--keyword-expansion).
 
 **Also on Linux.** Since 1.0, Clipnest runs on Ubuntu with GNOME (X11 or Wayland) with the same history, search, pinning, snippets and on-device OCR — see [Linux (Ubuntu)](#linux-ubuntu).
 
 > Looking for a **free, open-source clipboard manager for Mac** — a lightweight alternative to Paste, Maccy, or Pastebot? Clipnest is a fresh, from-scratch take built in pure SwiftUI.
+
+## Install
+
+Requirements: macOS 14 (Sonoma) or later, Apple Silicon or Intel. (Building from source needs Xcode — see [Requirements](#requirements).)
+
+### One command (recommended)
+
+Run this in Terminal:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash
+```
+
+The script detects your system (`uname -s`), fetches the latest release and verifies its SHA-256 before installing anything. Clipnest installs into your Applications folder and launches. Look for its icon in the menu bar, then press **⌥⌘V** to open the picker. The installer downloads over `curl` (which never sets macOS's quarantine flag, so there's no Gatekeeper "unidentified developer" dialog; it also clears the flag on the app it installs) and verifies the `.dmg` against a published SHA-256 checksum before ever mounting it — see [Release](#release) for why.
+
+Environment variables: `CLIPNEST_DRY_RUN=1` does everything except the install (detect, download, verify); `CLIPNEST_FORCE=1` lets the Linux path continue on an unsupported system; `GITHUB_TOKEN` raises the GitHub API rate limit.
+
+### Or download the `.dmg`
+
+Grab the `.dmg` (and its `.dmg.sha256`) from the [latest release](https://github.com/AayushGour/clipnest/releases/latest), open it, and drag **Clipnest** into Applications. A browser download is quarantined by macOS, and Clipnest is not notarized, so the first launch is blocked:
+
+- **macOS 15 (Sequoia) and later:** the dialog has no Open button. Dismiss it, open **System Settings → Privacy & Security**, scroll to the message about Clipnest, click **Open Anyway** and confirm (macOS asks for your admin password). Control-click → Open no longer works on macOS 15+. (On macOS 14, Control-click → **Open** still works.)
+- **Terminal alternative (any version):** `xattr -dr com.apple.quarantine /Applications/Clipnest.app`
+
+This is a one-time step. The one-command install above avoids it.
+
+### Update
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/update.sh | bash
+```
+
+
+Updates Clipnest to the latest version, if a newer one is available. Same checksum verification as Install. Before replacing anything it checks that the new app's version matches the release and that its code signature is valid and made by the same signer as your installed copy (a mismatch aborts with a `SECURITY` message and leaves your app untouched). The new app is copied next to the old one and swapped in only after those checks pass, and the old one is restored if the swap fails. You can also trigger this from inside the app: choose **Check for Updates…** from the menu-bar icon (Linux: the tray icon) for an immediate check — it tells you "You're up to date (x.y.z)" or offers the update, and works even with the automatic daily check turned off; or click the version number in the picker's footer (it shows a small dot when an update is available) and confirm — Clipnest opens Terminal and runs the update script for you, then relaunches itself. The in-app flow runs the script from the **release tag** being installed (for example `.../v1.4.1/scripts/update.sh`), not from the moving `main` branch, and tells it to install exactly that version (`CLIPNEST_VERSION=v1.4.1`). Advanced: `CLIPNEST_VERSION=vX.Y.Z` before `bash` pins a specific release yourself. On Linux the picker footer also shows the version (with the same dot); clicking it opens Settings, where **Check for Updates Now** / **Install Update…** live.
+
+
+## First run
+
+Clipnest shows a short **Welcome** window once (also the first time after you update from an older version) with three steps:
+
+1. **Accessibility** (System Settings → Privacy & Security → Accessibility) so Clipnest can paste directly into other apps and insert snippets. **Continue** stays disabled until it is allowed; a low-key **Set up later** asks you to confirm that picking an item will then only copy it and snippets will not expand.
+2. **Open Clipnest at login** — a switch, pre-checked, applied when you continue; the same setting as Settings → General.
+3. **Try your hotkey** — a quick check that your hotkey opens the picker.
+
+The hotkey opens the picker, and capturing and searching work, even without Accessibility. Close the window any time with Esc and reopen it from the menu-bar icon → *Getting Started…*. While it is open Clipnest shows its Dock icon (macOS needs that to bring the window to the front); the icon disappears when you close it.
+
+## Everyday use
+
+1. Clipnest lives in your **menu bar** — no Dock clutter day-to-day (opening Settings is the one exception; see [Settings](#settings)).
+2. Copy things like you normally would; Clipnest remembers them.
+3. Press **⌥⌘V** (or click the menu-bar icon → *Open Clipnest*) to open the picker at your cursor.
+4. **Type** to search, **↑/↓** to move, **Return** to paste into whatever you were doing.
+5. **Pin** the ones you reuse most, save handy text as **Snippets**, and insert them anywhere: type the Tag, select it, press **⌥⌘E**.
+6. Tune capture, retention, excluded apps, and shortcuts any time from **Settings** (menu-bar icon → *Settings…*, or **⌘,**).
+7. Need a break? Menu-bar icon → *Pause Capture*. While paused the menu-bar icon is dimmed with a pause mark, and it stays paused across relaunch.
+
+
+### Keyboard shortcuts
+
+| Action | Shortcut |
+| --- | --- |
+| Open Clipnest | `⌥⌘V` |
+| Expand snippet by Tag (in any app) | `⌥⌘E` |
+| Search | `⌘F` |
+| Move selection | `↑` / `↓` |
+| Paste selected | `Return` |
+| Paste without formatting *(rich text → plain; recognized-text images → that text)* | `⌥Return` |
+| Pin / unpin | `⌘P` |
+| Save history item as snippet *(text/link items only)* | `⌘S` |
+| New snippet (Snippets tab) | `⌘N` |
+| Edit highlighted snippet (Snippets tab) | `⌘E` |
+| Next / previous type filter (History, Pinned) | `⌘]` / `⌘[` |
+| Show / hide preview of the highlighted item | `⌘Y` |
+| Delete entry | `⌘⌫` |
+| Switch tabs (History / Pinned / Snippets) | `⌘1` / `⌘2` / `⌘3` |
+| Open Settings *(picker or Settings window focused — not global)* | `⌘,` |
+| Close | `Esc`, or the × button at the right of the picker header |
+
+Both the picker hotkey and the snippet-expansion hotkey are rebindable in Settings → Shortcuts; ⌥⌘V / ⌥⌘E above are just the defaults. **⌥Return** only behaves differently from plain **Return** where there's actually something to strip: on **rich text** items it pastes the plain-text form instead of the formatted one, and on an **image row with recognized text** (OCR — see [Settings](#settings)) it pastes that text instead of the image, falling back to pasting the image itself if nothing was recognized. On plain text, links, files, and images with no recognized text, ⌥Return pastes exactly what Return does — there's no richer form to strip. An image also gets a "Copy Recognized Text" action in its right-click menu when it has recognized text, alongside a small badge on its thumbnail. **⌘S** saves a highlighted text or link item as a snippet; it's a no-op on image, rich-text, and file rows, matching those rows' own UI, which never offers a "Save as Snippet" action there. **⌘,** opens Settings while the picker is focused (closing the picker first, then opening and focusing Settings) or while the Settings window itself is already focused — it's deliberately not a global hotkey, so pressing it from any other app does nothing and never steals that app's own ⌘, shortcut.
+
+### Troubleshooting (macOS)
+
+**"Clipnest couldn't open its history"** — shown at launch if the history database is unreadable and automatic recovery didn't work. Choose **Reset History…** to start fresh (after a confirmation, both your clipboard history *and* snippets are moved — not deleted — into a `Reset-Backup-<timestamp>` folder inside `~/Library/Application Support/Clipnest`), **Show in Finder** to inspect the data folder yourself, or **Quit**.
+
+
 
 ## Features
 
@@ -38,41 +124,57 @@ It's free and open source, built in pure SwiftUI/AppKit — no Electron, no web 
 - 🔎 **Instant search** — start typing to filter your entire copy-paste history in real time, with matches highlighted.
 - 🏷 **Type filters** — narrow the list to just text, images, files, or links with one click.
 - 🗂 **Tabs** — **History**, **Pinned**, and **Snippets**, switchable with ⌘1 / ⌘2 / ⌘3.
-- 👋 **Welcome window** — a one-time, three-step intro on first launch (and once after updating from an older version): optionally allow Accessibility, choose to open Clipnest at login (pre-checked, so history keeps recording after a reboot), then try your live hotkey. Skippable with Esc; reopen via *Getting Started…* in the menu-bar (macOS) or tray (Linux) menu.
+- 👋 **Welcome window** — a one-time, three-step intro on first launch (and once after updating from an older version): allow Accessibility (Continue unlocks once it is on; a low-key *Set up later* asks you to confirm what will not work), choose to open Clipnest at login (pre-checked, so history keeps recording after a reboot), then try your live hotkey. Close it any time with Esc; reopen via *Getting Started…* in the menu-bar (macOS) or tray (Linux) menu.
 - ↩︎ **Paste into your active app** — pick an item and, with Accessibility granted, Clipnest types it straight into the field you were using; otherwise it's placed on your clipboard to paste yourself.
 - 🅰 **Paste without formatting** — **⌥Return** only differs from plain **Return** where there's actually something to strip: on **rich text** items it pastes the plain-text form instead of the formatted one, and on an **image row with recognized text** (see OCR below) it pastes that recognized text instead of the image. On plain text, links, files, and images with no recognized text, ⌥Return pastes exactly what Return does — there's nothing richer to strip.
 - 🔍 **On-device text recognition (OCR), off by default** — let Clipnest read the text in your screenshots so you can find them by what they say, not just when you copied them. Turn it on in Settings → History; see [Privacy](#privacy-first) for the trade-off before you do.
 - 👁 **Hover previews** — hover over an item (or, with **Settings -> General -> "Show preview when selecting with the keyboard"** on, arrow to it) and a popover shows the full content: the image at up to 40% of screen width (with any recognized text shown below it), the full scrollable text (loaded in chunks for huge clips), or a file's name, size, and path.
 - 📌 **Pin your favorites** — keep the items you reuse most pinned to the top, always a keystroke away.
 - 🧠 **Smart de-duplication** — copy the same thing twice and it won't clutter your history.
-- ✂️ **Snippets** — save reusable text (a signature, boilerplate, a command) with a **Tag**, and paste it from the Snippets tab or **expand it by keyword in any app** (see below) — replaces your text expander too. Turn a text or link history item into a snippet with **⌘S** — the only kinds ⌘S applies to, since those are the only ones with a plain-text body to seed one from.
+- ✂️ **Snippets** — save reusable text (a signature, boilerplate, a command) with a **Tag**, and paste it from the Snippets tab or **insert it into any app by its Tag** (type it, select it, press the expand shortcut — see below). Turn a text or link history item into a snippet with **⌘S** — the only kinds ⌘S applies to, since those are the only ones with a plain-text body to seed one from.
 - ⚙️ **A real Settings window** — General, History, Apps, Shortcuts, and Permissions tabs to tune Clipnest to how you work (see below). Open it from the menu-bar icon → *Settings…*, or with **⌘,**.
 - ⌨️ **Keyboard-first** — arrows to move, Return to paste, Esc to dismiss, ⌘F to search, ⌘P to pin, ⌘⌫ to delete, ⌘1/2/3 for tabs, ⌘[ / ⌘] to cycle the type filter, ⌘E to edit a snippet, ⌘Y to preview, ⌘, for Settings. **VoiceOver** reads each row as one labelled item ("Text, pinned, 2 minutes ago: …") with Pin, Delete, Save as Snippet, Paste as plain text and Edit as actions.
 - 🪶 **Featherweight & native** — pure Swift/SwiftUI, a few MB, sips almost no memory, feels like part of macOS. Lives in the menu bar with no Dock icon day-to-day (opening Settings briefly shows one — see [Settings](#settings)).
 - 🔒 **Private by design** — everything stays on your Mac. See [Privacy](#privacy-first).
 
+
+
+
 ## Snippets & keyword expansion
 
-Snippets are reusable bits of text you author yourself (unlike captured history). Create one in the **Snippets** tab (⌘N) or save any history item as a snippet (⌘S). Each snippet has a **Tag** (its name — also its expansion keyword) and a **Body** (what gets pasted). If you're running a separate text expander alongside your clipboard manager today, this replaces it — one keyword-expansion engine, built in, that works in every app.
+Snippets are reusable bits of text you author yourself (unlike captured history). Create one in the **Snippets** tab (⌘N) or save any history item as a snippet (⌘S). Each snippet has a **Tag** and a **Body** (what gets pasted). The Tag doubles as the expansion keyword. Tags must be unique: matching ignores case and surrounding spaces, and saving a duplicate tag is blocked with a message naming that snippet.
 
-**Expand anywhere:** type a snippet's Tag in *any* app, select it, and press **⌥⌘E** — Clipnest replaces the selection with the snippet's Body.
+**Expand anywhere:** nothing expands automatically as you type. Type a snippet's Tag in *any* app, select it, and press **⌥⌘E** (rebindable in Settings → Shortcuts; the snippet editor shows your current shortcut) — Clipnest replaces the selection with the snippet's Body.
 
 It works in **every** application, using a two-tier approach:
 
 1. **Accessibility first** — in native / most Cocoa text fields, it reads and replaces the selection directly, without ever touching your clipboard.
 2. **Clipboard fallback** — where the Accessibility API can't read the selection (Electron/Chrome apps like VS Code, Slack), it synthesizes copy/paste — which every app supports — while **snapshotting and restoring your clipboard** so it's left exactly as it was, and suppressing Clipnest's own capture of the transient copy/paste.
 
-No keyword match, or nothing selected → a gentle system beep, nothing changed.
+**If it can't expand, Clipnest says why instead of beeping, and nothing changes:**
+
+| Situation | Message |
+| --- | --- |
+| Nothing selected | "Select a snippet tag, then press the shortcut." |
+| No snippet uses the selected text | "Check the tag in the Snippets tab." |
+| Accessibility missing (macOS) | "Turn it on in Settings > Permissions." |
+| The app didn't accept the replacement | "Try again, or paste from the picker." |
+
+On the Mac this is a small message near the pointer that never takes focus and is hidden from screen sharing. On Linux it is a desktop notification (needs `/usr/bin/gdbus` or `/usr/bin/notify-send`; otherwise a terminal bell).
+
 
 ## Settings
 
 Everything about how Clipnest behaves lives in one Settings window, across five tabs. Open it from the menu-bar icon → *Settings…*, or press **⌘,** while the picker or the Settings window itself is focused — deliberately not a global hotkey, so it never takes ⌘, away from whatever other app you're using (that app's own shortcut keeps working normally). One side effect worth knowing: opening Settings briefly shows Clipnest's Dock icon — macOS won't bring a menu-bar-only app's window to the front without one — and it disappears again once you close the window.
 
-- **General** — launch Clipnest at login, pause clipboard capture with one toggle, and turn the background update check on/off.
-- **History** — controls how much history is kept. The default is the most recent **1,000** items; switch to a day-based cap (30 days by default) or *Everything* (no cap at all) instead. Pinned items are always kept regardless of the cap. **Clear All History…** wipes everything (including pinned items) after a confirmation. This tab also has **"Recognize text in copied images"** — optional on-device OCR, **off by default**, with a **Fast**/**Accurate** (default) quality choice (see [Privacy](#privacy-first) for why it's off by default).
+- **General** — launch Clipnest at login, pause clipboard capture with one toggle (the menu-bar icon dims with a pause mark while paused), and turn the background update check on/off.
+- **History** — controls how much history is kept. The default is the most recent **2,500** items (raised from 1,000 in 1.6.0; a limit you chose yourself is kept); switch to a day-based cap (30 days by default) or *Everything* (no cap at all) instead. Pinned items are always kept regardless of the cap. **Clear All History…** wipes everything (including pinned items) after a confirmation. This tab also has **"Recognize text in copied images"** — optional on-device OCR, **off by default**, with a **Fast**/**Accurate** (default) quality choice (see [Privacy](#privacy-first) for why it's off by default).
 - **Apps** — exclude specific apps from capture, on top of the built-in password-manager denylist (which can't be removed). Add an app by picking its `.app` bundle.
 - **Shortcuts** — rebind *both* global hotkeys (open the picker, expand a snippet) to whatever key combination you want.
 - **Permissions** — see whether Accessibility is granted and fix it in one click, including guidance for the one case System Settings can't diagnose on its own (a rebuilt/updated app whose old permission entry no longer matches).
+
+
+
 
 ## Privacy first
 
@@ -85,64 +187,14 @@ Your clipboard is some of the most sensitive data on your machine — passwords,
 - **No content in logs.** Only metadata (ids, error cases) is ever logged, never clipboard or snippet contents.
 - **You're in control.** Delete any entry on the spot with `⌘⌫`, pause capture whenever you want, and clear your entire history in one click — all from [Settings](#settings).
 
+
 ## Requirements
 
 - macOS 14 (Sonoma) or later
 - Apple Silicon or Intel
 - Xcode 16+ (Swift 6 toolchain) to build the app — but **Xcode 26+ to run `swift test`**: the SwiftData test suite crashes on Xcode 16.x with `Unable to determine Bundle Name` in a hostless package test target, so CI (and the release build) run on Xcode 26.
-- **Accessibility** permission (optional) — only needed for pasting into other apps, expanding snippets, and the global hotkey firing from other apps; capturing and searching work without it.
+- **Accessibility** permission — requested in the Welcome window. Needed to paste into other apps and expand snippets; the global hotkey opens the picker and capturing and searching work without it.
 
-## Install
-
-One command for macOS and Linux. Run this in Terminal:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash
-```
-
-The script detects your system (`uname -s`), fetches the latest release and verifies its SHA-256 before installing anything.
-
-- **macOS:** Clipnest installs into your Applications folder and launches. Look for its icon in the menu bar, then press **⌥⌘V** to open the picker. The installer downloads over `curl` (which never sets macOS's quarantine flag, so there's no Gatekeeper "unidentified developer" dialog) and verifies the `.dmg` against a published SHA-256 checksum before ever mounting it — see [Release](#release) for why.
-- **Linux (Ubuntu 22.04/24.04 with GNOME, amd64 or arm64):** run it as your normal user; it checks the system, downloads the right tarball, verifies it, and runs the bundled installer, which asks for your `sudo` password to install the packages. See [Linux (Ubuntu)](#linux-ubuntu).
-
-Environment variables: `CLIPNEST_DRY_RUN=1` does everything except the install (detect, download, verify); `CLIPNEST_FORCE=1` lets the Linux path continue on an unsupported system; `GITHUB_TOKEN` raises the GitHub API rate limit.
-
-### Update
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/update.sh | bash
-```
-
-Updates Clipnest to the latest version, if a newer one is available. Same checksum verification as Install. Before replacing anything it checks that the new app's version matches the release and that its code signature is valid and made by the same signer as your installed copy (a mismatch aborts with a `SECURITY` message and leaves your app untouched). The new app is copied next to the old one and swapped in only after those checks pass, and the old one is restored if the swap fails. You can also trigger this from inside the app: choose **Check for Updates…** from the menu-bar icon (Linux: the tray icon) for an immediate check — it tells you "You're up to date (x.y.z)" or offers the update, and works even with the automatic daily check turned off; or click the version number in the picker's footer (it shows a small dot when an update is available) and confirm — Clipnest opens Terminal and runs the update script for you, then relaunches itself. The in-app flow runs the script from the **release tag** being installed (for example `.../v1.4.1/scripts/update.sh`), not from the moving `main` branch, and tells it to install exactly that version (`CLIPNEST_VERSION=v1.4.1`). Advanced: `CLIPNEST_VERSION=vX.Y.Z` before `bash` pins a specific release yourself. On Linux the picker footer also shows the version (with the same dot); clicking it opens Settings, where **Check for Updates Now** / **Install Update…** live.
-
-### Build from source
-
-```bash
-# 1. Tooling (one-time): install XcodeGen — see
-#    https://github.com/yonaskolb/XcodeGen#installing  (requires Xcode 16+)
-
-# 2. Clone
-git clone https://github.com/AayushGour/clipnest.git
-cd clipnest
-
-# 3. Test the core logic (pure Swift package, no Xcode project needed — needs Xcode 26+; see Requirements)
-swift test
-
-# 4. Generate the Xcode project and build the app
-cd ClipnestApp
-xcodegen generate
-xcodebuild -project ClipnestApp.xcodeproj -scheme ClipnestApp \
-  -configuration Debug CODE_SIGNING_ALLOWED=NO build
-
-# 5. Run it
-open DerivedData/Build/Products/Debug/Clipnest.app   # if built with -derivedDataPath DerivedData
-```
-
-On first launch, Clipnest shows a short **Welcome** window (once, also the first time after you update from an older version) with three steps: an optional **Accessibility** grant (System Settings → Privacy & Security → Accessibility) so it can paste directly into other apps and expand snippets as you type, an **Open Clipnest at login** switch (pre-checked, applied when you continue; the same setting as Settings → General), then a quick try of your hotkey. The hotkey and everything else work without Accessibility. Reopen the window any time from the menu-bar icon → *Getting Started…*. While it is open Clipnest shows its Dock icon (macOS needs that to bring the window to the front); the icon disappears when you close it.
-
-Shortcut: `make test`, `make build`, `make install-mac`, `make dev-mac` wrap all of this — see [Make targets](#make-targets).
-
-An unsigned dev build's code identity changes on every rebuild, which normally makes macOS drop the Accessibility grant each time — `scripts/dev-cert.sh` (run once) plus `scripts/dev-install.sh` (build + sign + install with that stable local identity, instead of steps 4–5 above) fixes that: rebuild as often as you like without re-granting.
 
 ## Uninstall
 
@@ -174,47 +226,53 @@ Everything Clipnest stores is local, so removing those paths leaves nothing behi
 
 Clipnest runs on **Ubuntu 22.04 and 24.04 with GNOME**, on X11 or Wayland, for amd64 and arm64. It is a native GTK 4 app built from the same Swift core as the Mac version: the same history, search, pinned items, snippets and keyword expansion, image previews, on-device OCR and Settings.
 
-### Install
-
-The same one-line command as on the Mac (run as your normal user, not root):
+**Install** — the same one-line command as on the Mac, run as your normal user (not root); it checks the system, downloads and verifies the right tarball, and asks for your `sudo` password to install the packages:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash
 ```
 
-It checks `/etc/os-release` (Ubuntu 22.04/24.04) and that you're on GNOME, maps `uname -m` to amd64/arm64, downloads the latest `clipnest-<version>-linux-<arch>.tar.gz`, verifies it against the SHA-256 GitHub publishes for that release asset (aborting if it is missing or different), checks the files inside with the bundled `SHA256SUMS`, and runs the bundled `install.sh`. On another system it stops unless you set `CLIPNEST_FORCE=1`. It needs `curl`, `tar`, `sha256sum` (or `shasum`), `sudo` and `apt-get`.
+On another system it stops unless you set `CLIPNEST_FORCE=1`. It needs `curl`, `tar`, `sha256sum` (or `shasum`), `sudo` and `apt-get`. Manual install, OCR-free install and uninstall: see [Using Clipnest on Linux](docs/usage.md#12-using-clipnest-on-linux).
 
-**Manual alternative:** download `clipnest-<version>-linux-amd64.tar.gz` (or `-arm64`; run `uname -m` if unsure: `x86_64` is amd64, `aarch64` is arm64) from the [latest release](https://github.com/AayushGour/clipnest/releases/latest), then:
+**Day to day**
+
+- **Shortcuts:** open the picker with `Alt+Super+V`; expand a snippet with `Alt+Super+E`. Both are rebindable in Settings → Shortcuts.
+- **First run:** the Welcome window sets up pasting into other apps (keyboard access plus the GNOME extension; **Continue** unlocks when set up) and ends with a **Log out to finish setup** step (Log Out Now / Later) when a re-login is pending. Until you log out and back in, Clipnest copies your choice and you press Ctrl+V yourself.
+- **Tray icon:** Open Clipnest, Pause Capture, Settings…, Check for Updates…, Getting Started…, Quit. While paused the tray icon switches to a paused icon with a "Capture paused" tooltip.
+- **Start at login** is off by default, as on the Mac; **OCR** is off by default too (Settings → History).
+- **Snippet expansion** that can't happen posts a desktop notification instead of a beep.
+
+**What differs from the Mac** — the picker opens where GNOME puts it rather than at your cursor on Wayland (the optional GNOME Shell extension restores cursor placement; log out and back in once), Settings → Apps exclusions only apply to X11/XWayland apps, and Ubuntu 22.04's GTK 4.6 has an upstream clipboard bug that can, rarely, make Clipnest quit. Full list: [Linux differences](https://aayushgour.github.io/clipnest/features/#linux-differences) and [Using Clipnest on Linux](docs/usage.md#12-using-clipnest-on-linux). A copy that didn't show up in history leaves a metadata-only log line: `journalctl --user -t app.clipnest.Clipnest --since '-5min'`.
+
+
+## Build & develop
+
+### Build from source
 
 ```bash
-tar xzf clipnest-*-linux-amd64.tar.gz
-cd clipnest-*-linux-amd64
-sha256sum -c SHA256SUMS
-./install.sh          # as your normal user, not with sudo
+# 1. Tooling (one-time): install XcodeGen — see
+#    https://github.com/yonaskolb/XcodeGen#installing  (requires Xcode 16+)
+
+# 2. Clone
+git clone https://github.com/AayushGour/clipnest.git
+cd clipnest
+
+# 3. Test the core logic (pure Swift package, no Xcode project needed — needs Xcode 26+; see Requirements)
+swift test
+
+# 4. Generate the Xcode project and build the app
+cd ClipnestApp
+xcodegen generate
+xcodebuild -project ClipnestApp.xcodeproj -scheme ClipnestApp \
+  -configuration Debug CODE_SIGNING_ALLOWED=NO build
+
+# 5. Run it
+open DerivedData/Build/Products/Debug/Clipnest.app   # if built with -derivedDataPath DerivedData
 ```
 
-The bundled `install.sh` checks the architecture and installs three packages with `apt`: `clipnest`, plus `clipnest-ocr` and `clipnest-ocr-data` for text recognition in images. To skip OCR (about 26 MB), install only the app: `sudo apt-get install --no-install-recommends ./clipnest_*.deb`. On GNOME, `apt` also prints a one-line notice at install time: the Clipnest Shell extension is set up automatically the first time you open Clipnest, and you log out and back in once to activate the hotkey.
+Shortcut: `make test`, `make build`, `make install-mac`, `make dev-mac` wrap all of this — see [Make targets](#make-targets).
 
-To uninstall, use the one-line command from [Uninstall](#uninstall) (it keeps your history in `~/.local/share/Clipnest` unless you pass `--purge`). Manually: `sudo apt remove clipnest clipnest-ocr clipnest-ocr-data` leaves your history in place.
-
-### First run
-
-- **Open the picker with `Alt+Super+V`**; expand a snippet with `Alt+Super+E`. Both are rebindable in Settings → Shortcuts.
-- **Welcome window.** On first launch (and once after updating from an older version) Clipnest shows a three-step Welcome window: an optional step that sets up pasting into other apps (keyboard access plus the GNOME extension, with *Grant Access…* / *Turn On* / *Try Again* buttons), an *Open Clipnest at login* checkbox (pre-checked, applied when you continue; the same autostart entry as Settings → General), then *Try your hotkey*, which shows your live hotkey and confirms it opens the picker. It is not modal, closes with Esc or Ctrl+W, and never reappears on its own. Reopen it from the tray icon → *Getting Started…*.
-- **Tray icon:** Open Clipnest, Pause Capture, Settings…, Getting Started…, Quit.
-- **Auto-paste** needs a one-time permission. The Welcome window offers it (*Keyboard access*), or use Settings → Permissions. It adds you to a dedicated `clipnest-input` group that can create a virtual keyboard and nothing else (not the `input` group, which could read your keystrokes). Log out and back in afterwards. Until then Clipnest copies your choice and you press Ctrl+V yourself.
-- **Start at login** is off by default, as on the Mac. Until Clipnest is running nothing is captured, so turn on Settings → General → *Launch Clipnest at login*.
-- **OCR** is off by default. Turn it on in Settings → History.
-
-### How it differs from the Mac version
-
-- **Picker position.** GNOME doesn't let apps place their own windows on Wayland, so the picker opens where GNOME puts it rather than at your cursor. Clipnest's GNOME Shell extension restores cursor placement and showing above full-screen windows. The app installs it for your user and enables it on first launch (the right variant for GNOME 42–44 or 45+), so you only need to **log out and back in once**. It is never installed system-wide; if you turn it off in the Extensions app, Clipnest leaves it off. Removing Clipnest with `scripts/uninstall.sh` removes it too.
-- **Previews and rows.** The hover preview opens beside the picker, level with the row (also on the Snippets tab); Settings → General → *Show preview when selecting with the keyboard* (off by default) adds it for arrow-key selection. Rows show at most 3 lines, and a long preview scrolls inside itself. On Wayland the preview overlaps the picker edge by 2 px (GNOME closes a popup that doesn't touch its parent window).
-- **Picking an item.** Clipnest writes the clipboard first and hides the picker only once the write is confirmed (at most 250 ms), because GNOME ignores a clipboard write from a window without focus; the Mac hides first.
-- **A copy that didn't show up in history.** Every skipped copy leaves a metadata-only log line saying why: `journalctl --user -t app.clipnest.Clipnest --since '-5min'`.
-- **Terminals.** Pasting into GNOME Terminal and other VTE terminals uses Ctrl+Shift+V automatically.
-- **Password managers.** Copies marked as secret (`x-kde-passwordManagerHint`, used by KeePassXC and others) are never stored, including the copy GNOME re-publishes after the password manager clears the clipboard. On Wayland, Clipnest can't tell which app made a copy, so Settings → Apps exclusions only apply to X11/XWayland apps; the secret marker works everywhere.
-- **Ubuntu 22.04** ships GTK 4.6, which has an upstream clipboard bug that can, rarely, make Clipnest quit. It is fixed in GTK 4.10+ (Ubuntu 24.04). Your history is never affected; see `packaging/linux/dist/README.md`.
+An unsigned dev build's code identity changes on every rebuild, which normally makes macOS drop the Accessibility grant each time — `scripts/dev-cert.sh` (run once) plus `scripts/dev-install.sh` (build + sign + install with that stable local identity, instead of steps 4–5 above) fixes that: rebuild as often as you like without re-granting.
 
 ### Build from source (Linux)
 
@@ -253,41 +311,6 @@ A top-level [`Makefile`](Makefile) wraps the scripts and recipes above (it holds
 
 Targets refuse with a clear error on the wrong OS. Only `install-linux` and `uninstall-linux` elevate privileges (via `pkexec`); nothing uses `sudo`. Tunables (`OUT`, `LOCAL_SUFFIX`, `DEB_SERIES`, image names) are variables at the top of the Makefile and can be overridden, e.g. `make deb OUT=/tmp/debs`. On Linux, Docker test runs use a separate `clipnest-scratch` volume for `.build` so the host `.build` is never mixed with container artifacts.
 
-## Usage
-
-1. Clipnest lives in your **menu bar** — no Dock clutter day-to-day (opening Settings is the one exception; see [Settings](#settings)).
-2. Copy things like you normally would; Clipnest remembers them.
-3. Press **⌥⌘V** (or click the menu-bar icon → *Open Clipnest*) to open the picker at your cursor.
-4. **Type** to search, **↑/↓** to move, **Return** to paste into whatever you were doing.
-5. **Pin** the ones you reuse most, save handy text as **Snippets**, and expand them anywhere with **⌥⌘E**.
-6. Tune capture, retention, excluded apps, and shortcuts any time from **Settings** (menu-bar icon → *Settings…*, or **⌘,**).
-
-### Keyboard shortcuts
-
-| Action | Shortcut |
-| --- | --- |
-| Open Clipnest | `⌥⌘V` |
-| Expand snippet by Tag (in any app) | `⌥⌘E` |
-| Search | `⌘F` |
-| Move selection | `↑` / `↓` |
-| Paste selected | `Return` |
-| Paste without formatting *(rich text → plain; recognized-text images → that text)* | `⌥Return` |
-| Pin / unpin | `⌘P` |
-| Save history item as snippet *(text/link items only)* | `⌘S` |
-| New snippet (Snippets tab) | `⌘N` |
-| Edit highlighted snippet (Snippets tab) | `⌘E` |
-| Next / previous type filter (History, Pinned) | `⌘]` / `⌘[` |
-| Show / hide preview of the highlighted item | `⌘Y` |
-| Delete entry | `⌘⌫` |
-| Switch tabs (History / Pinned / Snippets) | `⌘1` / `⌘2` / `⌘3` |
-| Open Settings *(picker or Settings window focused — not global)* | `⌘,` |
-| Close | `Esc`, or the × button at the right of the picker header |
-
-Both the picker hotkey and the snippet-expansion hotkey are rebindable in Settings → Shortcuts; ⌥⌘V / ⌥⌘E above are just the defaults. **⌥Return** only behaves differently from plain **Return** where there's actually something to strip: on **rich text** items it pastes the plain-text form instead of the formatted one, and on an **image row with recognized text** (OCR — see [Settings](#settings)) it pastes that text instead of the image, falling back to pasting the image itself if nothing was recognized. On plain text, links, files, and images with no recognized text, ⌥Return pastes exactly what Return does — there's no richer form to strip. An image also gets a "Copy Recognized Text" action in its right-click menu when it has recognized text, alongside a small badge on its thumbnail. **⌘S** saves a highlighted text or link item as a snippet; it's a no-op on image, rich-text, and file rows, matching those rows' own UI, which never offers a "Save as Snippet" action there. **⌘,** opens Settings while the picker is focused (closing the picker first, then opening and focusing Settings) or while the Settings window itself is already focused — it's deliberately not a global hotkey, so pressing it from any other app does nothing and never steals that app's own ⌘, shortcut.
-
-### Troubleshooting (macOS)
-
-**"Clipnest couldn't open its history"** — shown at launch if the history database is unreadable and automatic recovery didn't work. Choose **Reset History…** to start fresh (after a confirmation, both your clipboard history *and* snippets are moved — not deleted — into a `Reset-Backup-<timestamp>` folder inside `~/Library/Application Support/Clipnest`), **Show in Finder** to inspect the data folder yourself, or **Quit**.
 
 ## How it's built
 
@@ -309,8 +332,8 @@ Clipnest is intentionally boring in the best way — a small, well-tested native
 - **[`docs/architecture.md`](docs/architecture.md)** — system architecture, module reference, data-flow & concurrency diagrams.
 - **[`docs/features.md`](docs/features.md)** — how each feature is implemented, file-by-file.
 - **[`docs/usage.md`](docs/usage.md)** — full end-user guide.
-- **[`docs/API.md`](docs/API.md)** — public `ClipnestCore` API reference. _(Being refreshed — parts lag the current code; check the source under `Sources/ClipnestCore` for anything load-bearing.)_
-- **[`docs/review/`](docs/review/)** — architecture / code / implementation review reports.
+- **[`docs/API.md`](docs/API.md)** — public `ClipnestCore` API reference (Linux frontends: `docs/API-ClipnestGTK.md`, `docs/API-ClipnestLinuxAppKit.md`, `docs/API-ClipnestPlatformLinux.md`). The source under `Sources/` is authoritative if a detail differs.
+
 
 ### Project structure
 
@@ -339,7 +362,7 @@ Clipnest is intentionally boring in the best way — a small, well-tested native
 ├── scripts/                    # install/update (curl + checksum verify), dev-cert/dev-install (local dev signing),
 │                                #   build/sign/notarize/package_dmg (release build steps), release-cert (one-time
 │                                #   release signing key), release-local (build + publish a release from your Mac)
-└── docs/                       # architecture, features, usage, API reference + review reports
+└── docs/                       # architecture, features, usage, API reference
 ```
 
 ## Release

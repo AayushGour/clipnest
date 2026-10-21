@@ -125,7 +125,7 @@ final class LinuxAppEnvironment {
   /// second reader, in `ClipnestLinuxAppKit` alongside this file — the
   /// existing source of truth, so `--version` never grows a second
   /// hardcoded copy of the version string.
-  nonisolated static let installedVersion = "1.5.0"
+  nonisolated static let installedVersion = "1.6.0"
 
   /// Resolves this process's own absolute executable path for
   /// `AutostartDesktopFile.setEnabled(_:executablePath:)`'s `.desktop`
@@ -418,7 +418,16 @@ final class LinuxAppEnvironment {
 
     self.snippetExpander = SnippetExpander(
       snippetStore: snippetStore, selectedText: selectedTextAccessing,
-      clipboardReplacer: tieredSelectionReplacer)
+      clipboardReplacer: tieredSelectionReplacer,
+      // T-SNIPFB1: a failed expansion posts a desktop notification (never takes
+      // focus) instead of a silent terminal bell; the bell is the last resort.
+      feedback: { failure in
+        DesktopNotificationClient.notify(
+          title: SnippetExpansionCopy.feedbackTitle,
+          body: SnippetExpansionCopy.message(
+            for: failure, expandShortcut: ExpandSnippetShortcutLabel.current),
+          fallback: { PlatformDefaults.beep() })
+      })
 
     let monitor = clipboardMonitor
     clipboardReplacer.beginSuppression = { [weak monitor] in monitor?.pause() }
@@ -523,6 +532,11 @@ final class LinuxAppEnvironment {
         // and WMs keep those above ordinary toplevels), so clicking "+"
         // looked like it did nothing.
         transientParent: pickerWindow?.transientParentWindow,
+        tagError: { [weak viewModel] tag in
+          let editingID: UUID?
+          if case .edit(let snippet) = mode { editingID = snippet.id } else { editingID = nil }
+          return viewModel?.snippetTagError(forTag: tag, editing: editingID)
+        },
         onSave: { title, body, keyword in
           switch mode {
           case .create, .createFromClip:

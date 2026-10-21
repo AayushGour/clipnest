@@ -55,7 +55,7 @@ public final class SettingsStore {
     case days
   }
 
-  public static let defaultItemCount = 1000
+  public static let defaultItemCount = 2500
   public static let defaultDays = 30
 
   private enum Key {

@@ -69,10 +69,15 @@ public final class SnippetEditorWindow: @unchecked Sendable {
   static let formSpacing: Int32 = 12
   static let bodyMinHeight: Int32 = 160
   static let buttonSpacing: Int32 = 8
+  static let noteMaxWidthChars: Int32 = 44
+  static let dimLabelClass = "dim-label"
+  static let errorLabelClass = "error"
 
   let window: OpaquePointer
   let headingLabel: OpaquePointer
   let tagEntry: OpaquePointer
+  /// T-SNIPFB1: helper text under the Tag, replaced by the duplicate-tag error.
+  let tagNoteLabel: OpaquePointer
   let bodyTextView: OpaquePointer
   let bodyBuffer: OpaquePointer
   let cancelButton: OpaquePointer
@@ -84,11 +89,14 @@ public final class SnippetEditorWindow: @unchecked Sendable {
   /// comment.
   private var onSave: ((_ title: String, _ body: String, _ keyword: String?) -> Void)?
   private var onClose: (() -> Void)?
+  private var tagError: ((_ tag: String) -> String?)?
+  private var expandShortcut = SnippetExpansionCopy.unboundShortcutFallback
 
   public init() {
     window = gtk_window_new()
     headingLabel = gtk_label_new(nil)
     tagEntry = gtk_entry_new()
+    tagNoteLabel = gtk_label_new(nil)
     bodyTextView = gtk_text_view_new()
     bodyBuffer = gtk_text_view_get_buffer(bodyTextView)
     cancelButton = gtk_button_new_with_label("Cancel")
@@ -123,6 +131,7 @@ public final class SnippetEditorWindow: @unchecked Sendable {
   ///     it passed in.
   ///   - onClose: called exactly once, whenever this window closes for any
   ///     reason. See this file's top "Close path" doc comment.
+  ///   - tagError: inline duplicate-tag check (T-SNIPFB1); `nil` = tag is free.
   ///   - transientParent: the picker's `GtkWindow`, so the window manager
   ///     stacks this editor ABOVE it and centres it there.
   ///
@@ -138,11 +147,15 @@ public final class SnippetEditorWindow: @unchecked Sendable {
   public func show(
     mode: SnippetFormMode,
     transientParent: OpaquePointer?,
+    tagError: @escaping (_ tag: String) -> String?,
     onSave: @escaping (_ title: String, _ body: String, _ keyword: String?) -> Void,
     onClose: @escaping () -> Void
   ) {
     self.onSave = onSave
     self.onClose = onClose
+    self.tagError = tagError
+    // Read at show time: the expand hotkey is rebindable in Settings.
+    expandShortcut = ExpandSnippetShortcutLabel.current
     let title = mode.isNew ? "New Snippet" : "Edit Snippet"
     gtk_window_set_title(window, title)
     gtk_label_set_markup(headingLabel, "<b>\(PangoMarkup.escape(title))</b>")
@@ -186,6 +199,12 @@ public final class SnippetEditorWindow: @unchecked Sendable {
     // comment).
     gtk_entry_set_placeholder_text(tagEntry, "Tag")
     gtk_box_append(outerBox, tagEntry)
+
+    // Helper text ("what is the Tag") / duplicate-tag error, wrapped.
+    gtk_label_set_xalign(tagNoteLabel, 0)
+    gtk_label_set_wrap(tagNoteLabel, 1)
+    gtk_label_set_max_width_chars(tagNoteLabel, Self.noteMaxWidthChars)
+    gtk_box_append(outerBox, tagNoteLabel)
 
     let bodyScroller: OpaquePointer = gtk_scrolled_window_new()
     gtk_scrolled_window_set_policy(bodyScroller, GTK_POLICY_NEVER, GTK_POLICY_AUTOMATIC)
@@ -235,7 +254,9 @@ public final class SnippetEditorWindow: @unchecked Sendable {
   func handleSaveClicked() {
     let tag = currentTagText().trimmingCharacters(in: .whitespacesAndNewlines)
     let body = currentBodyText().trimmingCharacters(in: .whitespacesAndNewlines)
-    guard SnippetFormValidation.isSaveEnabled(tag: tag, body: body) else { return }
+    guard SnippetFormValidation.isSaveEnabled(tag: tag, body: body),
+      tagError?(tag) == nil
+    else { return }
     // The Tag doubles as the expansion keyword — matches
     // `SnippetFormView.save()`'s `onSave(trimmedTag, trimmedBody, trimmedTag)`
     // exactly.
@@ -253,12 +274,22 @@ public final class SnippetEditorWindow: @unchecked Sendable {
     onClose?()
     onClose = nil
     onSave = nil
+    tagError = nil
     return 0
   }
 
   private func updateSaveEnabled() {
-    let enabled = SnippetFormValidation.isSaveEnabled(
-      tag: currentTagText(), body: currentBodyText())
+    let tag = currentTagText()
+    let error = tagError?(tag)
+    let note = SnippetTagValidation.fieldNote(error: error, expandShortcut: expandShortcut)
+    gtk_label_set_text(tagNoteLabel, note.text)
+    let (addedClass, removedClass) =
+      note.isError
+      ? (Self.errorLabelClass, Self.dimLabelClass) : (Self.dimLabelClass, Self.errorLabelClass)
+    gtk_widget_remove_css_class(tagNoteLabel, removedClass)
+    gtk_widget_add_css_class(tagNoteLabel, addedClass)
+    let enabled =
+      SnippetFormValidation.isSaveEnabled(tag: tag, body: currentBodyText()) && error == nil
     gtk_widget_set_sensitive(saveButton, enabled ? 1 : 0)
   }
 

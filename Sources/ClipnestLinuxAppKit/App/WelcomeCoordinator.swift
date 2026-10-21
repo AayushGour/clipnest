@@ -66,6 +66,8 @@ final class WelcomeCoordinator {
         },
         refreshExtensionStatus: { environment.rerunGnomeExtensionSetup(resetToChecking: false) },
         openShortcutsSettings: { environment.openSettings(tab: .shortcuts) },
+        canLogOut: SessionLogoutClient.isSupported(),
+        requestLogOut: { SessionLogoutClient.requestLogout() },
         onClosed: { [weak self] in self?.window = nil }))
     window = newWindow
     newWindow.present()

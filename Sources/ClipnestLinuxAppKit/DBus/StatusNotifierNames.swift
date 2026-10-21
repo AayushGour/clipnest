@@ -35,7 +35,15 @@ enum StatusNotifierItemProperty {
   static let title = "Title"
   static let status = "Status"
   static let iconName = "IconName"
+  static let toolTip = "ToolTip"
   static let menu = "Menu"
+}
+
+/// Signals telling a tray host to re-read a property (T-PAUSEICON1: the
+/// paused icon/tooltip only reach the screen if the host is told they changed).
+enum StatusNotifierItemSignal {
+  static let newIcon = "NewIcon"
+  static let newToolTip = "NewToolTip"
 }
 
 /// This app's fixed `org.kde.StatusNotifierItem` property VALUES — one
@@ -56,6 +64,14 @@ enum StatusNotifierItemValue {
   /// fallback search path, so this resolves as long as the package is
   /// installed — no dependency on a specific desktop theme.
   static let iconName = "app.clipnest.Clipnest-symbolic"
+  /// Paused variant: the same glyph dimmed with a pause mark, generated from
+  /// the symbolic icon's own paths (never redrawn) and installed next to it.
+  static let pausedIconName = "app.clipnest.Clipnest-paused-symbolic"
+
+  /// State -> tray icon name (the one mapping `IconName` and `NewIcon` share).
+  static func iconName(isPaused: Bool) -> String {
+    isPaused ? pausedIconName : iconName
+  }
 }
 
 /// `com.canonical.dbusmenu` — the menu THIS app exposes at

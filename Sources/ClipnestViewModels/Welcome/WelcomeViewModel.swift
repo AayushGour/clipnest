@@ -26,20 +26,27 @@ public enum WelcomeStep: Int, CaseIterable, Sendable {
   case openAtLogin = 2
   /// Step 3: "Try your hotkey" (shows the hotkey, then detects it being used).
   case tryIt = 3
+  /// Linux only (T-WELCOMEGRANT1): replaces `.tryIt` as the LAST step while a
+  /// log-out is still needed (keyboard-access group or GNOME extension just set
+  /// up), because the hotkey and direct paste cannot work before the next login.
+  /// Shown as "Step 3 of 3" - the two last steps are never both on the list.
+  case logOut = 4
 
-  public var number: Int { rawValue }
-  public static var count: Int { allCases.count }
+  public var number: Int { self == .logOut ? WelcomeStep.tryIt.rawValue : rawValue }
+  /// Steps the user sees (`tryIt` and `logOut` share the last slot).
+  public static var count: Int { tryIt.rawValue }
 
   public var heading: String {
     switch self {
     case .permission: return WelcomeCopy.permissionHeading
     case .openAtLogin: return WelcomeCopy.openAtLoginHeading
     case .tryIt: return WelcomeCopy.tryItHeading
+    case .logOut: return WelcomeCopy.logOutHeading
     }
   }
 }
 
-/// Where keyboard focus belongs (never Skip).
+/// Where keyboard focus belongs (the secondary button only as a last resort).
 public enum WelcomeInitialFocus: Equatable, Sendable {
   /// The step's own action (macOS "Allow Accessibility…") - permission missing.
   case permissionAction
@@ -47,13 +54,15 @@ public enum WelcomeInitialFocus: Equatable, Sendable {
   case primaryButton
   /// The "Open Clipnest at login" switch, while that step is active.
   case launchAtLoginToggle
+  /// The low-emphasis footer button ("Set up later") - step 1 while permission
+  /// is missing but the step's own action is not shown and Continue is disabled.
+  case secondaryButton
 }
 
 public enum WelcomeStepState: Equatable, Sendable {
   case upcoming, current, done, skipped
 
-  /// The state word VoiceOver/Orca read ("upcoming" steps read "optional"
-  /// only for the optional step 1, handled by the VM).
+  /// The state word VoiceOver/Orca read.
   fileprivate var spoken: String {
     switch self {
     case .upcoming: return "upcoming"
@@ -71,6 +80,9 @@ public enum WelcomeNavigation: Equatable, Sendable {
   /// The step could not be completed (launch-at-login registration failed):
   /// stay put; `launchAtLoginError` says why.
   case stayed
+  /// The log-out step's primary button: the platform asks the session manager to
+  /// log out (with its own confirmation) and leaves the window open.
+  case logOut
 }
 
 /// The system boundary behind step 2, injected so the VM stays platform-free.
@@ -110,6 +122,9 @@ public final class WelcomeViewModel: ObservableObject {
   #endif
 
   public let platform: WelcomePlatform
+  /// Linux: the desktop offers a session-manager log-out API (GNOME). When false
+  /// the log-out step only gives instructions.
+  public let canLogOut: Bool
 
   @Published public private(set) var activeStep: WelcomeStep
   @Published public private(set) var hotkey: WelcomeHotkey
@@ -124,6 +139,12 @@ public final class WelcomeViewModel: ObservableObject {
   /// Step 2's switch. Applied to the system only when the user continues.
   @Published public private(set) var wantsLaunchAtLogin: Bool
   @Published public private(set) var launchAtLoginError: String?
+  /// T-WELCOMEGRANT1: the user pressed "Set up later" on step 1 and is looking
+  /// at what will not work. Cleared by Go back, by a grant, or by confirming.
+  @Published public private(set) var isConfirmingSetUpLater = false
+  /// Linux: a log-out is still needed (pending re-login), so the last step is
+  /// `.logOut` instead of `.tryIt`. Always false on macOS.
+  @Published public private(set) var needsRelogin = false
 
   private let launchAtLogin: WelcomeLaunchAtLogin
   private var outcomes: [WelcomeStep: WelcomeStepState] = [:]
@@ -137,8 +158,10 @@ public final class WelcomeViewModel: ObservableObject {
   ///   "has answered that step either way".
   public init(
     platform: WelcomePlatform, hotkey: WelcomeHotkey, isPermissionComplete: Bool,
-    launchAtLogin: WelcomeLaunchAtLogin, launchAtLoginPreChecked: Bool = true
+    launchAtLogin: WelcomeLaunchAtLogin, launchAtLoginPreChecked: Bool = true,
+    canLogOut: Bool = false
   ) {
+    self.canLogOut = canLogOut
     self.launchAtLogin = launchAtLogin
     wantsLaunchAtLogin = launchAtLoginPreChecked
     self.platform = platform
@@ -148,6 +171,13 @@ public final class WelcomeViewModel: ObservableObject {
     // "Allowed" with Continue focused (`initialFocus`).
     activeStep = .permission
   }
+
+  /// The last step: "Log out to finish setup" while a re-login is pending,
+  /// else "Try your hotkey".
+  public var finalStep: WelcomeStep { needsRelogin ? .logOut : .tryIt }
+
+  /// The steps on the list, in order (platforms hide the other last-step row).
+  public var steps: [WelcomeStep] { [.permission, .openAtLogin, finalStep] }
 
   public var initialFocus: WelcomeInitialFocus {
     isPermissionComplete ? .primaryButton : .permissionAction
@@ -159,9 +189,16 @@ public final class WelcomeViewModel: ObservableObject {
   public func focusTarget(permissionActionAvailable: Bool) -> WelcomeInitialFocus {
     switch activeStep {
     case .permission:
-      return !isPermissionComplete && permissionActionAvailable ? .permissionAction : .primaryButton
+      // Confirming: the (enabled) "Go back" button. Otherwise the grant action
+      // while something is missing; the primary button only once it can act
+      // (a disabled Continue cannot take focus).
+      if isConfirmingSetUpLater { return .primaryButton }
+      if isPermissionComplete { return .primaryButton }
+      // Action hidden (e.g. extension still checking) and Continue disabled:
+      // "Set up later" is the only enabled control left.
+      return permissionActionAvailable ? .permissionAction : .secondaryButton
     case .openAtLogin: return .launchAtLoginToggle
-    case .tryIt: return .primaryButton
+    case .tryIt, .logOut: return .primaryButton
     }
   }
 
@@ -183,14 +220,45 @@ public final class WelcomeViewModel: ObservableObject {
   }
 
   public var primaryTitle: String {
-    activeStep == WelcomeStep.allCases.last ? WelcomeCopy.doneTitle : WelcomeCopy.continueTitle
+    if isConfirmingSetUpLater { return WelcomeCopy.goBackTitle }
+    if activeStep == .logOut {
+      return canLogOut ? WelcomeCopy.logOutNowTitle : WelcomeCopy.doneTitle
+    }
+    return activeStep == finalStep ? WelcomeCopy.doneTitle : WelcomeCopy.continueTitle
+  }
+
+  /// T-WELCOMEGRANT1: Continue stays disabled on step 1 until every required
+  /// permission is settled (`isPermissionComplete`); "Go back" is always live.
+  public var isPrimaryEnabled: Bool {
+    isConfirmingSetUpLater || activeStep != .permission || isPermissionComplete
+  }
+
+  /// The low-emphasis footer button: "Skip" on steps 2-3; on step 1 the
+  /// escape hatch "Set up later" (then "Set up later anyway" while confirming).
+  public var secondaryTitle: String {
+    if activeStep == .logOut { return WelcomeCopy.logOutLaterTitle }
+    guard activeStep == .permission else { return WelcomeCopy.skipTitle }
+    return isConfirmingSetUpLater ? WelcomeCopy.setUpLaterConfirmTitle : WelcomeCopy.setUpLaterTitle
+  }
+
+  /// Hidden on step 1 once everything is granted (nothing left to postpone).
+  public var showsSecondary: Bool {
+    switch activeStep {
+    case .permission: return !isPermissionComplete
+    case .logOut: return canLogOut
+    case .openAtLogin, .tryIt: return true
+    }
+  }
+
+  /// What would not work, shown only while confirming.
+  public var setUpLaterConfirmationText: String? {
+    isConfirmingSetUpLater ? WelcomeCopy.setUpLaterConfirmation(platform: platform) : nil
   }
 
   public func accessibilityLabel(for step: WelcomeStep) -> String {
     let state = state(of: step)
-    let word = (step == .permission && state == .upcoming) ? "optional" : state.spoken
     return WelcomeCopy.stepAccessibilityLabel(
-      number: step.number, count: WelcomeStep.count, heading: step.heading, state: word)
+      number: step.number, count: WelcomeStep.count, heading: step.heading, state: state.spoken)
   }
 
   // MARK: Copy
@@ -198,6 +266,8 @@ public final class WelcomeViewModel: ObservableObject {
   public var permissionBodyText: String { WelcomeCopy.permissionBody(platform: platform) }
 
   public var openAtLoginBodyText: String { WelcomeCopy.openAtLoginBody }
+
+  public var logOutBodyText: String { WelcomeCopy.logOutBody(canLogOut: canLogOut) }
 
   public var tryItBodyText: String {
     WelcomeCopy.tryItBody(
@@ -238,6 +308,8 @@ public final class WelcomeViewModel: ObservableObject {
     case .tryIt:
       if state == .done { return WelcomeCopy.tryItWorksShort }
       return hotkey.displayText ?? WelcomeCopy.noHotkeyShort
+    case .logOut:
+      return state == .skipped ? WelcomeCopy.logOutLaterStatus : WelcomeCopy.logOutNeededStatus
     }
   }
 
@@ -254,23 +326,41 @@ public final class WelcomeViewModel: ObservableObject {
 
   /// Primary button (Return). Advances; on the last step (try your hotkey) there is nothing
   /// further, so it closes (marking it skipped if unfinished). On step 2 it
-  /// first applies the login-item choice.
+  /// first applies the login-item choice. On step 1 it does nothing until
+  /// everything is granted (`isPrimaryEnabled`); while confirming "Set up
+  /// later" it is "Go back".
   public func continueTapped() -> WelcomeNavigation {
+    if isConfirmingSetUpLater {
+      isConfirmingSetUpLater = false
+      return .stayed
+    }
     switch activeStep {
     case .permission:
-      outcomes[.permission] = isPermissionComplete ? .done : .skipped
+      guard isPermissionComplete else { return .stayed }
+      outcomes[.permission] = .done
       return advance()
     case .openAtLogin:
       return applyLaunchAtLogin()
     case .tryIt:
       return closeFromTryIt()
+    case .logOut:
+      return canLogOut ? .logOut : .close
     }
   }
 
-  /// "Skip": skips the current step; on the last step it closes.
+  /// The low-emphasis footer button. Steps 2-3: skips the step (the last one
+  /// closes). Step 1 ("Set up later"): the first tap only asks for confirmation
+  /// (`setUpLaterConfirmationText`), the second ("Set up later anyway") moves
+  /// on, so the step cannot be skipped by accident but never traps the user.
   public func skipTapped() -> WelcomeNavigation {
+    if activeStep == .permission && !isPermissionComplete && !isConfirmingSetUpLater {
+      isConfirmingSetUpLater = true
+      announcement = WelcomeCopy.setUpLaterConfirmation(platform: platform)
+      return .stayed
+    }
     switch activeStep {
     case .permission, .openAtLogin:
+      isConfirmingSetUpLater = false
       // Skipping step 2 leaves the system untouched (nothing is applied) but
       // still counts as an answer, so the next Getting Started shows reality.
       if activeStep == .openAtLogin { launchAtLogin.recordChoice() }
@@ -278,12 +368,18 @@ public final class WelcomeViewModel: ObservableObject {
       return advance()
     case .tryIt:
       return closeFromTryIt()
+    case .logOut:
+      // "Later": the body already told the user what waits for the next login.
+      outcomes[.logOut] = .skipped
+      return .close
     }
   }
 
   private func advance() -> WelcomeNavigation {
-    guard let next = WelcomeStep(rawValue: activeStep.rawValue + 1) else { return .close }
-    activeStep = next
+    guard let index = steps.firstIndex(of: activeStep), index + 1 < steps.count else {
+      return .close
+    }
+    activeStep = steps[index + 1]
     return .advanced
   }
 
@@ -335,6 +431,7 @@ public final class WelcomeViewModel: ObservableObject {
     guard isComplete != isPermissionComplete else { return }
     isPermissionComplete = isComplete
     guard isComplete else { return }
+    isConfirmingSetUpLater = false
     self.announcement = announcement
     if activeStep == .permission {
       outcomes[.permission] = .done
@@ -357,6 +454,15 @@ public final class WelcomeViewModel: ObservableObject {
   public func tryItHintTimedOut() {
     guard !hasDetectedHotkey else { return }
     showsTryItHint = true
+  }
+
+  /// Linux: a log-out is (no longer) needed. Swaps the last step between
+  /// "Try your hotkey" and "Log out to finish setup", moving the user along if
+  /// they are already on it.
+  public func setNeedsRelogin(_ needs: Bool) {
+    guard needs != needsRelogin else { return }
+    needsRelogin = needs
+    if activeStep == .tryIt || activeStep == .logOut { activeStep = finalStep }
   }
 
   /// Linux: the global hotkey will not fire until extension setup finishes.

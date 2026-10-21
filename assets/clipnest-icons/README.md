@@ -19,6 +19,7 @@ All files are self-contained SVG. Monochrome variants use `currentColor` — set
 | `clipnest-menubar-template.svg` | macOS menu-bar template | Pure black, reads at 16–18 px. Use as an `NSImage` **template** |
 | `clipnest-app-icon.svg` | macOS app icon | 1024 squircle tile, soft bg + drop shadow |
 | `app.clipnest.Clipnest-symbolic.svg` | Linux tray (freedesktop symbolic) | Same glyph as `clipnest-mono.svg` (same `<path>`/`<mask>` data, byte-for-byte), fill hardcoded to `#bebebe` instead of `currentColor` — most `org.kde.StatusNotifierItem` hosts render the raw file rather than doing GTK4's class-based live recolor, so the fallback fill has to look right on its own. Installed to `hicolor/symbolic/apps/` by `debian/rules`; referenced as `IconName = "app.clipnest.Clipnest-symbolic"` in `StatusNotifierNames.swift`. |
+| `app.clipnest.Clipnest-paused-symbolic.svg` | Linux tray, capture paused | `app.clipnest.Clipnest-symbolic.svg` verbatim with the glyph group at `opacity="0.5"` plus two pause bars appended (the only new shapes). Installed beside it by `debian/rules`; `IconName` swaps to it while paused. |
 
 Canvas: the color master and glyph treatments use `viewBox 0 0 908 908`; the app icon uses `0 0 1024 1024`.
 

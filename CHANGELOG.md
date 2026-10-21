@@ -10,6 +10,34 @@ at any time.
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-21
+
+### Added
+
+- Welcome window: granting permissions is now required — Continue unlocks only
+  once Accessibility (macOS) or keyboard access and the GNOME extension (Linux)
+  are set up; a low-key "Set up later" first confirms what won't work. Linux
+  ends with a "Log out to finish setup" step (Log Out Now / Later) when a
+  re-login is pending. Settings → Permissions no longer claims the macOS hotkey
+  needs Accessibility.
+- Snippets: the editor explains that the Tag is the expansion keyword (type it
+  in any app, select it, press the expand shortcut — shows your current
+  binding) and refuses a tag another snippet already uses, naming that snippet.
+  Tags match ignoring case and surrounding spaces.
+- Snippet expansion says why it couldn't expand instead of beeping: nothing
+  selected, no snippet with that tag, Accessibility off (macOS), or the app
+  didn't accept the replacement. macOS shows a small message near the pointer
+  that never takes focus and is hidden from screen sharing; Linux posts a
+  desktop notification.
+- Paused capture is visible: the macOS menu-bar icon dims and gains a pause
+  mark (VoiceOver: "Clipnest — capture paused"); the Linux tray switches to a
+  paused icon with a "Capture paused" tooltip, also when paused from Settings.
+
+### Changed
+
+- Default history limit raised from 1,000 to 2,500 items. If you never changed
+  the limit you get the new default automatically; a limit you chose is kept.
+
 ## [1.5.0] - 2026-10-20
 
 ### Accessibility
@@ -524,7 +552,8 @@ release (0.5.0, above). None of them were ever installed by a user.
 
 - `Sendable` conformance for `NSPasteboard` access, required by Swift 6.
 
-[Unreleased]: https://github.com/AayushGour/clipnest/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/AayushGour/clipnest/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/AayushGour/clipnest/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/AayushGour/clipnest/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/AayushGour/clipnest/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/AayushGour/clipnest/compare/v1.2.1...v1.3.0

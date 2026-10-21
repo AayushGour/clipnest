@@ -108,9 +108,13 @@ Clipnest is a free, open-source, native menu-bar app for macOS and, since 1.0, L
 
 </div>
 
-Save reusable text (a signature, boilerplate, a command) with a **Tag**, and paste it from the Snippets tab or expand it by keyword in any app — replaces your text expander too. Turn a text or link history item into a snippet with **⌘S**.
+Save reusable text (a signature, boilerplate, a command) with a **Tag**, and paste it from the Snippets tab or drop it into any app by its Tag. Turn a text or link history item into a snippet with **⌘S**.
 
-**Expand anywhere:** type a snippet's Tag in *any* app, select it, and press **⌥⌘E** — Clipnest replaces the selection with the snippet's Body. It works in every application, using a two-tier approach on the Mac: Accessibility first (reads and replaces the selection directly, without ever touching your clipboard), with a clipboard-based fallback (snapshotting and restoring your clipboard) for apps where the Accessibility API can't read the selection, such as Electron/Chrome-based apps. On Linux, expansion works on both X11 and Wayland (on Wayland it goes through IBus), and in terminals it declines rather than risk corrupting the command line.
+The Tag doubles as the expansion keyword, so tags must be unique: matching ignores case and surrounding spaces, and saving a duplicate tag is blocked with a message naming the snippet that already uses it.
+
+**Expand anywhere:** nothing expands automatically as you type. Type a snippet's Tag in *any* app, select it, and press **⌥⌘E** (**Alt+Super+E** on Linux) — Clipnest replaces the selection with the snippet's Body. It works in every application, using a two-tier approach on the Mac: Accessibility first (reads and replaces the selection directly, without ever touching your clipboard), with a clipboard-based fallback (snapshotting and restoring your clipboard) for apps where the Accessibility API can't read the selection, such as Electron/Chrome-based apps. On Linux, expansion works on both X11 and Wayland (on Wayland it goes through IBus), and in terminals it declines rather than risk corrupting the command line.
+
+**If it can't expand, Clipnest says why instead of beeping:** "Select a snippet tag, then press the shortcut." when nothing is selected; "Check the tag in the Snippets tab." when no snippet uses the selected text; "Turn it on in Settings > Permissions." when Accessibility is missing (macOS); "Try again, or paste from the picker." when the app didn't accept the replacement. On the Mac a small message appears near the pointer — it never takes focus and is hidden from screen sharing. On Linux it is a desktop notification (needs `/usr/bin/gdbus` or `/usr/bin/notify-send`; otherwise a terminal bell).
 
 <div class="shot-frame" markdown="1">
 
@@ -163,8 +167,8 @@ Let Clipnest read the text in your screenshots so you can find them by what they
 
 Everything about how Clipnest behaves lives in one Settings window (**⌘,**), across five tabs:
 
-- **General** — launch Clipnest at login, pause clipboard capture with one toggle, and turn the background update check on/off.
-- **History** — controls how much history is kept. The default is the most recent **1,000** items; switch to a day-based cap (30 days by default) or *Everything* (no cap at all) instead. Pinned items are always kept regardless of the cap. **Clear All History…** wipes everything (including pinned items) after a confirmation. This tab also has the OCR toggle described above.
+- **General** — launch Clipnest at login, pause clipboard capture with one toggle (while paused, the menu-bar or tray icon is dimmed with a pause mark), and turn the background update check on/off.
+- **History** — controls how much history is kept. The default is the most recent **2,500** items (a limit you chose yourself is kept); switch to a day-based cap (30 days by default) or *Everything* (no cap at all) instead. Pinned items are always kept regardless of the cap. **Clear All History…** wipes everything (including pinned items) after a confirmation. This tab also has the OCR toggle described above.
 - **Apps** — exclude specific apps from capture, on top of the built-in password-manager denylist (which can't be removed).
 - **Shortcuts** — rebind *both* global hotkeys (open the picker, expand a snippet) to whatever key combination you want.
 - **Permissions** — on the Mac, see whether Accessibility is granted and fix it in one click, including guidance for the one case System Settings can't diagnose on its own (a rebuilt/updated app whose old permission entry no longer matches). On Linux, see your setup status and grant the one-time auto-paste permission.

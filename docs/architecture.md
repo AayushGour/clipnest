@@ -560,8 +560,7 @@ Because CI already standardizes on Xcode 26, `SwiftDataClipStore.makeTestContain
 
 ## 10. Extension points & known constraints
 
-**Shipped-but-unwired:**
-- `Snippet.keyword` exists on the model and is what `SnippetStore.findByKeyword(_:)` matches against, but the picker's Snippets form only exposes Title ("Tag") and Body — `keyword` is currently always set equal to the title's role in practice via that same field, with no separate rebinding UI (see `docs/API.md`'s Model section and `ClipnestApp/Sources/UI/Picker/SnippetFormView.swift`).
+**Snippet keyword:** the editor's Tag field is the expansion keyword that `SnippetStore.findByKeyword(_:)` matches. Since 1.6.0 the form says so in helper text and refuses a tag another snippet already uses, using `Snippet.normalizedKeyword` (trimmed, lowercased — the same rule as `findByKeyword`) via `SnippetTagValidation` (`Sources/ClipnestViewModels/Snippets/SnippetTagValidation.swift`). Create and update re-check against the live store.
 
 (`ClipStore.enforceRetention(cap:)` and `PrivacyFilter.shouldCapture`'s `customExcludedBundleIDs` — both previously listed here as unwired — are now wired end-to-end: `ClipnestApp/Sources/UI/Settings/HistorySettingsView.swift` and `AppEnvironment.enforceRetentionNow()`/`scheduleRetentionEnforcement()` (`ClipnestApp/Sources/App/AppEnvironment.swift:242-244,556-618`) drive retention from `SettingsStore.retentionCap`, and `ClipnestApp/Sources/UI/Settings/AppsSettingsView.swift`/`SettingsStore.userExcludedBundleIDs` feed `ClipboardMonitor`'s `excludedBundleIDsProvider`. Neither the `UI/Settings/` module nor `SettingsStore` has its own module-reference entry in [§3.2](#32-clipnestapp) yet — a real gap in this document, out of scope for this pass, flagged for whoever documents that area next.)
 

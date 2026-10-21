@@ -1,7 +1,7 @@
 import ClipnestViewModels
 
 /// The welcome window's "Turn On" action for `GnomeExtensionStatus
-/// .disabledByUser` (design.md "Step 2 - Linux", sub-row B).
+/// .disabledByUser` (design.md "Step 1 - Linux", sub-row B).
 ///
 /// `GnomeExtensionInstaller.run()` deliberately never re-enables an extension
 /// the user turned off. A button press IS the user's explicit opt-back-in, so

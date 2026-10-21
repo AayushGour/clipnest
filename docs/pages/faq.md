@@ -79,7 +79,7 @@ No — that's the point of how Clipnest is signed. Every Clipnest release is sig
 
 <div class="faq-answer" markdown="1">
 
-Clipnest is **not** notarized with a paid Apple Developer ID, and if you download its `.dmg` straight from a browser, macOS's Gatekeeper will show the "unidentified developer" warning. The supported install path avoids this entirely: `scripts/install.sh` (the one-line curl command on the [Download page]({{ "/download/" | relative_url }})) downloads over `curl`, which never sets the quarantine flag that triggers that Gatekeeper check in the first place — instead, the script verifies the `.dmg` against a published SHA-256 checksum before ever mounting it. Every release is still signed, just with one long-lived, self-signed certificate rather than a Developer ID — enough to keep your Accessibility grant stable across updates (see above), but not enough on its own to satisfy notarization. Clipnest is still a young project; if you'd rather wait for a fully notarized, Gatekeeper-clean build, that's on the roadmap but not shipped yet. The full explanation is in [Signing, honestly]({{ '/contribute/#signing-honestly' | relative_url }}).
+Clipnest is **not** notarized with a paid Apple Developer ID, and if you download its `.dmg` straight from a browser, macOS's Gatekeeper will show the "unidentified developer" warning (on macOS 15 and later the dialog has no Open button: go to System Settings → Privacy & Security, scroll to the Clipnest message and click **Open Anyway**; or run `xattr -dr com.apple.quarantine /Applications/Clipnest.app`). The supported install path avoids this entirely: `scripts/install.sh` (the one-line curl command on the [Download page]({{ "/download/" | relative_url }})) downloads over `curl`, which never sets the quarantine flag that triggers that Gatekeeper check in the first place — instead, the script verifies the `.dmg` against a published SHA-256 checksum before ever mounting it. Every release is still signed, just with one long-lived, self-signed certificate rather than a Developer ID — enough to keep your Accessibility grant stable across updates (see above), but not enough on its own to satisfy notarization. Clipnest is still a young project; if you'd rather wait for a fully notarized, Gatekeeper-clean build, that's on the roadmap but not shipped yet. The full explanation is in [Signing, honestly]({{ '/contribute/#signing-honestly' | relative_url }}).
 
 </div>
 
@@ -177,7 +177,7 @@ All of the above. Clipnest automatically captures plain text, rich text, URLs, i
 
 <div class="faq-answer" markdown="1">
 
-A snippet is reusable text you write yourself — a signature, boilerplate reply, or command — saved with a short **Tag**. Type that Tag in any app, select it, and press a hotkey (⌥⌘E by default); Clipnest replaces the selection with the snippet's full body. It works the same way in native apps and in Electron/Chrome-based ones like VS Code or Slack, using the Accessibility API where it can and a clipboard-snapshot-and-restore fallback where it can't. If you're running a separate text expander today, this is meant to replace it.
+A snippet is reusable text you write yourself — a signature, boilerplate reply, or command — saved with a short **Tag**. Type that Tag in any app, select it, and press a hotkey (⌥⌘E by default); Clipnest replaces the selection with the snippet's full body. It works the same way in native apps and in Electron/Chrome-based ones like VS Code or Slack, using the Accessibility API where it can and a clipboard-snapshot-and-restore fallback where it can't. Nothing expands automatically as you type: you press the shortcut on the selected Tag. If something can't be expanded, Clipnest tells you why (nothing selected, no matching tag, Accessibility missing, or the app didn't accept the replacement). Tags must be unique, and matching ignores case and surrounding spaces.
 
 </div>
 
@@ -193,7 +193,7 @@ A snippet is reusable text you write yourself — a signature, boilerplate reply
 
 <div class="faq-answer" markdown="1">
 
-By default, the most recent 1,000 items. You can switch that to a day-based cap (30 days by default) or turn retention off entirely and keep everything, with no limit. Pinned items are always kept regardless of the cap, and you can wipe your whole history at any time from Settings.
+By default, the most recent 2,500 items (raised from 1,000 in 1.6.0; a limit you chose yourself is kept). You can switch that to a day-based cap (30 days by default) or turn retention off entirely and keep everything, with no limit. Pinned items are always kept regardless of the cap, and you can wipe your whole history at any time from Settings.
 
 </div>
 

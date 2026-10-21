@@ -44,7 +44,7 @@ This guide is written for the Mac. Since 1.0 Clipnest also runs on Linux (Ubuntu
 - **macOS 14 (Sonoma) or later**
 - **Apple Silicon or Intel** — either Mac works
 - **Or Linux:** Ubuntu 22.04 or 24.04 with GNOME, X11 or Wayland, amd64 or arm64 — see [Using Clipnest on Linux](#12-using-clipnest-on-linux)
-- **Accessibility permission** (optional) — only needed so Clipnest can type your paste directly into the app you were using, and so snippet keyword-expansion can work. Everything else (capturing, browsing, and searching your history) works without it.
+- **Accessibility permission** — asked for in the Welcome window so Clipnest can type your paste directly into the app you were using, and so snippet keyword-expansion can work. Opening the picker with your hotkey, capturing, browsing, and searching your history work without it.
 {: .detail-list}
 
 ## 3. Install
@@ -91,24 +91,24 @@ Every release is still signed — with one long-lived, self-signed certificate, 
 
 **If you instead download the `.dmg` directly from the Releases page** (see [Install](#3-install)), your browser *will* set the quarantine flag, and macOS Gatekeeper *will* say Clipnest is from an "unidentified developer" the first time you open it. To get past that **once**:
 
-- **Right-click (or Control-click) Clipnest in Applications → Open** → click **Open** again in the dialog that appears, **or**
-- Run this in Terminal:
+- **macOS 15 (Sequoia) and later:** try to open Clipnest once and dismiss the dialog (it has no Open button for an app that isn't notarized). Then open **System Settings → Privacy & Security**, scroll down to the message saying Clipnest was blocked, click **Open Anyway**, and confirm (macOS asks for your admin password). Control-click → Open no longer gets past this dialog on macOS 15+. (On macOS 14, Control-click Clipnest in Applications → **Open**, then **Open** again, still works.)
+- **Or, from Terminal** (any macOS version), clear the quarantine flag yourself:
   ```bash
   xattr -dr com.apple.quarantine /Applications/Clipnest.app
   ```
 
-After that first launch, Clipnest opens normally like any other app. Switching to the one-line `curl` install above avoids this step entirely.
+After that first launch, Clipnest opens normally like any other app. The one-line `curl` install avoids this step entirely: it downloads with `curl` (which never sets the quarantine flag) and, as an extra measure, `install.sh` also clears the flag on the app it installs.
 
 ## 4. First launch & permissions
 
-When Clipnest first launches, it shows a small **Welcome** window once — also once after you update from a version that didn't have it — and then sits quietly in your menu bar. The window has three steps: **(1)** an optional Accessibility grant (needed only for pasting straight into other apps and expanding snippets; the hotkey itself works without it), **(2)** *Open Clipnest at login* — a pre-checked switch, applied when you press Continue, that is the same setting as Settings → General → Launch Clipnest at login (if macOS refuses, the reason is shown and nothing is changed), and **(3)** *Try your hotkey* — your live ⌥⌘V binding, a button to change it in Settings → Shortcuts, and a live check that confirms the hotkey opens the picker. Skip any step, or close the window with **Esc** / **⌘W** / the red button; it won't appear again on its own. Reopen it any time from the menu-bar icon → **Getting Started…**. While it is open Clipnest shows its Dock icon (macOS requires that to bring the window to the front) and hides it again when you close it (unless Settings is still open). Clipboard capture, browsing, and search all work immediately with no permissions granted at all.
+When Clipnest first launches, it shows a small **Welcome** window once — also once after you update from a version that didn't have it — and then sits quietly in your menu bar. The window has three steps: **(1)** the Accessibility grant (needed to paste straight into other apps and expand snippets; **Continue** stays disabled until it is allowed, and the hotkey itself opens the picker without it), **(2)** *Open Clipnest at login* — a pre-checked switch, applied when you press Continue, that is the same setting as Settings → General → Launch Clipnest at login (if macOS refuses, the reason is shown and nothing is changed), and **(3)** *Try your hotkey* — your live ⌥⌘V binding, a button to change it in Settings → Shortcuts, and a live check that confirms the hotkey opens the picker. Skip step 2 or 3, or on step 1 choose the low-key **Set up later**, which first shows exactly what will not work (picking an item only copies it, snippets will not expand) and needs a second click to confirm. You can also close the window with **Esc** / **⌘W** / the red button; it won't appear again on its own. Reopen it any time from the menu-bar icon → **Getting Started…**. While it is open Clipnest shows its Dock icon (macOS requires that to bring the window to the front) and hides it again when you close it (unless Settings is still open). Clipboard capture, browsing, and search all work immediately with no permissions granted at all.
 
-**Accessibility** is the one optional permission Clipnest asks for, and it's only needed for two things:
+**Accessibility** is the one permission Clipnest asks for, and it's needed for two things:
 
 - **Pasting directly into the app you were using.** Without it, selecting an item in Clipnest still copies it to your regular clipboard — you just have to press ⌘V yourself to paste it. With it granted, Clipnest types the paste in for you automatically.
 - **Snippet keyword expansion** (⌥⌘E) in other apps — this needs Accessibility on both of its internal paths (reading/replacing a selection directly, and its clipboard-based fallback for apps like VS Code or Slack), so without it, expansion won't work at all.
 
-Step 1 of the Welcome window is where Clipnest asks: **Allow Accessibility…** shows macOS's "Clipnest would like to control this computer" dialog on demand (nothing prompts at launch while the Welcome is unseen), and the row flips to **Allowed** on its own within a couple of seconds once you turn Clipnest on in System Settings. Skipping it is fine. If you have already seen the Welcome, the original behaviour applies: at most one automatic dialog ever, then a paste attempt made while Accessibility isn't granted just silently falls back to clipboard-only (press ⌘V yourself) instead of re-prompting, and neither opening the picker nor pressing ⌥⌘E triggers it. If ⌥⌘E just beeps and does nothing, that means Accessibility isn't granted — grant it manually (see below).
+Step 1 of the Welcome window is where Clipnest asks: **Allow Accessibility…** shows macOS's "Clipnest would like to control this computer" dialog on demand (nothing prompts at launch while the Welcome is unseen), and the row flips to **Allowed** on its own within a couple of seconds once you turn Clipnest on in System Settings. If you chose *Set up later*, you can allow it any time in Settings → Permissions, and *Getting Started…* shows its current status. If you have already seen the Welcome, the original behaviour applies: at most one automatic dialog ever, then a paste attempt made while Accessibility isn't granted just silently falls back to clipboard-only (press ⌘V yourself) instead of re-prompting, and neither opening the picker nor pressing ⌥⌘E triggers it. If pressing ⌥⌘E shows "Clipnest needs Accessibility access to expand snippets", Accessibility isn't granted — grant it manually (see below).
 
 **To grant it (or bring back that one-time dialog on your own terms):** System Settings → Privacy & Security → Accessibility → turn on **Clipnest** — or open **Settings → Permissions** (**⌘,**) and click **Grant Accessibility…**, which shows the same system dialog on demand and is never rate-limited (see [Settings window](#8-settings-window)).
 
@@ -158,6 +158,10 @@ Press **⌘P**, click the pin icon on a row, or right-click → Pin/Unpin. Pinne
 
 Press **⌘⌫** (macOS) or **Ctrl+Delete** (Linux) — plain Delete/Backspace never delete an item — click the trash icon on a row, or right-click → Delete, to remove an item for good (this also frees up the disk space it was using, for images/rich text).
 
+### Pausing capture
+
+Choose **Pause Capture** from the menu-bar icon (Linux: the tray icon), or switch on **Pause clipboard capture** in **Settings → General**, to stop Clipnest saving what you copy. While capture is paused the status icon shows it: dimmed with a pause mark (macOS menu bar; Linux tray). On macOS VoiceOver reads it as "Clipnest — capture paused"; on Linux the tray tooltip reads "Capture paused — copies are not being saved". Pause persists across relaunch, and pausing or resuming from Settings updates the icon too. Choose **Pause Capture** again to resume.
+
 ### Hovering for a full preview
 
 Hover your pointer over any row and a preview panel appears beside the picker after a brief pause. To get the same preview while moving through the list with the arrow keys, turn on **"Show preview when selecting with the keyboard"** in **Settings -> General** (off by default). A row under the pointer always takes priority over the keyboard-selected one:
@@ -186,13 +190,13 @@ Turning this on is a real privacy trade-off: recognized text becomes indexed, se
 
 ### How much history does Clipnest keep?
 
-By default, Clipnest automatically keeps only the most recent **1,000** items, trimming older ones as new ones arrive — it isn't unlimited out of the box. Open **Settings → History** (**⌘,** — see [Settings window](#8-settings-window)) to change this: cap it by a different number of items, cap it by age instead (30 days by default), or switch to **Everything** to turn the cap off and keep everything until you delete it yourself. **Pinned items are never counted against the cap**, no matter which mode you pick. That same tab also has a **Clear All History…** button to wipe everything at once (including pinned items, after a confirmation), or you can remove Clipnest's whole data folder yourself (see [Uninstall](#11-uninstall)).
+By default, Clipnest automatically keeps only the most recent **2,500** items (raised from 1,000 in 1.6.0; if you had never changed the limit you get the new default automatically, and a limit you chose yourself is kept), trimming older ones as new ones arrive — it isn't unlimited out of the box. Open **Settings → History** (**⌘,** — see [Settings window](#8-settings-window)) to change this: cap it by a different number of items, cap it by age instead (30 days by default), or switch to **Everything** to turn the cap off and keep everything until you delete it yourself. **Pinned items are never counted against the cap**, no matter which mode you pick. That same tab also has a **Clear All History…** button to wipe everything at once (including pinned items, after a confirmation), or you can remove Clipnest's whole data folder yourself (see [Uninstall](#11-uninstall)).
 
 ## 6. Snippets
 
 Snippets are text you write yourself — a signature, a boilerplate reply, a shell command — as opposed to things Clipnest captured automatically. Each snippet has two fields:
 
-- **Tag** — a short name. This is also what you type to trigger expansion.
+- **Tag** — a short name. The Tag doubles as the expansion keyword: it is what you type to trigger expansion. Tags must be unique — matching ignores case and surrounding spaces, and saving a duplicate tag is blocked with a message naming the snippet that already uses it.
 - **Body** — the full text that gets pasted in when the Tag expands.
 
 ### Creating a snippet
@@ -220,9 +224,20 @@ This is the fast path — you don't need to open Clipnest at all:
 
 Clipnest replaces the selected text with that snippet's Body. For example, if you have a snippet with Tag `sig` and Body `Best,\nAlex`, typing `sig`, selecting it, and pressing ⌥⌘E turns it into your signature.
 
+Clipnest does not expand text automatically as you type — you type the Tag, select it, and press the shortcut (⌥⌘E by default on the Mac, Alt+Super+E on Linux; both are rebindable in Settings → Shortcuts). The snippet editor shows your current shortcut under the Tag field.
+
 Matching is case-insensitive and ignores surrounding whitespace, so `SIG`, `sig `, and `Sig` all match a Tag of `sig`.
 
-If nothing is selected, or the selected text doesn't match any Tag, you'll hear a system beep and nothing changes.
+**If expansion can't happen, Clipnest tells you why instead of beeping, and nothing changes:**
+
+| Situation | Message |
+| --- | --- |
+| Nothing selected | "Nothing is selected. Select a snippet tag, then press the shortcut." |
+| Selection matches no Tag | "No snippet uses the selected text as its tag. Check the tag in the Snippets tab." |
+| Accessibility isn't granted (macOS) | "Clipnest needs Accessibility access to expand snippets. Turn it on in Settings > Permissions." |
+| The app didn't accept the replacement | "Clipnest couldn't replace the selection in this app. Try again, or paste the snippet from the picker." |
+
+(The messages show your actual shortcut where they say "the shortcut".) On the Mac the message appears in a small HUD near the pointer; it never takes focus away from your app and is hidden from screen sharing. On Linux it is a desktop notification titled "Snippet not expanded" (it needs `/usr/bin/gdbus` or `/usr/bin/notify-send`; without either, Clipnest falls back to a terminal bell).
 
 **Why this works everywhere:** Clipnest first tries to read and replace the selection directly through macOS's Accessibility API (this never touches your clipboard). In apps where that isn't possible — Electron/Chrome-based apps like VS Code or Slack are common examples — it falls back to simulating a copy and paste instead, and carefully snapshots your existing clipboard beforehand and restores it afterward, so your clipboard ends up exactly as it was. Both paths require Accessibility to be granted (see [First launch & permissions](#4-first-launch--permissions)).
 
@@ -310,11 +325,11 @@ Another app may already be using that combination — a common source of silent 
 **Paste puts the item on my clipboard but doesn't type it into the app.**
 This means Accessibility isn't granted. Turn it on from System Settings → Privacy & Security → Accessibility, or from **Settings → Permissions** in Clipnest itself (see [Settings window](#8-settings-window)). Granting a permission never takes effect for a paste that's already in progress — press ⌘V once yourself to finish that one, and every paste after that should work automatically.
 
-**⌥⌘E just beeps and nothing happens.**
-Either nothing is selected (make sure you've actually highlighted the Tag text before pressing the shortcut), the Tag doesn't match any snippet exactly, or Accessibility isn't granted (see above — unlike a picker paste, expansion won't prompt you for the permission on its own).
+**⌥⌘E doesn't expand my snippet.**
+Clipnest shows a short message near the pointer saying why: nothing is selected (highlight the Tag text before pressing the shortcut), the selection doesn't match any snippet's Tag, Accessibility isn't granted (unlike a picker paste, expansion won't prompt you for the permission on its own), or the app didn't accept the replacement (see [Expanding a snippet by keyword](#expanding-a-snippet-by-keyword-anywhere)). If you see no message at all, the hotkey itself isn't reaching Clipnest — see the previous entry.
 
 **macOS says Clipnest is from an "unidentified developer" / won't open.**
-This means you downloaded the `.dmg` directly through a browser rather than using the one-line `curl` install — a browser download sets the quarantine flag that triggers this Gatekeeper check, but `curl` never does. See [First launch — signing, honestly](#3-install): right-click → Open once, or run `xattr -dr com.apple.quarantine /Applications/Clipnest.app`, or just switch to the recommended `curl` install and this won't come up again.
+This means you downloaded the `.dmg` directly through a browser rather than using the one-line `curl` install — a browser download sets the quarantine flag that triggers this Gatekeeper check, but `curl` never does. See [First launch — signing, honestly](#3-install): on macOS 15+ use System Settings → Privacy & Security → **Open Anyway** (Control-click → Open only works on macOS 14), or run `xattr -dr com.apple.quarantine /Applications/Clipnest.app`, or just switch to the recommended `curl` install and this won't come up again.
 
 **I rebuilt Clipnest from source and it's asking for Accessibility again.**
 Expected — an unsigned development build gets a new code identity on every rebuild, so macOS treats it as a "new" app each time and needs Accessibility re-granted. Signing each build with one certificate (`scripts/sign.sh "<identity>"`) keeps the grant across rebuilds. If Settings shows **Not granted** right after you switched it on, the entry belongs to a different build: remove Clipnest from the Accessibility list with **−**, or run `tccutil reset Accessibility com.clipnest.app`, then add it again.
@@ -357,6 +372,13 @@ Everything Clipnest stores is local to those folders — removing them leaves no
 Since 1.0, Clipnest runs on **Ubuntu 22.04 and 24.04 with GNOME**, on X11 or Wayland, for amd64 and arm64 — a native GTK 4 app built from the same Swift core, so everything in sections 5–8 applies, with the Linux keys from the [shortcuts reference](#9-keyboard-shortcuts-reference).
 
 - **Install, update and uninstall:** see [Contribute → Linux details]({{ '/contribute/#linux' | relative_url }}) and the [Download page]({{ '/download/' | relative_url }}). In short (to uninstall, run the same command with `uninstall.sh` instead of `install.sh`; see [Uninstall](#11-uninstall)): run the same one-line command as on the Mac (`curl -fsSL https://raw.githubusercontent.com/AayushGour/clipnest/main/scripts/install.sh | bash`) as your normal user; it detects Linux and your CPU, downloads and verifies the latest release, and installs it. Or download the tarball for your architecture from the [latest release](https://github.com/AayushGour/clipnest/releases/latest), verify it with `sha256sum -c SHA256SUMS`, and run `./install.sh`.
+- **Manual install details:** the bundled `install.sh` checks the architecture and installs three packages with `apt`: `clipnest`, plus `clipnest-ocr` and `clipnest-ocr-data` for text recognition. To skip OCR (about 26 MB), install only the app: `sudo apt-get install --no-install-recommends ./clipnest_*.deb`. On GNOME, `apt` prints a one-line notice at install time: the Clipnest Shell extension is set up automatically the first time you open Clipnest, and you log out and back in once to activate the hotkey. To uninstall, run the one-line command from [Uninstall](#11-uninstall); manually, `sudo apt remove clipnest clipnest-ocr clipnest-ocr-data` leaves your history in place. On another system the installer stops unless you set `CLIPNEST_FORCE=1`.
+- **Picking an item:** Clipnest writes the clipboard first and hides the picker only once the write is confirmed (at most 250 ms), because GNOME ignores a clipboard write from a window without focus; the Mac hides first.
+- **Previews and rows:** the hover preview opens beside the picker, level with the row (also on the Snippets tab). Rows show at most 3 lines, and a long preview scrolls inside itself.
+- **A copy that didn't show up in history:** every skipped copy leaves a metadata-only log line saying why — `journalctl --user -t app.clipnest.Clipnest --since '-5min'`.
+- **First run:** the same three-step Welcome window, with a required first step that sets up pasting into other apps (keyboard access plus the GNOME extension; **Continue** unlocks when each is set up, and a low-key **Set up later** asks for confirmation first), then *Open Clipnest at login* and *Try your hotkey*. If the keyboard-access grant or the GNOME extension still needs a new login, the last step is instead **Log out to finish setup**: **Log Out Now** asks GNOME to log you out (always with GNOME's own confirmation dialog), **Later** closes the window. Reopen it from the tray icon → *Getting Started…*.
+- **Snippet expansion** shortcut is **Alt+Super+E** (picker: **Alt+Super+V**); both are rebindable in Settings → Shortcuts. When an expansion can't happen you get a desktop notification instead of a beep (see [Expanding a snippet](#expanding-a-snippet-by-keyword-anywhere)).
+- **Paused capture:** the tray icon switches to a paused icon with a "Capture paused" tooltip.
 - **Tray icon:** Open Clipnest, Pause Capture, Settings…, Check for Updates… (opens Settings → General and checks now), Getting Started…, Quit.
 - **macOS menu-bar icon:** also has **Check for Updates…** — an immediate check that shows "You're up to date (x.y.z)" or offers to update.
 - **Auto-paste** needs a one-time permission, offered on first launch or from **Settings → Permissions**. It adds you to a dedicated `clipnest-input` group that can create a virtual keyboard and nothing else. Log out and back in afterwards; until then Clipnest copies your choice and you press Ctrl+V yourself.

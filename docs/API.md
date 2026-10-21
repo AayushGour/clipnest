@@ -12,8 +12,7 @@ to look.
 
 This is the API/usage-reference slice of the project's docs — see
 [`README.md`](../README.md) for the getting-started/overview and
-[`docs/superpowers/specs/`](superpowers/specs/)/[`docs/superpowers/plans/`](superpowers/plans/)
-for the original requirements/design trail.
+[`architecture.md`](architecture.md) for the design.
 
 Every type below is `Sendable` (Swift 6 strict concurrency) unless noted
 otherwise, and every throwing function uses typed `throws` with the module's
@@ -91,6 +90,10 @@ public struct Snippet: Identifiable, Codable, Equatable, Sendable {
   public var createdAt: Date
 
   public init(id: UUID = UUID(), title: String, body: String, keyword: String? = nil, createdAt: Date = Date())
+
+  /// Trimmed + lowercased; nil when blank. The comparison form used by
+  /// `findByKeyword` and by the duplicate-tag check.
+  public static func normalizedKeyword(_ raw: String?) -> String?
 }
 ```
 A user-authored, reusable snippet (as opposed to captured clipboard
@@ -99,7 +102,9 @@ the Tag is saved as BOTH `title` (the label shown in the Snippets list) and
 `keyword` (the same value): typing the Tag in any app, selecting it, and
 pressing ⌥⌘E replaces it with `body`, via `SnippetExpander` calling
 `SnippetStore.findByKeyword(_:)`. There is no separate keyword-entry field —
-the Tag doubles as both.
+the Tag doubles as both. Tags must be unique: matching ignores case and
+surrounding whitespace, and the snippet form blocks a duplicate
+(see `SnippetTagValidation` under [Paste](#paste)).
 
 ---
 
@@ -682,7 +687,8 @@ public final class SnippetExpander {
     snippetStore: any SnippetStore,
     selectedText: any SelectedTextAccessing,
     clipboardReplacer: any SelectionReplacing,
-    beep: @escaping () -> Void = PlatformDefaults.beep
+    feedback: @escaping (SnippetExpansionFailure) -> Void,
+    isAccessibilityGranted: @escaping () -> Bool = { true }
   )
   public func expand() async
 }
@@ -718,8 +724,50 @@ strategies in order:
    transaction (capture is suppressed for its duration so the transient
    copy/paste never lands in history).
 
-Every non-`.replaced` result beeps (`if result != .replaced { beep() }`) —
-`.replaced` is the only case that means "the user's text actually changed."
+Every expansion that does not replace text is reported through the
+required `feedback` closure as a `SnippetExpansionFailure` instead of a beep
+(`.replaced` is the only case that means "the user's text actually changed";
+an IBus `.committedUnconfirmed` is not reported as a failure). The macOS app
+shows the message in a small HUD (`SnippetFeedbackHUD`); Linux posts a desktop
+notification (`DesktopNotificationClient`), with a terminal bell as the last
+resort.
+
+```swift
+public enum SnippetExpansionFailure: Sendable, Equatable {
+  case noSelection         // nothing selected
+  case noMatch             // selection matches no snippet tag
+  case permissionMissing   // macOS Accessibility not granted (checked via isAccessibilityGranted)
+  case replaceFailed       // matched, but the target app did not take the replacement
+  public init?(_ result: SelectionReplaceResult)  // nil for .replaced / .committedUnconfirmed
+}
+```
+
+User-facing wording lives once in `ClipnestViewModels`:
+
+```swift
+public enum SnippetExpansionCopy {
+  public static func tagHelperText(expandShortcut: String) -> String
+  public static let feedbackTitle: String                 // "Snippet not expanded"
+  public static let unboundShortcutFallback: String       // "the expand-snippet shortcut"
+  public static func message(for: SnippetExpansionFailure, expandShortcut: String) -> String
+}
+
+public enum SnippetTagValidation {   // the Tag doubles as the expansion keyword
+  public static func conflict(forTag: String, editing: UUID?, in: [Snippet]) -> Snippet?
+  public static func message(forConflict: Snippet) -> String
+  public static func fieldNote(error: String?, expandShortcut: String) -> (text: String, isError: Bool)
+}
+
+public struct CaptureStatusPresentation: Equatable, Sendable {  // status-icon wording
+  public init(isPaused: Bool)
+  public var accessibilityLabel: String   // "Clipnest" / "Clipnest — capture paused"
+  public var tooltipDescription: String   // "" / "Capture paused — copies are not being saved"
+}
+```
+
+`SnippetTagValidation.conflict` uses `Snippet.normalizedKeyword(_:)`
+(trimmed, lowercased, `nil` when blank) — the same rule
+`SnippetStore.findByKeyword` applies — so tags `Sig` and ` sig ` conflict.
 
 **`.declinedTerminalTarget` (T-TERMPASTE1):** the clipboard-fallback
 transaction's only replace mechanism is Copy-then-Paste with **no explicit

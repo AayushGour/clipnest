@@ -44,7 +44,7 @@ shasum -a 256 -c Clipnest-*.dmg.sha256
 
 </div>
 
-It should print `OK`. Open the `.dmg` and drag **Clipnest** into Applications. A browser download is quarantined by macOS, so the first launch shows an "unidentified developer" warning: Control-click Clipnest in Applications, choose **Open**, then click **Open** again. Or clear the flag once:
+It should print `OK`. Open the `.dmg` and drag **Clipnest** into Applications. A browser download is quarantined by macOS, so the first launch shows an "unidentified developer" warning. On macOS 15 (Sequoia) and later that dialog has no Open button: dismiss it, open **System Settings → Privacy & Security**, scroll to the message about Clipnest, click **Open Anyway** and confirm (macOS asks for your admin password). On macOS 14, Control-click Clipnest in Applications and choose **Open** also works. Or, from Terminal on any version, clear the flag once:
 
 <div class="install-card" markdown="1">
 
