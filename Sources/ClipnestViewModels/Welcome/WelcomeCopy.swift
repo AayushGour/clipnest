@@ -83,6 +83,8 @@ public enum WelcomeCopy {
 
   public static let logOutNeededStatus = "Log out and back in to finish"
   public static let logOutLaterStatus = "Later - paste and the hotkey work after your next login"
+  public static let logOutFailed =
+    "Could not ask your desktop to log you out. Log out from your desktop's menu instead."
   public static let logOutRequestedAnnouncement = "Asking your desktop to log you out"
 
   // MARK: Step 2 (open at login)

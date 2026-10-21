@@ -55,6 +55,7 @@ struct TryItStepWidgets {
 /// buttons are the footer's).
 struct LogOutStepWidgets {
   let body: OpaquePointer
+  let error: OpaquePointer
 }
 
 extension WelcomeWindow {
@@ -268,8 +269,11 @@ extension WelcomeWindow {
 
   private func buildLogOutStep(into box: OpaquePointer) {
     let body = makeLabel()
+    let error = makeLabel(cssClasses: ["error"])
+    gtk_widget_set_visible(error, 0)
     gtk_box_append(box, body)
-    logOutStep = LogOutStepWidgets(body: body)
+    gtk_box_append(box, error)
+    logOutStep = LogOutStepWidgets(body: body, error: error)
   }
 
   private func buildFooter() -> OpaquePointer {
@@ -292,6 +296,9 @@ extension WelcomeWindow {
     gtkConnect(
       window, signal: "close-request", context: self,
       callback: unsafeBitCast(welcomeCloseRequestTrampoline, to: GCallback.self))
+    gtkConnect(
+      window, signal: "notify::focus-widget", context: self,
+      callback: unsafeBitCast(welcomeFocusChangedTrampoline, to: GCallback.self))
     gtkConnect(
       window, signal: "notify::is-active", context: self,
       callback: unsafeBitCast(welcomeActiveChangedTrampoline, to: GCallback.self))
@@ -332,6 +339,7 @@ extension WelcomeWindow {
     renderOpenAtLoginStep()
     renderTryItStep()
     gtk_label_set_text(logOutStep.body, viewModel.logOutBodyText)
+    setText(logOutStep.error, viewModel.logOutError)
 
     gtk_button_set_label(primaryButton, viewModel.primaryTitle)
     gtk_widget_set_sensitive(primaryButton, viewModel.isPrimaryEnabled ? 1 : 0)
@@ -356,12 +364,14 @@ extension WelcomeWindow {
     let focusedActionHidden = focusedWidget.map { gtk_widget_get_mapped($0) == 0 } ?? false
     let stepChanged = lastFocusedStep != viewModel.activeStep
     let confirmChanged = lastFocusedConfirming != viewModel.isConfirmingSetUpLater
-    guard stepChanged || confirmChanged || focusedActionHidden else { return }
+    // The window opened on "Set up later" while the extension was still being
+    // checked; its action has arrived and the user has not touched focus yet.
+    let lateAction =
+      viewModel.lateFocusTarget(permissionActionAvailable: isPermissionActionAvailable) != nil
+    guard stepChanged || confirmChanged || focusedActionHidden || lateAction else { return }
     lastFocusedStep = viewModel.activeStep
     lastFocusedConfirming = viewModel.isConfirmingSetUpLater
-    let target = focusWidget
-    focusedWidget = target
-    gtk_window_set_focus(window, target)
+    applyFocus()
   }
 
   @MainActor
@@ -491,6 +501,13 @@ private let welcomeActiveChangedTrampoline:
     Void = { _, _, data in
       guard let window = unretainedContext(data, as: WelcomeWindow.self) else { return }
       MainActor.assumeIsolated { window.windowActiveChanged() }
+    }
+
+private let welcomeFocusChangedTrampoline:
+  @convention(c) (OpaquePointer?, OpaquePointer?, UnsafeMutableRawPointer?) ->
+    Void = { _, _, data in
+      guard let window = unretainedContext(data, as: WelcomeWindow.self) else { return }
+      MainActor.assumeIsolated { window.focusWidgetChanged() }
     }
 
 private let welcomeKeyPressedTrampoline:

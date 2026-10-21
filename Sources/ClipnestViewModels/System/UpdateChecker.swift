@@ -85,6 +85,13 @@ public final class UpdateChecker {
   public private(set) var isUpdateAvailable: Bool = false
   public private(set) var latestVersion: String?
 
+  /// T-LXUPDDONE1: the version an in-app install has already put on disk
+  /// but this still-running process has not yet restarted into. While set,
+  /// it is treated as the effective installed version (see
+  /// `effectiveInstalledVersion()`), so the same release is never
+  /// re-offered until the next launch (a fresh process starts with `nil`).
+  public private(set) var pendingRestartVersion: String?
+
   /// Fired every time a real `checkNow()` completes successfully. Set by
   /// the composition root (`AppEnvironment`) to push `isUpdateAvailable`/
   /// `latestVersion` into `PickerViewModel` — the same plain-closure-
@@ -255,13 +262,35 @@ public final class UpdateChecker {
       let tag = Self.parseTagName(fromReleaseJSON: data)
     else { return .failed }
 
-    let installed = installedVersion()
+    let installed = effectiveInstalledVersion()
     let available = Self.isUpdateAvailable(installed: installed, latestTag: tag)
     let normalized = Self.normalizedVersion(fromTag: tag)
     isUpdateAvailable = available
     latestVersion = normalized
     onStateChanged(available, normalized)
     return available ? .updateAvailable(latest: normalized) : .upToDate(installed: installed)
+  }
+
+  /// The version to compare releases against: the one already installed on
+  /// disk awaiting a restart if there is one, else the running build's.
+  public func effectiveInstalledVersion() -> String {
+    pendingRestartVersion ?? installedVersion()
+  }
+
+  /// T-LXUPDDONE1: records a successful in-app install of `version` (a
+  /// restart is still needed to run it). Clears the "update available"
+  /// state when `version` is at least as new as the latest known release and
+  /// publishes that through `onStateChanged` so every surface (picker footer
+  /// dot, Settings, tray) agrees. A failed install must NOT call this.
+  public func markInstalledPendingRestart(version: String) {
+    let normalized = Self.normalizedVersion(fromTag: version)
+    pendingRestartVersion = normalized
+    if let latestVersion,
+      !Self.isUpdateAvailable(installed: normalized, latestTag: latestVersion)
+    {
+      isUpdateAvailable = false
+    }
+    onStateChanged(isUpdateAvailable, latestVersion)
   }
 
   // MARK: - Pure logic (unit-tested directly — no `Process` spawn involved)

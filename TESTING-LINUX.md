@@ -79,7 +79,7 @@ key caps, a *Change in Settings…* button that opens Settings → Shortcuts, an
 a status that flips to "It works" when the
 picker opens; a hint appears after 15 s; while the GNOME extension still needs
 a log-out it says the hotkey works after logging back in and to use the tray
-icon instead). When a re-login is pending (keyboard access just granted, or the extension just installed) step 3 becomes *Log out to finish setup* instead: **Log Out Now** calls `org.gnome.SessionManager.Logout` with mode 0 (GNOME shows its own confirmation; falls back to `gnome-session-quit --logout`, never `--no-prompt`), **Later** closes the window; on non-GNOME desktops there is no button, only instructions. Manual check: grant keyboard access, finish step 2, confirm the log-out step appears and the GNOME dialog opens, then cancel it. The step list scrolls inside a ~420 px window. Return = Continue/Done, Esc or
+icon instead). When a re-login is pending (keyboard access just granted, or the extension just installed) step 3 becomes *Log out to finish setup* instead: **Log Out Now** (closes the welcome window once the request is accepted; on failure the window stays open with an error) calls `org.gnome.SessionManager.Logout` with mode 0 (GNOME shows its own confirmation; falls back to `gnome-session-quit --logout`, never `--no-prompt`), **Later** closes the window; on non-GNOME desktops there is no button, only instructions. Manual check (focus): open the window while the extension row still says checking - focus starts on **Set up later** and jumps to **Turn On** / the grant button when it appears; Tab first and it must NOT jump. Manual check: grant keyboard access, finish step 2, confirm the log-out step appears and the GNOME dialog opens, then cancel it. The step list scrolls inside a ~420 px window. Return = Continue/Done, Esc or
 Ctrl+W close it. "Seen" is stored (`hasSeenWelcome` in
 `~/.config/clipnest/settings.json`) the moment it is shown, so closing it any
 way, or killing the app, never re-shows it. Reopen it from the tray menu
@@ -257,7 +257,13 @@ Settings → General → Install Update streams the downloaded .deb to
 (polkit action `app.clipnest.install-update`). The root helper re-verifies the
 SHA-256 and `Package: clipnest` on its own root-owned copy, and refuses any
 version that is not strictly newer than the installed one (exit status 3 — no
-downgrade or same-version reinstall), before `apt-get install -y`. Fixture test (installs a dummy `clipnest` package, so use
+downgrade or same-version reinstall), before `apt-get install -y`. After a successful install the UI must show "Installed vX — restart Clipnest
+to finish updating", hide Install, clear the picker footer's update dot, and a
+"Check for Updates" must not re-offer that version (`UpdateChecker
+.pendingRestartVersion`); a failed/cancelled install leaves Install usable.
+Separately, open Settings after the Welcome window's open-at-login step changed
+autostart: the General "Launch Clipnest at login" switch must match the
+`~/.config/autostart` file without a restart (`show()` re-reads it). Fixture test (installs a dummy `clipnest` package, so use
 a container only):
 
 ```

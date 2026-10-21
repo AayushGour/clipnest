@@ -323,6 +323,40 @@ struct WelcomeFocusTargetTests {
     #expect(make(complete: true).focusTarget(permissionActionAvailable: false) == .primaryButton)
   }
 
+  @Test("late action: opened on Set up later, the action arrives, user has not moved focus")
+  func lateActionMovesFocus() {
+    let vm = make()
+    vm.focusApplied(vm.focusTarget(permissionActionAvailable: false))
+    #expect(vm.lateFocusTarget(permissionActionAvailable: false) == nil)
+    #expect(vm.lateFocusTarget(permissionActionAvailable: true) == .permissionAction)
+    // Once applied, nothing further to do.
+    vm.focusApplied(.permissionAction)
+    #expect(vm.lateFocusTarget(permissionActionAvailable: true) == nil)
+  }
+
+  @Test("late action: never yanks focus after the user moved it")
+  func lateActionRespectsUser() {
+    let vm = make()
+    vm.focusApplied(.secondaryButton)
+    vm.userDidMoveFocus()
+    #expect(vm.lateFocusTarget(permissionActionAvailable: true) == nil)
+    // A fresh programmatic focus starts a new window.
+    vm.focusApplied(.secondaryButton)
+    #expect(vm.lateFocusTarget(permissionActionAvailable: true) == .permissionAction)
+  }
+
+  @Test("late action: only when focus started on the fallback button; confirming never")
+  func lateActionOnlyFromFallback() {
+    let vm = make()
+    vm.focusApplied(.permissionAction)
+    #expect(vm.lateFocusTarget(permissionActionAvailable: true) == nil)
+    vm.focusApplied(.secondaryButton)
+    _ = vm.skipTapped()
+    #expect(vm.lateFocusTarget(permissionActionAvailable: true) == .primaryButton)
+    let fresh = make()
+    #expect(fresh.lateFocusTarget(permissionActionAvailable: true) == nil)
+  }
+
   @Test("confirming Set up later focuses Go back; cancelling returns to the grant action")
   func confirming() {
     let vm = make()
@@ -640,13 +674,36 @@ struct WelcomeLogOutStepTests {
     #expect(vm.primaryTitle == "Done")
   }
 
-  @Test("Log Out Now asks the platform to log out and keeps the window open")
+  @Test("Log Out Now asks the platform to log out and stays on the step until it answers")
   func logOutNow() {
     let vm = make()
     toLastStep(vm)
     #expect(vm.primaryTitle == "Log Out Now")
     #expect(vm.continueTapped() == .logOut)
     #expect(vm.activeStep == .logOut)
+  }
+
+  @Test("log-out request accepted: the window closes and the step counts as done")
+  func logOutSucceededCloses() {
+    let vm = make()
+    toLastStep(vm)
+    #expect(vm.continueTapped() == .logOut)
+    #expect(vm.logOutFinished(succeeded: true) == .close)
+    #expect(vm.logOutError == nil)
+    #expect(vm.state(of: .logOut) == .done)
+  }
+
+  @Test("log-out request failed: stays open with the error; a retry that works clears it")
+  func logOutFailedStays() {
+    let vm = make()
+    toLastStep(vm)
+    #expect(vm.continueTapped() == .logOut)
+    #expect(vm.logOutFinished(succeeded: false) == .stayed)
+    #expect(vm.logOutError == WelcomeCopy.logOutFailed)
+    #expect(vm.announcement == WelcomeCopy.logOutFailed)
+    #expect(vm.activeStep == .logOut)
+    #expect(vm.logOutFinished(succeeded: true) == .close)
+    #expect(vm.logOutError == nil)
   }
 
   @Test("Later closes, remembers it as skipped, and the body says what waits for the next login")

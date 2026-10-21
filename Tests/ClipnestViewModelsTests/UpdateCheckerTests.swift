@@ -207,3 +207,32 @@ struct UpdateCheckerTests {
     return UserDefaults(suiteName: name)!
   }
 }
+
+@MainActor
+@Suite("UpdateChecker install-pending-restart")
+struct UpdateCheckerPendingRestartTests {
+  @Test("marking installed clears availability, publishes it, and is the effective version")
+  func markInstalledClearsAvailability() {
+    let checker = UpdateChecker(defaults: UserDefaults(suiteName: "ucpr.\(UUID())")!)
+    checker.installedVersion = { "1.0.0" }
+    var published: [(Bool, String?)] = []
+    checker.onStateChanged = { published.append(($0, $1)) }
+    checker.markInstalledPendingRestart(version: "v1.1.0")
+    #expect(checker.pendingRestartVersion == "1.1.0")
+    #expect(checker.effectiveInstalledVersion() == "1.1.0")
+    #expect(!checker.isUpdateAvailable)
+    #expect(published.count == 1 && published[0].0 == false)
+    // Same release is never re-offered against the effective version.
+    let effective = checker.effectiveInstalledVersion()
+    #expect(!UpdateChecker.isUpdateAvailable(installed: effective, latestTag: "1.1.0"))
+    #expect(UpdateChecker.isUpdateAvailable(installed: effective, latestTag: "1.2.0"))
+  }
+
+  @Test("a fresh checker has no pending restart")
+  func freshHasNone() {
+    let checker = UpdateChecker(defaults: UserDefaults(suiteName: "ucpr.\(UUID())")!)
+    checker.installedVersion = { "1.0.0" }
+    #expect(checker.pendingRestartVersion == nil)
+    #expect(checker.effectiveInstalledVersion() == "1.0.0")
+  }
+}

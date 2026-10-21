@@ -619,8 +619,14 @@ public final class WelcomeWindow {
   no-confirm). `render()` feeds `viewModel.setNeedsRelogin(...)` from the
   keyboard row and extension row; while true the last step is
   `WelcomeStep.logOut` ("Step 3 of 3", footer *Log Out Now* / *Later*) and the
-  *Try your hotkey* row is hidden. `WelcomeNavigation.logOut` triggers the call and
-  leaves the window open.
+  *Try your hotkey* row is hidden. `WelcomeNavigation.logOut` triggers the call; `requestLogOut` now takes a
+  `completion(Bool)` (any thread) which feeds `viewModel.logOutFinished(succeeded:)`:
+  `true` closes the window, `false` keeps it open showing `logOutError`.
+- **Late focus** — `WelcomeViewModel.focusApplied(_:)` / `userDidMoveFocus()` /
+  `lateFocusTarget(permissionActionAvailable:)` decide whether focus should move
+  once step 1's action appears after the window opened on "Set up later"; the
+  window calls `userDidMoveFocus()` from `notify::focus-widget` for moves it did
+  not cause.
 - **Step 1 gating (T-WELCOMEGRANT1)** — `WelcomeViewModel.isPrimaryEnabled` is
   false on step 1 until `WelcomeLinuxPermission.isComplete` (keyboard allowed or
   pending re-login, extension on / pending re-login / not applicable). The
