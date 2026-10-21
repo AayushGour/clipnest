@@ -57,7 +57,7 @@ public enum WelcomeCopy {
     switch platform {
     case .macOS:
       return
-        "If you set this up later, picking an item in the picker only copies it - you press Cmd-V yourself - and snippets will not expand as you type. Your hotkey still opens the picker. You can allow Accessibility any time in Settings → Permissions."
+        "If you set this up later, picking an item in the picker only copies it - you press Cmd-V yourself - and snippets will not expand. Your hotkey still opens the picker. You can allow Accessibility any time in Settings → Permissions."
     case .linux:
       return
         "If you set this up later, picking an item only copies it - you press Ctrl+V yourself - and the hotkey may not work in every app. You can finish any time in Settings → Permissions."

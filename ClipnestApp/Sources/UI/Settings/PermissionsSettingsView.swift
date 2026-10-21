@@ -38,7 +38,7 @@ struct PermissionsSettingsView: View {
         Text(
           watcher.isGranted
             ? "Clipnest can open the picker from its global shortcut, paste into the app you were using, and expand snippets."
-            : "Without Accessibility, the global shortcut still opens the picker, but selecting an item only copies it to the clipboard — you have to press ⌘V yourself — and snippets will not expand as you type."
+            : "Without Accessibility, the global shortcut still opens the picker, but selecting an item only copies it to the clipboard — you have to press ⌘V yourself — and snippets will not expand."
         )
         .font(.caption)
         .foregroundStyle(.secondary)
