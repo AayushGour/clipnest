@@ -354,8 +354,8 @@
     ///
     /// This split is the actual fix for the rejection: measured against the
     /// real, staged `CoreGraphicsImagePixelHasher`, decode+hash cost ranged
-    /// 10-82ms per image, so a synchronous pass over a 1000-item history (the
-    /// default retention cap) took 15-82+ seconds. `AppEnvironment.init`
+    /// 10-82ms per image, so a synchronous pass over a 1000-item history (the old
+    /// default cap; it is 2500 now) took 15-82+ seconds. `AppEnvironment.init`
     /// `await`s both stores' `prepare()` calls before assigning
     /// `self.clipStore`/`self.snippetStore`, and `AppDelegate
     /// .launchEnvironment()` only calls `registerHotkey()`/`startCapture()`
@@ -508,7 +508,7 @@
     /// measured at 10-82ms of decode+hash PER IMAGE against the real
     /// `CoreGraphicsImagePixelHasher`, which made `prepare()` (and therefore
     /// `AppEnvironment.init`, and therefore hotkey/capture/picker readiness)
-    /// block for 15-82+ seconds at the default 1000-item retention cap, with
+    /// block for 15-82+ seconds at a 1000-item retention cap (the old default), with
     /// a single end-of-batch save that lost all progress on a force-quit.
     ///
     /// This method instead only SCHEDULES a background `ImageContentHashBackfillCoordinator`
@@ -946,9 +946,9 @@
         // fetch ONLY the oldest `excess` rows directly via `fetchLimit`
         // (ascending `createdAt`, so the first `excess` rows returned are
         // exactly the ones `enforceRetention` deletes), never the whole
-        // unpinned table. Default cap is 1000 (`SettingsStore
+        // unpinned table. Default cap is 2500 (`SettingsStore
         // .defaultItemCount`) — before this fix, steady state materialized
-        // ~1000 records on every capture AND at every launch.
+        // ~the whole cap (then 1000) on every capture AND at every launch.
         var descriptor = FetchDescriptor<ClipItemRecord>(predicate: unpinnedPredicate)
         let unpinnedCount = try fetchCount(descriptor: descriptor)
         let excess = unpinnedCount - maxCount

@@ -6,7 +6,9 @@ import Foundation
 
 /// Backs the global snippet-expansion hotkey (⌥⌘E): reads the current
 /// selection, looks it up as a snippet keyword, and replaces the selection
-/// with the snippet body on a match. No match / no selection → a system beep.
+/// with the snippet body on a match. Every non-replace outcome (no match, no
+/// selection, missing permission, ...) is reported through `feedback` as a
+/// `SnippetExpansionFailure` so the app can show a message instead of beeping.
 ///
 /// Works in ANY application via a two-strategy approach:
 ///  1. **Accessibility first** (`SelectedTextAccessing`): reads and replaces
@@ -24,7 +26,7 @@ import Foundation
 /// protocol-in-Core / concrete-impl-in-app split.
 ///
 /// `@MainActor`: `expand()` drives the Accessibility API, `NSPasteboard`, key
-/// synthesis, and `NSSound.beep()` — all main-thread work — so the whole class
+/// synthesis, and the feedback UI — all main-thread work — so the whole class
 /// is main-actor-isolated (callers get a plain, non-`unsafe` stored property).
 @MainActor
 public final class SnippetExpander {
@@ -34,9 +36,12 @@ public final class SnippetExpander {
   private let snippetStore: any SnippetStore
   private let selectedText: any SelectedTextAccessing
   private let clipboardReplacer: any SelectionReplacing
-  private let beep: () -> Void
+  private let feedback: (SnippetExpansionFailure) -> Void
   private let isAccessibilityGranted: () -> Bool
 
+  /// `feedback` is REQUIRED (no silent default: a platform that forgot to wire
+  /// it would fail with no signal at all).
+  ///
   /// `isAccessibilityGranted` defaults to "granted" so every existing caller
   /// (the Linux composition root, which has its own input-permission checks,
   /// and the tests) keeps its behavior; the macOS composition root passes the
@@ -45,13 +50,13 @@ public final class SnippetExpander {
     snippetStore: any SnippetStore,
     selectedText: any SelectedTextAccessing,
     clipboardReplacer: any SelectionReplacing,
-    beep: @escaping () -> Void = PlatformDefaults.beep,
+    feedback: @escaping (SnippetExpansionFailure) -> Void,
     isAccessibilityGranted: @escaping () -> Bool = { true }
   ) {
     self.snippetStore = snippetStore
     self.selectedText = selectedText
     self.clipboardReplacer = clipboardReplacer
-    self.beep = beep
+    self.feedback = feedback
     self.isAccessibilityGranted = isAccessibilityGranted
   }
 
@@ -68,7 +73,7 @@ public final class SnippetExpander {
   }
 
   /// Reads the current selection and replaces it with the matched snippet
-  /// body; beeps if nothing was selected or nothing matched.
+  /// body; reports a `SnippetExpansionFailure` otherwise.
   ///
   /// **Tier-decision logging (routed bug report, 2026-09):** this method
   /// previously gave no indication which of the two strategies ran, which
@@ -84,7 +89,7 @@ public final class SnippetExpander {
     // as a misleading `copy phase FAILED: posted=true` instead of the cause.
     guard isAccessibilityGranted() else {
       Self.logger.notice("Accessibility not granted: snippet expansion skipped")
-      beep()
+      feedback(.permissionMissing)
       return
     }
 
@@ -95,9 +100,9 @@ public final class SnippetExpander {
       Self.logger.notice("tier=accessibility: selection read succeeded")
       guard let snippetBody = await body(for: selection) else {
         // AX read succeeded, so the keyword is real — a clipboard re-read
-        // would yield the same non-match. Beep and stop.
+        // would yield the same non-match. Report and stop.
         Self.logger.notice("tier=accessibility: outcome=noMatch")
-        beep()
+        feedback(.noMatch)
         return
       }
       if selectedText.replaceSelectedText(with: snippetBody) {
@@ -118,16 +123,17 @@ public final class SnippetExpander {
     let result = await clipboardReplacer.replaceSelection(
       bodyForSelection: { await self.body(for: $0) })
     Self.logger.notice("tier=clipboard: outcome=\(String(describing: result))")
-    if result != .replaced {
-      beep()
+    if let failure = SnippetExpansionFailure(result) {
+      feedback(failure)
     }
   }
 }
 
 #if os(macOS)
   extension PlatformDefaults {
-    /// The production "nothing matched" feedback on macOS — the standard
-    /// system alert sound.
+    /// The standard system alert sound. No longer the primary expansion
+    /// feedback (see `SnippetExpansionFailure`); the feedback presenters use it
+    /// only as the last resort when a message cannot be shown.
     public static var beep: () -> Void { { NSSound.beep() } }
   }
 #else
@@ -168,7 +174,7 @@ public final class SnippetExpander {
     /// terminal (e.g. run manually or under CI) — a desktop-launched GUI
     /// session's stderr is typically not a terminal at all. Still
     /// injectable, like every other `PlatformDefaults.*` default (see
-    /// `SnippetExpander.init`'s `beep` parameter): a future Linux
+    /// `SnippetExpander.init`'s `feedback` presenter's beep fallback): a future Linux
     /// composition-root change can override it with a real
     /// `gdk_display_beep()`-backed closure once `LinuxAppEnvironment`
     /// wires one up — out of this task's scope, since that file belongs to

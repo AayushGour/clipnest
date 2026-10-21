@@ -212,6 +212,15 @@ convention: the `-symbolic` suffix is part of the icon NAME the host looks
 up, not just the installed filename) instead of the previous generic
 `edit-paste-symbolic` fallback.
 
+Paused variant (1.6.0): `app.clipnest.Clipnest-paused-symbolic` is the same
+glyph dimmed with a pause mark. The StatusNotifierItem reports it through
+`IconName` (and `ToolTip`'s icon field) while capture is paused, and the
+tooltip description reads "Capture paused — copies are not being saved"
+(`CaptureStatusPresentation.tooltipDescription`). When the paused state
+changes (tray menu or Settings) the tray emits `NewIcon` and `NewToolTip` so
+the host re-reads both properties. See `StatusNotifierNames.swift`
+(`pausedIconName`) and `StatusNotifierTray.swift`.
+
 Known gap #4 — UPDATE (2026-09, senior-dev): Hello + RegisterStatusNotifierItem
 identity FIXED and re-verified against a real watcher; one new gap found
 ------------------------------------------------------------------------------

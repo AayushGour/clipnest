@@ -124,6 +124,8 @@ public final class StatusNotifierTray: @unchecked Sendable {
   private var layoutRevision = DBusMenuLayoutBuilder.revision
   private var lastReportedPaused: Bool?
   private var isLayoutUpdatedSignalPending = false
+  /// Paused state the host was last told about (nil = nothing sent yet).
+  private var lastNotifiedPaused: Bool?
 
   public init(ownConnection: DBusConnection, watchConnection: DBusConnection?) {
     self.ownConnection = ownConnection
@@ -191,6 +193,11 @@ public final class StatusNotifierTray: @unchecked Sendable {
     // why this class needed the identical retention fix.
     Self.logger.info("tray D-Bus receive loop started")
     while true {
+      // Pause can also change from Settings; poll at the loop's ~1 s cadence.
+      for var signal in iconSignalsIfPausedChanged() {
+        signal.serial = ownConnection.allocateSerial()
+        ownConnection.send(signal)
+      }
       if let watchConnection, let itemBusName = ownConnection.uniqueName,
         let ownerChange = watchConnection.receiveOneMessage(timeout: .milliseconds(50)),
         DBusStandardResponses.parseNameOwnerChanged(ownerChange)?.name
@@ -216,6 +223,19 @@ public final class StatusNotifierTray: @unchecked Sendable {
     }
   }
 
+  /// `NewIcon` + `NewToolTip` when the paused state differs from what the
+  /// host last saw; empty otherwise. The first call only records the baseline
+  /// (a host's initial property read already reflects it). Serials are
+  /// placeholders; the sender assigns real ones.
+  func iconSignalsIfPausedChanged() -> [DBusMessage] {
+    let isPaused = isCapturePaused()
+    defer { lastNotifiedPaused = isPaused }
+    guard let last = lastNotifiedPaused, last != isPaused else { return [] }
+    return [
+      StatusNotifierRequests.newIcon(serial: 0), StatusNotifierRequests.newToolTip(serial: 0),
+    ]
+  }
+
   /// **Always produces a reply — never `nil`.** Returning `DBusMessage?`
   /// used to let the `.unknown` branch silently drop a call
   /// (`receiveLoop()`'s old `guard let reply = handle(...) else {
@@ -232,10 +252,11 @@ public final class StatusNotifierTray: @unchecked Sendable {
     case .secondaryActivate, .contextMenu:
       return StatusNotifierReplies.empty(replyingTo: message)
     case .getProperty(let name):
-      return StatusNotifierReplies.property(named: name, replyingTo: message)
+      return StatusNotifierReplies.property(
+        named: name, isPaused: isCapturePaused(), replyingTo: message)
         ?? StatusNotifierReplies.empty(replyingTo: message)
     case .getAllProperties:
-      return StatusNotifierReplies.allProperties(replyingTo: message)
+      return StatusNotifierReplies.allProperties(isPaused: isCapturePaused(), replyingTo: message)
     case .menuGetLayout:
       let items = currentMenuItems()
       return StatusNotifierReplies.menuLayout(

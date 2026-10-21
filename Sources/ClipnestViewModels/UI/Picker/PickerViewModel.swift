@@ -451,7 +451,11 @@ public final class PickerViewModel: ObservableObject {
   public var latestVersion: String?
 
   private let clipStore: any ClipStore
-  private let snippetStore: any SnippetStore
+  let snippetStore: any SnippetStore
+  /// T-SNIPFB1: snapshot of every snippet used to check the form's Tag for
+  /// duplicates synchronously (the form validates per keystroke). Refreshed each
+  /// time the editor opens and after create/update; see `PickerViewModel+SnippetTags`.
+  var snippetsForTagValidation: [Snippet] = []
   /// T-RT2: subscription to the composition root's `NotifyingClipStore
   /// .changes` (passed in as `storeChanges:` — `nil` in every existing
   /// test/preview call site, so this is fully additive/opt-in for anyone
@@ -1213,7 +1217,7 @@ public final class PickerViewModel: ObservableObject {
   /// content-bearing action in this file.
   public func presentSaveAsSnippetForm(from item: ClipItem) {
     guard item.supportsSaveAsSnippet else { return }
-    presentSnippetEditor(.createFromClip(item.previewText))
+    openSnippetEditor(.createFromClip(item.previewText))
   }
 
   /// ⌘S (see `PickerView`'s key handler): "Save as Snippet" for whichever
@@ -1278,12 +1282,12 @@ public final class PickerViewModel: ObservableObject {
   /// Shows the Snippets tab's create form (`SnippetEditorWindow`, empty
   /// fields).
   public func presentCreateSnippetForm() {
-    presentSnippetEditor(.create)
+    openSnippetEditor(.create)
   }
 
   /// Shows the Snippets tab's edit form, pre-filled from `snippet`.
   public func presentEditSnippetForm(_ snippet: Snippet) {
-    presentSnippetEditor(.edit(snippet))
+    openSnippetEditor(.edit(snippet))
   }
 
   /// T-AUD-KBD: opens the editor for the highlighted snippet (⌘E on macOS,
@@ -1300,6 +1304,7 @@ public final class PickerViewModel: ObservableObject {
     let snippet = Snippet(title: title, body: body, keyword: keyword)
     Task { [weak self] in
       guard let self else { return }
+      guard await self.isSnippetTagAvailable(keyword, editing: nil) else { return }
       do {
         _ = try await self.snippetStore.create(snippet)
       } catch {
@@ -1319,6 +1324,7 @@ public final class PickerViewModel: ObservableObject {
   public func updateSnippet(_ id: UUID, title: String, body: String, keyword: String?) {
     Task { [weak self] in
       guard let self else { return }
+      guard await self.isSnippetTagAvailable(keyword, editing: id) else { return }
       do {
         _ = try await self.snippetStore.update(id, title: title, body: body, keyword: keyword)
       } catch {

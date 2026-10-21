@@ -82,6 +82,8 @@ To delete your data too, add `-s -- --purge` after `bash`.
 **Prefer to download it yourself?** Grab the `.dmg` or the Linux tarball from [GitHub Releases](https://github.com/AayushGour/clipnest/releases/latest). Manual steps, updating, environment variables and building from source are on the [Contribute page]({{ '/contribute/' | relative_url }}).
 {: #signing-honestly}
 
+If you download the `.dmg` in a browser instead, macOS will block the first launch because the app isn't notarized. On macOS 15 and later, open **System Settings → Privacy & Security**, scroll to the Clipnest message, click **Open Anyway** and confirm (admin password); or run `xattr -dr com.apple.quarantine /Applications/Clipnest.app` in Terminal. The one-line command above avoids this because `curl` never sets the quarantine flag.
+
 On a Mac and wondering why there's no Gatekeeper warning? Read [Signing, honestly]({{ '/contribute/#signing-honestly' | relative_url }}).
 
 </div>

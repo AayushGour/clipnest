@@ -30,6 +30,8 @@ struct PermissionStepWidgets {
   let extensionRow: SubRowWidgets
   let extensionFallbackNote: OpaquePointer
   let combinedLine: OpaquePointer
+  /// T-WELCOMEGRANT1: what will not work, shown while confirming "Set up later".
+  let setUpLaterWarning: OpaquePointer
 }
 
 /// Step 2: open at login (body, switch, recommendation note, error).
@@ -47,6 +49,12 @@ struct TryItStepWidgets {
   let status: OpaquePointer
   let hint: OpaquePointer
   let changeButton: OpaquePointer
+}
+
+/// Linux last-step alternative: log out to finish setup (body only; the
+/// buttons are the footer's).
+struct LogOutStepWidgets {
+  let body: OpaquePointer
 }
 
 extension WelcomeWindow {
@@ -163,10 +171,6 @@ extension WelcomeWindow {
     gtk_label_set_width_chars(badge, 2)
     gtk_box_append(titleLine, badge)
     gtk_box_append(titleLine, makeLabel(step.heading, wrap: false, bold: true))
-    if step == .permission {
-      gtk_box_append(
-        titleLine, makeLabel(WelcomeCopy.optionalBadge, wrap: false, cssClasses: ["dim-label"]))
-    }
     gtk_box_append(content, titleLine)
 
     let summary = makeLabel("", cssClasses: ["dim-label"])
@@ -179,6 +183,7 @@ extension WelcomeWindow {
     case .permission: buildPermissionStep(into: details)
     case .openAtLogin: buildOpenAtLoginStep(into: details)
     case .tryIt: buildTryItStep(into: details)
+    case .logOut: buildLogOutStep(into: details)
     }
     gtk_box_append(content, details)
     gtk_frame_set_child(frame, content)
@@ -221,13 +226,14 @@ extension WelcomeWindow {
     let fallback = makeLabel(cssClasses: ["dim-label"])
     gtk_box_append(extensionRow.container, fallback)
     let combined = makeLabel(WelcomeLinuxPermission.completionAnnouncement, bold: true)
-    for widget in [body, plain, keyboard.container, extensionRow.container, combined] {
+    let warning = makeLabel(cssClasses: ["warning"])
+    for widget in [body, warning, plain, keyboard.container, extensionRow.container, combined] {
       gtk_box_append(box, widget)
     }
     permissionStep = PermissionStepWidgets(
       body: body, plainLine: plain, keyboard: keyboard, keyboardSecurityNote: security,
       keyboardReloginNote: relogin, extensionRow: extensionRow, extensionFallbackNote: fallback,
-      combinedLine: combined)
+      combinedLine: combined, setUpLaterWarning: warning)
   }
 
   private func buildOpenAtLoginStep(into box: OpaquePointer) {
@@ -260,9 +266,17 @@ extension WelcomeWindow {
       body: body, keyCaps: caps, status: status, hint: hint, changeButton: change)
   }
 
+  private func buildLogOutStep(into box: OpaquePointer) {
+    let body = makeLabel()
+    gtk_box_append(box, body)
+    logOutStep = LogOutStepWidgets(body: body)
+  }
+
   private func buildFooter() -> OpaquePointer {
     let footer = makeBox(GTK_ORIENTATION_HORIZONTAL, spacing: WelcomeWindow.spacing)
     skipButton = makeButton(WelcomeCopy.skipTitle) { [weak self] in self?.skipTapped() }
+    // Low emphasis: flat, never the default widget or initial focus.
+    gtk_widget_add_css_class(skipButton, "flat")
     primaryButton = makeButton(WelcomeCopy.continueTitle) { [weak self] in self?.primaryTapped() }
     gtk_widget_add_css_class(primaryButton, "suggested-action")
     gtk_widget_set_hexpand(skipButton, 0)
@@ -302,6 +316,9 @@ extension WelcomeWindow {
       isComplete: permission.isComplete,
       announcement: WelcomeLinuxPermission.completionAnnouncement)
     viewModel.setHotkeyPendingSetup(permission.isHotkeyPendingSetup)
+    // A grant that needs a new login swaps "Try your hotkey" for the log-out step.
+    viewModel.setNeedsRelogin(
+      permission.keyboard.needsRelogin || permission.extensionContent.needsRelogin)
 
     for step in WelcomeStep.allCases { renderRow(step) }
     if renderedActiveStep != viewModel.activeStep {
@@ -314,8 +331,12 @@ extension WelcomeWindow {
     renderPermissionStep()
     renderOpenAtLoginStep()
     renderTryItStep()
+    gtk_label_set_text(logOutStep.body, viewModel.logOutBodyText)
 
     gtk_button_set_label(primaryButton, viewModel.primaryTitle)
+    gtk_widget_set_sensitive(primaryButton, viewModel.isPrimaryEnabled ? 1 : 0)
+    gtk_button_set_label(skipButton, viewModel.secondaryTitle)
+    setVisible(skipButton, viewModel.showsSecondary)
     refocusIfNeeded()
     if let announcement = viewModel.announcement {
       announce(announcement)
@@ -334,8 +355,10 @@ extension WelcomeWindow {
     // of a child inside a hidden row.
     let focusedActionHidden = focusedWidget.map { gtk_widget_get_mapped($0) == 0 } ?? false
     let stepChanged = lastFocusedStep != viewModel.activeStep
-    guard stepChanged || focusedActionHidden else { return }
+    let confirmChanged = lastFocusedConfirming != viewModel.isConfirmingSetUpLater
+    guard stepChanged || confirmChanged || focusedActionHidden else { return }
     lastFocusedStep = viewModel.activeStep
+    lastFocusedConfirming = viewModel.isConfirmingSetUpLater
     let target = focusWidget
     focusedWidget = target
     gtk_window_set_focus(window, target)
@@ -344,6 +367,8 @@ extension WelcomeWindow {
   @MainActor
   private func renderRow(_ step: WelcomeStep) {
     guard let row = rows[step] else { return }
+    // The two last-step rows share one slot: only the live one is on the list.
+    setVisible(row.frame, viewModel.steps.contains(step))
     let state = viewModel.state(of: step)
     gtk_label_set_text(row.badge, WelcomeStepBadge.text(for: state, number: step.number))
     GTKAccessibility.setLabel(row.badge, WelcomeStepBadge.accessibleLabel(for: state) ?? "")
@@ -353,7 +378,8 @@ extension WelcomeWindow {
       step: step, state: state, hotkeyText: viewModel.hotkey.displayText,
       permissionSummary: permission.collapsedSummary(isSkipped: state == .skipped),
       tryItStatus: viewModel.tryItStatusText,
-      openAtLoginStatus: viewModel.collapsedStatusText(for: .openAtLogin))
+      openAtLoginStatus: viewModel.collapsedStatusText(for: .openAtLogin),
+      logOutStatus: viewModel.collapsedStatusText(for: .logOut))
     setText(row.summary, summary)
   }
 
@@ -372,6 +398,7 @@ extension WelcomeWindow {
   @MainActor
   private func renderPermissionStep() {
     gtk_label_set_text(permissionStep.body, viewModel.permissionBodyText)
+    setText(permissionStep.setUpLaterWarning, viewModel.setUpLaterConfirmationText)
     let keyboard = permission.keyboard
     let content = permission.extensionContent
 

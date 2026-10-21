@@ -11,7 +11,7 @@
 // `OneShotStoreMigration.run(...)`'s sync-only `() -> Bool` contract — see
 // that type's doc comment. Measured against the real, staged
 // `CoreGraphicsImagePixelHasher`, decode+hash cost ranged 10ms (small
-// screenshot) to 82ms (phone photo) per image; at the default 1000-item
+// screenshot) to 82ms (phone photo) per image; at a 1000-item (the old default)
 // retention cap that is 15-82+ SECONDS during which `AppEnvironment.init`
 // never returns, so the global hotkey is never registered, the menu bar's
 // "Open Clipnest" is a silent no-op, and Settings shows only "Starting

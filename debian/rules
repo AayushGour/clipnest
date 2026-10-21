@@ -62,6 +62,9 @@ override_dh_auto_install:
 	# trays) still render something readable. hicolor is every icon theme's
 	# guaranteed fallback, so no dependency on a specific desktop theme.
 	install -Dm644 assets/clipnest-icons/app.clipnest.Clipnest-symbolic.svg debian/clipnest/usr/share/icons/hicolor/symbolic/apps/app.clipnest.Clipnest-symbolic.svg
+	# Paused-capture tray icon (T-PAUSEICON1): same glyph dimmed + pause bars;
+	# StatusNotifierTray swaps IconName to it and emits NewIcon.
+	install -Dm644 assets/clipnest-icons/app.clipnest.Clipnest-paused-symbolic.svg debian/clipnest/usr/share/icons/hicolor/symbolic/apps/app.clipnest.Clipnest-paused-symbolic.svg
 	# clipnest-ocr-data cannot be meaningfully built without the real
 	# PP-OCRv5 model files — see packaging/linux/vendor/ppocr-models/README.md
 	# for exactly why this packaging task did not fetch/fabricate them.

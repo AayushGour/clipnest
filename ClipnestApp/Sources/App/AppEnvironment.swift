@@ -238,10 +238,18 @@ final class AppEnvironment {
     // The replacer's capture-suppression closures are wired to the monitor
     // below (once it exists). See `SnippetExpander`'s doc comment.
     let clipboardReplacer = ClipboardSelectionReplacer()
+    // T-SNIPFB1: a failed expansion shows a transient message near the pointer
+    // (never a silent beep); the HUD itself beeps only if it has no screen.
+    let feedbackHUD = SnippetFeedbackHUD(beep: PlatformDefaults.beep)
     self.snippetExpander = SnippetExpander(
       snippetStore: snippetStore,
       selectedText: AXSelectedTextAccessor(),
       clipboardReplacer: clipboardReplacer,
+      feedback: { failure in
+        feedbackHUD.show(
+          message: SnippetExpansionCopy.message(
+            for: failure, expandShortcut: ExpandSnippetShortcutLabel.current))
+      },
       isAccessibilityGranted: { PermissionsManager.isGranted })
 
     self.clipboardMonitor = ClipboardMonitor(
@@ -424,6 +432,12 @@ final class AppEnvironment {
       snippetEditorWindow.show(
         mode: mode,
         pickerPanel: panel,
+        tagError: { [weak viewModel] tag in
+          let editingID: UUID?
+          if case .edit(let snippet) = mode { editingID = snippet.id } else { editingID = nil }
+          return viewModel?.snippetTagError(forTag: tag, editing: editingID)
+        },
+        expandShortcut: ExpandSnippetShortcutLabel.current,
         onSave: { title, body, keyword in
           switch mode {
           case .create, .createFromClip:

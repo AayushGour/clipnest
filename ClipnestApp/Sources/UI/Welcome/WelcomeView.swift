@@ -23,6 +23,7 @@ struct WelcomeView: View {
     case allowAction
     case launchAtLoginToggle
     case primaryButton
+    case secondaryButton
   }
 
   @FocusState private var focus: FocusTarget?
@@ -60,6 +61,8 @@ struct WelcomeView: View {
     // Granting flips the active step and hides "Allow Accessibility…": move
     // focus to the primary button instead of leaving it on nothing.
     .onChange(of: viewModel.activeStep) { refocus() }
+    // "Set up later" swaps the footer to Go back / Set up later anyway.
+    .onChange(of: viewModel.isConfirmingSetUpLater) { refocus() }
     .onChange(of: session.accessibilityState) {
       // Only the permission step's own button can vanish here; on later steps a grant
       // must not pull focus off whatever the user tabbed to.
@@ -74,6 +77,7 @@ struct WelcomeView: View {
     case .permissionAction: focus = .allowAction
     case .launchAtLoginToggle: focus = .launchAtLoginToggle
     case .primaryButton: focus = .primaryButton
+    case .secondaryButton: focus = .secondaryButton
     }
   }
 
@@ -96,8 +100,15 @@ struct WelcomeView: View {
 
   private var footer: some View {
     HStack {
-      Button(WelcomeCopy.skipTitle) {
-        if viewModel.skipTapped() == .close { onClose() }
+      // Low emphasis on purpose: plain style, never the default action or
+      // initial focus (T-WELCOMEGRANT1).
+      if viewModel.showsSecondary {
+        Button(viewModel.secondaryTitle) {
+          if viewModel.skipTapped() == .close { onClose() }
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .focused($focus, equals: .secondaryButton)
       }
       Spacer()
       Button(viewModel.primaryTitle) {
@@ -105,6 +116,7 @@ struct WelcomeView: View {
       }
       .keyboardShortcut(.defaultAction)
       .focused($focus, equals: .primaryButton)
+      .disabled(!viewModel.isPrimaryEnabled)
     }
     .padding(Layout.padding)
   }
@@ -114,14 +126,13 @@ struct WelcomeView: View {
   private var permissionRow: some View {
     let content = WelcomeAccessibilityPresentation.content(for: session.accessibilityState)
     return StepRow(viewModel: viewModel, step: .permission) {
-      Text(WelcomeCopy.optionalBadge)
-        .font(.caption)
-        .padding(.horizontal, 6)
-        .padding(.vertical, 1)
-        .overlay(Capsule().strokeBorder(Color.secondary))
-        .foregroundStyle(.secondary)
+      EmptyView()
     } detail: {
       Text(viewModel.permissionBodyText).fixedSize(horizontal: false, vertical: true)
+      if let warning = viewModel.setUpLaterConfirmationText {
+        Text(warning).font(.callout).foregroundStyle(.orange)
+          .fixedSize(horizontal: false, vertical: true)
+      }
       statusLine(
         viewModel.state(of: .permission) == .skipped
           && session.accessibilityState != .allowed

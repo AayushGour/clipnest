@@ -1,4 +1,5 @@
 import ClipnestPlatformLinux
+import ClipnestViewModels
 import Foundation
 
 /// Pure builders/parsers for `org.kde.StatusNotifierWatcher` (registering
@@ -30,6 +31,20 @@ enum StatusNotifierRequests {
       member: StatusNotifierWatcherMember.registerStatusNotifierItem,
       destination: StatusNotifierWatcherName.busName, body: [.string(itemBusName)]
     )
+  }
+
+  /// `NewIcon()` — the host re-reads `IconName`.
+  static func newIcon(serial: UInt32) -> DBusMessage {
+    DBusMessage(
+      type: .signal, serial: serial, path: StatusNotifierItemName.objectPath,
+      interface: StatusNotifierItemName.interface, member: StatusNotifierItemSignal.newIcon)
+  }
+
+  /// `NewToolTip()` — the host re-reads `ToolTip`.
+  static func newToolTip(serial: UInt32) -> DBusMessage {
+    DBusMessage(
+      type: .signal, serial: serial, path: StatusNotifierItemName.objectPath,
+      interface: StatusNotifierItemName.interface, member: StatusNotifierItemSignal.newToolTip)
   }
 
   /// dbusmenu's `LayoutUpdated(u revision, i parent)` — tells the panel to
@@ -151,16 +166,19 @@ enum StatusNotifierReplies {
       type: .methodReturn, serial: 0, replySerial: message.serial, destination: message.sender)
   }
 
-  static func property(named name: String, replyingTo message: DBusMessage) -> DBusMessage? {
-    guard let value = propertyValue(named: name) else { return nil }
+  static func property(named name: String, isPaused: Bool = false, replyingTo message: DBusMessage)
+    -> DBusMessage?
+  {
+    guard let value = propertyValue(named: name, isPaused: isPaused) else { return nil }
     return DBusMessage(
       type: .methodReturn, serial: 0, replySerial: message.serial, destination: message.sender,
       body: [.variant(value)])
   }
 
-  static func allProperties(replyingTo message: DBusMessage) -> DBusMessage {
+  static func allProperties(isPaused: Bool = false, replyingTo message: DBusMessage) -> DBusMessage
+  {
     let entries = allPropertyNames.compactMap { name -> DBusValue? in
-      propertyValue(named: name).map { .dictEntry(.string(name), .variant($0)) }
+      propertyValue(named: name, isPaused: isPaused).map { .dictEntry(.string(name), .variant($0)) }
     }
     return DBusMessage(
       type: .methodReturn, serial: 0, replySerial: message.serial, destination: message.sender,
@@ -218,16 +236,29 @@ enum StatusNotifierReplies {
   private static let allPropertyNames = [
     StatusNotifierItemProperty.category, StatusNotifierItemProperty.id,
     StatusNotifierItemProperty.title, StatusNotifierItemProperty.status,
-    StatusNotifierItemProperty.iconName, StatusNotifierItemProperty.menu,
+    StatusNotifierItemProperty.iconName, StatusNotifierItemProperty.toolTip,
+    StatusNotifierItemProperty.menu,
   ]
 
-  private static func propertyValue(named name: String) -> DBusValue? {
+  /// `ToolTip` is `(sa(iiay)ss)`: icon name, pixmaps (none), title, description.
+  static func toolTipValue(isPaused: Bool) -> DBusValue {
+    .structure([
+      .string(StatusNotifierItemValue.iconName(isPaused: isPaused)),
+      .emptyArray(elementSignature: "(iiay)"),
+      .string(StatusNotifierItemValue.title),
+      .string(CaptureStatusPresentation(isPaused: isPaused).tooltipDescription),
+    ])
+  }
+
+  private static func propertyValue(named name: String, isPaused: Bool) -> DBusValue? {
     switch name {
     case StatusNotifierItemProperty.category: return .string(StatusNotifierItemValue.category)
     case StatusNotifierItemProperty.id: return .string(StatusNotifierItemValue.id)
     case StatusNotifierItemProperty.title: return .string(StatusNotifierItemValue.title)
     case StatusNotifierItemProperty.status: return .string(StatusNotifierItemValue.status)
-    case StatusNotifierItemProperty.iconName: return .string(StatusNotifierItemValue.iconName)
+    case StatusNotifierItemProperty.iconName:
+      return .string(StatusNotifierItemValue.iconName(isPaused: isPaused))
+    case StatusNotifierItemProperty.toolTip: return toolTipValue(isPaused: isPaused)
     case StatusNotifierItemProperty.menu: return .objectPath(DBusMenuName.objectPath)
     default: return nil
     }

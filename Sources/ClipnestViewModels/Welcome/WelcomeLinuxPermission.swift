@@ -1,7 +1,7 @@
 // WelcomeLinuxPermission.swift
 //
 // T-WELCOME1-LX: the pure state behind the Linux welcome window's step 1
-// (design.md "Step 2 - Linux" (now step 1)): sub-row A "Keyboard access" (the
+// (design.md "Step 1 - Linux"): sub-row A "Keyboard access" (the
 // `/dev/uinput` grant that replaced `AutoPasteStartupPrompt`) and sub-row B
 // "Hotkey everywhere" (GNOME extension, via `GnomeExtensionStatus`). The GTK
 // window only renders this; the pkexec call and the extension installer stay

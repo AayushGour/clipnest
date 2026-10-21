@@ -64,11 +64,13 @@ enum WelcomeRowSummary {
   /// shows its full body instead). `nil` = nothing to show.
   static func text(
     step: WelcomeStep, state: WelcomeStepState, hotkeyText: String?, permissionSummary: String,
-    tryItStatus: String, openAtLoginStatus: String? = nil
+    tryItStatus: String, openAtLoginStatus: String? = nil, logOutStatus: String? = nil
   ) -> String? {
     switch (state, step) {
     case (.current, _):
       return nil
+    case (_, .logOut):
+      return logOutStatus
     case (.upcoming, .permission):
       return nil
     case (_, .openAtLogin):

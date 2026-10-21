@@ -18,7 +18,11 @@ public enum WelcomeCopy {
   public static let skipTitle = "Skip"
   public static let continueTitle = "Continue"
   public static let doneTitle = "Done"
-  public static let optionalBadge = "Optional"
+  public static let setUpLaterTitle = "Set up later"
+  public static let setUpLaterConfirmTitle = "Set up later anyway"
+  public static let goBackTitle = "Go back"
+  public static let logOutNowTitle = "Log Out Now"
+  public static let logOutLaterTitle = "Later"
   public static let doneBadgeLabel = "Done"
   public static let skippedBadgeLabel = "Skipped"
 
@@ -30,6 +34,7 @@ public enum WelcomeCopy {
   public static let permissionHeading = "Paste straight into apps"
   public static let openAtLoginHeading = "Open Clipnest at login"
   public static let tryItHeading = "Try your hotkey"
+  public static let logOutHeading = "Log out to finish setup"
 
   public static let changeInSettingsTitle = "Change in Settings…"
 
@@ -39,16 +44,46 @@ public enum WelcomeCopy {
     switch platform {
     case .macOS:
       return
-        "Clipnest saves your clipboard and opens with your hotkey without any permission. Allow Accessibility to also paste items directly into the app you are using and expand snippets as you type. Without it, picking an item copies it and you press Cmd-V yourself."
+        "Your hotkey opens Clipnest without any permission. Allow Accessibility so Clipnest can paste the item you pick straight into the app you are using and expand snippets as you type. Continue unlocks once it is allowed."
     case .linux:
       return
-        "Clipnest saves and searches your clipboard without any permission. These two things let it paste directly into other apps and open with your hotkey everywhere. Without them, picking an item copies it and you press Ctrl+V yourself."
+        "Clipnest saves and searches your clipboard without any permission. Grant these so it can paste directly into other apps and open with your hotkey everywhere. Continue unlocks once each one is set up."
     }
   }
 
-  /// Status once the user skipped step 1 (macOS and Linux share the shape).
+  /// Shown after "Set up later": exactly what will not work (accurate per
+  /// platform - the macOS hotkey still opens the picker without Accessibility).
+  public static func setUpLaterConfirmation(platform: WelcomePlatform) -> String {
+    switch platform {
+    case .macOS:
+      return
+        "If you set this up later, picking an item in the picker only copies it - you press Cmd-V yourself - and snippets will not expand as you type. Your hotkey still opens the picker. You can allow Accessibility any time in Settings → Permissions."
+    case .linux:
+      return
+        "If you set this up later, picking an item only copies it - you press Ctrl+V yourself - and the hotkey may not work in every app. You can finish any time in Settings → Permissions."
+    }
+  }
+
+  /// Status once the user chose "Set up later" (macOS and Linux share the shape).
   public static let permissionSkippedStatus =
-    "Not allowed - you can turn this on later in Settings → Permissions."
+    "Not set up - picking an item only copies it. Finish any time in Settings → Permissions."
+
+  // MARK: Step 3 alternative (Linux: log out to finish setup)
+
+  public static func logOutBody(canLogOut: Bool) -> String {
+    let what =
+      "Pasting into other apps and your hotkey take effect after you log out and back in. "
+      + "Until then, picking an item only copies it, and the hotkey may not open the picker "
+      + "everywhere."
+    return canLogOut
+      ? what + " Save your work first: logging out closes your apps. "
+        + "Choose Later to keep working and log out when you are ready."
+      : what + " Log out from your desktop's menu when you are ready."
+  }
+
+  public static let logOutNeededStatus = "Log out and back in to finish"
+  public static let logOutLaterStatus = "Later - paste and the hotkey work after your next login"
+  public static let logOutRequestedAnnouncement = "Asking your desktop to log you out"
 
   // MARK: Step 2 (open at login)
 

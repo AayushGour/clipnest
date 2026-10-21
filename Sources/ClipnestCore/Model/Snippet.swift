@@ -25,4 +25,15 @@ public struct Snippet: Identifiable, Codable, Equatable, Sendable {
     self.keyword = keyword
     self.createdAt = createdAt
   }
+
+  /// The form `SnippetStore.findByKeyword` compares keywords in: whitespace-
+  /// trimmed and lowercased; `nil` when blank. Anything deciding "are these two
+  /// tags the same?" (the duplicate-tag check in the snippet form) must use this
+  /// so it agrees with expansion lookup.
+  public static func normalizedKeyword(_ raw: String?) -> String? {
+    guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+      !trimmed.isEmpty
+    else { return nil }
+    return trimmed
+  }
 }

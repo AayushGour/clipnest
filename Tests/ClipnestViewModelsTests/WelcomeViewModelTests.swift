@@ -24,13 +24,24 @@ struct WelcomeViewModelTests {
 
   /// Advances past the permission and open-at-login steps onto "Try your hotkey".
   private func toTryIt(_ vm: WelcomeViewModel) {
+    leaveStepOne(vm)
     _ = vm.continueTapped()
-    _ = vm.continueTapped()
+  }
+
+  /// Leaves step 1: Continue when granted, else "Set up later" + its confirmation.
+  private func leaveStepOne(_ vm: WelcomeViewModel) {
+    if vm.isPermissionComplete {
+      _ = vm.continueTapped()
+    } else {
+      _ = vm.skipTapped()
+      _ = vm.skipTapped()
+    }
   }
 
   @Test("three steps: permission, open at login, then the merged hotkey/try step")
   func stepOrder() {
-    #expect(WelcomeStep.allCases == [.permission, .openAtLogin, .tryIt])
+    #expect(WelcomeStep.allCases == [.permission, .openAtLogin, .tryIt, .logOut])
+    #expect(make().steps == [.permission, .openAtLogin, .tryIt])
     #expect(WelcomeStep.count == 3)
     #expect(WelcomeStep.permission.number == 1)
     #expect(WelcomeStep.openAtLogin.number == 2)
@@ -64,10 +75,10 @@ struct WelcomeViewModelTests {
     #expect(vm.state(of: .permission) == .done)
   }
 
-  @Test("Continue walks 1 -> 2 -> 3; an ungranted permission reads skipped, not done")
+  @Test("Continue walks 1 -> 2 -> 3; a postponed permission reads skipped, not done")
   func continueWalk() {
     let vm = make()
-    #expect(vm.continueTapped() == .advanced)
+    leaveStepOne(vm)
     #expect(vm.activeStep == .openAtLogin)
     #expect(vm.state(of: .permission) == .skipped)
     #expect(vm.primaryTitle == "Continue")
@@ -76,9 +87,11 @@ struct WelcomeViewModelTests {
     #expect(vm.primaryTitle == "Done")
   }
 
-  @Test("Skip on step 1 marks it skipped and advances")
+  @Test("Set up later on step 1 needs confirmation, then marks it skipped and advances")
   func skipAdvances() {
     let vm = make()
+    #expect(vm.skipTapped() == .stayed)
+    #expect(vm.activeStep == .permission)
     #expect(vm.skipTapped() == .advanced)
     #expect(vm.state(of: .permission) == .skipped)
     #expect(vm.activeStep == .openAtLogin)
@@ -192,8 +205,8 @@ struct WelcomeViewModelTests {
     #expect(vm.tryItBodyText.contains("Alt + Super + V"))
     #expect(vm.tryItHintText.contains("tray icon, or finish step 1 first"))
     #expect(make(platform: .macOS).tryItHintText.contains("menu bar"))
-    #expect(vm.permissionBodyText.contains("Ctrl+V"))
-    #expect(make().permissionBodyText.contains("Cmd-V"))
+    #expect(WelcomeCopy.setUpLaterConfirmation(platform: .linux).contains("Ctrl+V"))
+    #expect(WelcomeCopy.setUpLaterConfirmation(platform: .macOS).contains("Cmd-V"))
   }
 
   @Test("accessibility labels read Step N of 3 with state")
@@ -204,7 +217,7 @@ struct WelcomeViewModelTests {
     #expect(
       vm.accessibilityLabel(for: .openAtLogin) == "Step 2 of 3: Open Clipnest at login, upcoming")
     #expect(vm.accessibilityLabel(for: .tryIt) == "Step 3 of 3: Try your hotkey, upcoming")
-    _ = vm.skipTapped()
+    leaveStepOne(vm)
     #expect(
       vm.accessibilityLabel(for: .permission) == "Step 1 of 3: Paste straight into apps, skipped")
     #expect(
@@ -227,10 +240,9 @@ struct WelcomeViewModelTests {
   func collapsedSkipped() {
     let vm = make()
     #expect(vm.collapsedStatusText(for: .tryIt) == "⌥⌘V")
-    _ = vm.continueTapped()
-    #expect(
-      vm.collapsedStatusText(for: .permission)
-        == "Not allowed - you can turn this on later in Settings → Permissions.")
+    leaveStepOne(vm)
+    #expect(vm.collapsedStatusText(for: .permission) == WelcomeCopy.permissionSkippedStatus)
+    #expect(WelcomeCopy.permissionSkippedStatus.contains("only copies it"))
   }
 
   @Test("collapsed step 2 reads the hotkey, or No hotkey set; never when active")
@@ -305,7 +317,19 @@ struct WelcomeFocusTargetTests {
   func stepOne() {
     let vm = make()
     #expect(vm.focusTarget(permissionActionAvailable: true) == .permissionAction)
-    #expect(vm.focusTarget(permissionActionAvailable: false) == .primaryButton)
+    // Continue is disabled while something is missing, so it never takes focus;
+    // "Set up later" is the only enabled control left.
+    #expect(vm.focusTarget(permissionActionAvailable: false) == .secondaryButton)
+    #expect(make(complete: true).focusTarget(permissionActionAvailable: false) == .primaryButton)
+  }
+
+  @Test("confirming Set up later focuses Go back; cancelling returns to the grant action")
+  func confirming() {
+    let vm = make()
+    _ = vm.skipTapped()
+    #expect(vm.focusTarget(permissionActionAvailable: true) == .primaryButton)
+    _ = vm.continueTapped()
+    #expect(vm.focusTarget(permissionActionAvailable: true) == .permissionAction)
   }
 
   @Test("granting (step change) refocuses the open-at-login switch; the last step the primary")
@@ -454,9 +478,229 @@ struct WelcomeOpenAtLoginTests {
   @Test("macOS permission copy: hotkey needs no Accessibility; paste and expansion do")
   func accurateAccessibilityCopy() {
     let body = WelcomeCopy.permissionBody(platform: .macOS)
-    #expect(body.contains("opens with your hotkey without any permission"))
-    #expect(body.contains("paste items directly"))
+    #expect(body.contains("Your hotkey opens Clipnest without any permission"))
+    #expect(body.contains("paste the item you pick straight into the app"))
     #expect(body.contains("expand snippets"))
-    #expect(!body.contains("open Clipnest with your hotkey from other apps"))
+    let later = WelcomeCopy.setUpLaterConfirmation(platform: .macOS)
+    #expect(later.contains("only copies it"))
+    #expect(later.contains("snippets will not expand"))
+    #expect(later.contains("Your hotkey still opens the picker"))
+  }
+}
+
+// MARK: - T-WELCOMEGRANT1: step 1 must be granted (or consciously postponed)
+
+@MainActor
+@Suite("WelcomeViewModel permission gating (T-WELCOMEGRANT1)")
+struct WelcomePermissionGatingTests {
+  private func make(
+    platform: WelcomePlatform = .macOS, complete: Bool = false
+  ) -> WelcomeViewModel {
+    WelcomeViewModel(
+      platform: platform,
+      hotkey: .macOS(command: true, option: true, control: false, shift: false, key: "V"),
+      isPermissionComplete: complete, launchAtLogin: .inert)
+  }
+
+  @Test("Continue is disabled and inert until everything is granted")
+  func continueGated() {
+    let vm = make()
+    #expect(!vm.isPrimaryEnabled)
+    #expect(vm.continueTapped() == .stayed)
+    #expect(vm.activeStep == .permission)
+    #expect(vm.state(of: .permission) == .current)
+  }
+
+  @Test("already granted: Continue enabled, no Set up later button")
+  func grantedOpensEnabled() {
+    let vm = make(complete: true)
+    #expect(vm.isPrimaryEnabled)
+    #expect(!vm.showsSecondary)
+    #expect(vm.continueTapped() == .advanced)
+    #expect(vm.state(of: .permission) == .done)
+  }
+
+  @Test("a grant mid-session completes step 1 and moves on, announcing it")
+  func grantFlipsLive() {
+    let vm = make(platform: .linux)
+    vm.updatePermission(isComplete: true, announcement: "Paste setup finished.")
+    #expect(vm.isPrimaryEnabled)
+    #expect(vm.activeStep == .openAtLogin)
+    #expect(vm.announcement == "Paste setup finished.")
+  }
+
+  @Test("Set up later: first tap only asks, shows exactly what won't work, announces it")
+  func setUpLaterNeedsConfirmation() {
+    let vm = make()
+    #expect(vm.secondaryTitle == "Set up later")
+    #expect(vm.skipTapped() == .stayed)
+    #expect(vm.isConfirmingSetUpLater)
+    #expect(vm.activeStep == .permission)
+    #expect(vm.state(of: .permission) == .current)
+    #expect(vm.setUpLaterConfirmationText == WelcomeCopy.setUpLaterConfirmation(platform: .macOS))
+    #expect(vm.announcement == vm.setUpLaterConfirmationText)
+    #expect(vm.primaryTitle == "Go back")
+    #expect(vm.secondaryTitle == "Set up later anyway")
+    #expect(vm.isPrimaryEnabled)
+  }
+
+  @Test("Go back cancels the confirmation without leaving step 1")
+  func goBack() {
+    let vm = make()
+    _ = vm.skipTapped()
+    #expect(vm.continueTapped() == .stayed)
+    #expect(!vm.isConfirmingSetUpLater)
+    #expect(vm.setUpLaterConfirmationText == nil)
+    #expect(vm.primaryTitle == "Continue")
+    #expect(!vm.isPrimaryEnabled)
+  }
+
+  @Test("confirming Set up later moves on and marks step 1 skipped")
+  func confirmMovesOn() {
+    let vm = make()
+    _ = vm.skipTapped()
+    #expect(vm.skipTapped() == .advanced)
+    #expect(vm.activeStep == .openAtLogin)
+    #expect(vm.state(of: .permission) == .skipped)
+    #expect(!vm.isConfirmingSetUpLater)
+  }
+
+  @Test("granting while the confirmation is open dismisses it")
+  func grantDuringConfirmation() {
+    let vm = make()
+    _ = vm.skipTapped()
+    vm.updatePermission(isComplete: true, announcement: nil)
+    #expect(!vm.isConfirmingSetUpLater)
+    #expect(vm.state(of: .permission) == .done)
+  }
+
+  @Test("Linux confirmation copy names Ctrl+V and makes no snippet claim")
+  func linuxConfirmationCopy() {
+    let text = WelcomeCopy.setUpLaterConfirmation(platform: .linux)
+    #expect(text.contains("Ctrl+V"))
+    #expect(!text.contains("snippets"))
+  }
+
+  @Test("steps 2 and 3 keep a plain Skip")
+  func laterStepsKeepSkip() {
+    let vm = make(complete: true)
+    _ = vm.continueTapped()
+    #expect(vm.secondaryTitle == "Skip")
+    #expect(vm.showsSecondary)
+    #expect(vm.isPrimaryEnabled)
+    #expect(vm.setUpLaterConfirmationText == nil)
+  }
+
+  @Test("step 1 is never described as optional")
+  func notOptional() {
+    #expect(
+      make().accessibilityLabel(for: .permission)
+        == "Step 1 of 3: Paste straight into apps, current")
+    #expect(!WelcomeCopy.permissionBody(platform: .macOS).lowercased().contains("optional"))
+    #expect(!WelcomeCopy.permissionBody(platform: .linux).lowercased().contains("optional"))
+  }
+}
+
+// MARK: - T-WELCOMEGRANT1: Linux log-out step replaces "Try your hotkey" when a re-login is pending
+
+@MainActor
+@Suite("WelcomeViewModel log-out step (T-WELCOMEGRANT1)")
+struct WelcomeLogOutStepTests {
+  private func make(canLogOut: Bool = true, relogin: Bool = true) -> WelcomeViewModel {
+    let vm = WelcomeViewModel(
+      platform: .linux, hotkey: .gnomeAccelerator("<Alt><Super>v"), isPermissionComplete: true,
+      launchAtLogin: .inert, canLogOut: canLogOut)
+    vm.setNeedsRelogin(relogin)
+    return vm
+  }
+
+  private func toLastStep(_ vm: WelcomeViewModel) {
+    _ = vm.continueTapped()
+    _ = vm.continueTapped()
+  }
+
+  @Test("re-login needed: the last step is Log out, still step 3 of 3, Try-it is off the list")
+  func sequenceWithRelogin() {
+    let vm = make()
+    #expect(vm.steps == [.permission, .openAtLogin, .logOut])
+    toLastStep(vm)
+    #expect(vm.activeStep == .logOut)
+    #expect(WelcomeStep.logOut.number == 3)
+    #expect(
+      vm.accessibilityLabel(for: .logOut) == "Step 3 of 3: Log out to finish setup, current")
+    #expect(vm.focusTarget(permissionActionAvailable: false) == .primaryButton)
+  }
+
+  @Test("no re-login: the last step stays Try your hotkey")
+  func sequenceWithoutRelogin() {
+    let vm = make(relogin: false)
+    #expect(vm.steps == [.permission, .openAtLogin, .tryIt])
+    toLastStep(vm)
+    #expect(vm.activeStep == .tryIt)
+    #expect(vm.primaryTitle == "Done")
+  }
+
+  @Test("Log Out Now asks the platform to log out and keeps the window open")
+  func logOutNow() {
+    let vm = make()
+    toLastStep(vm)
+    #expect(vm.primaryTitle == "Log Out Now")
+    #expect(vm.continueTapped() == .logOut)
+    #expect(vm.activeStep == .logOut)
+  }
+
+  @Test("Later closes, remembers it as skipped, and the body says what waits for the next login")
+  func later() {
+    let vm = make()
+    toLastStep(vm)
+    #expect(vm.secondaryTitle == "Later")
+    #expect(vm.showsSecondary)
+    #expect(vm.logOutBodyText.contains("only copies it"))
+    #expect(vm.logOutBodyText.contains("Choose Later"))
+    #expect(vm.skipTapped() == .close)
+    #expect(vm.state(of: .logOut) == .skipped)
+  }
+
+  @Test("no log-out API (non-GNOME): instructions only, Done closes, no secondary")
+  func noLogOutApi() {
+    let vm = make(canLogOut: false)
+    toLastStep(vm)
+    #expect(vm.primaryTitle == "Done")
+    #expect(!vm.showsSecondary)
+    #expect(vm.logOutBodyText.contains("desktop's menu"))
+    #expect(!vm.logOutBodyText.contains("Choose Later"))
+    #expect(vm.continueTapped() == .close)
+  }
+
+  @Test("a re-login that becomes pending while on the last step swaps it in place")
+  func swapsInPlace() {
+    let vm = make(relogin: false)
+    toLastStep(vm)
+    #expect(vm.activeStep == .tryIt)
+    vm.setNeedsRelogin(true)
+    #expect(vm.activeStep == .logOut)
+    vm.setNeedsRelogin(false)
+    #expect(vm.activeStep == .tryIt)
+  }
+
+  @Test("a pending re-login while still on step 1 does not move the user")
+  func staysOnEarlierSteps() {
+    let vm = WelcomeViewModel(
+      platform: .linux, hotkey: .unbound, isPermissionComplete: false, launchAtLogin: .inert)
+    vm.setNeedsRelogin(true)
+    #expect(vm.activeStep == .permission)
+  }
+
+  @Test("macOS never gets a log-out step")
+  func macNeverLogsOut() {
+    let vm = WelcomeViewModel(
+      platform: .macOS, hotkey: .unbound, isPermissionComplete: true, launchAtLogin: .inert)
+    #expect(vm.steps.last == .tryIt)
+  }
+
+  @Test("collapsed Log out row states where it stands")
+  func collapsed() {
+    let vm = make()
+    #expect(vm.collapsedStatusText(for: .logOut) == WelcomeCopy.logOutNeededStatus)
   }
 }

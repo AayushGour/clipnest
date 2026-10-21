@@ -1,3 +1,18 @@
+clipnest (1.6.0) jammy; urgency=medium
+
+  * feat: the Welcome window now requires the permissions to be set up
+    (keyboard access and the GNOME extension); "Set up later" confirms
+    first. A final "Log out to finish setup" step offers Log Out Now.
+  * feat: snippet tags must be unique and the editor explains the tag is
+    the expansion keyword.
+  * feat: a failed snippet expansion shows a desktop notification saying
+    why, instead of a bell.
+  * feat: the tray icon and tooltip show when capture is paused.
+  * change: the default history limit is now 2,500 items (was 1,000);
+    a limit you set yourself is kept.
+
+ -- Aayush Gour <ag14906@gmail.com>  Wed, 21 Oct 2026 00:00:00 +0000
+
 clipnest (1.5.0) jammy; urgency=medium
 
   * fix: Delete alone no longer removes the highlighted clip from the

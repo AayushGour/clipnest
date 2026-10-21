@@ -92,6 +92,8 @@ final class SnippetEditorWindow: NSWindow, NSWindowDelegate {
   ///     room. Pass `nil` (or a hidden panel) to fall back to the original
   ///     centered placement — e.g. if the editor is ever opened from
   ///     somewhere other than the picker.
+  ///   - tagError: Inline duplicate-tag check for the form (T-SNIPFB1); nil = OK.
+  ///   - expandShortcut: Shown in the Tag helper text (T-SNIPFB1).
   ///   - onSave: Called with the trimmed title/body/keyword once the user
   ///     taps Save. The caller decides create vs. update (this type has no
   ///     opinion — it doesn't know about `SnippetStore`).
@@ -100,6 +102,8 @@ final class SnippetEditorWindow: NSWindow, NSWindowDelegate {
   func show(
     mode: SnippetFormMode,
     pickerPanel: PickerPanel?,
+    tagError: @escaping (_ tag: String) -> String?,
+    expandShortcut: String,
     onSave: @escaping (_ title: String, _ body: String, _ keyword: String?) -> Void,
     onClose: @escaping () -> Void
   ) {
@@ -108,6 +112,8 @@ final class SnippetEditorWindow: NSWindow, NSWindowDelegate {
     contentView = NSHostingView(
       rootView: SnippetFormView(
         mode: mode,
+        tagError: tagError,
+        expandShortcut: expandShortcut,
         onSave: { [weak self] title, body, keyword in
           onSave(title, body, keyword)
           self?.close()

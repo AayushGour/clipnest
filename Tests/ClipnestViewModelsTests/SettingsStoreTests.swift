@@ -22,13 +22,13 @@ struct SettingsStoreTests {
     return UserDefaults(suiteName: name)!
   }
 
-  @Test("defaults: capture on, 1000 items, cap == .maxCount(1000)")
+  @Test("defaults: capture on, 2500 items, cap == .maxCount(2500)")
   func sensibleDefaults() {
     let store = SettingsStore(defaults: makeDefaults())
     #expect(store.isCaptureEnabled == true)
     #expect(store.retentionMode == .items)
-    #expect(store.retentionItemCount == 1000)
-    #expect(store.retentionCap == .maxCount(1000))
+    #expect(store.retentionItemCount == 2500)
+    #expect(store.retentionCap == .maxCount(2500))
   }
 
   @Test("retentionCap: unlimited -> nil")

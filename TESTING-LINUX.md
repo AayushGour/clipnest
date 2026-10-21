@@ -64,7 +64,11 @@ is only whether Clipnest can also synthesize the paste keystroke for you.
 **First-run Welcome window.** Shown once at startup (and once for users
 upgrading from a version without it), replacing the old "Set Up Auto-Paste?"
 dialog. Three steps in one non-modal window: (1) *Paste straight
-into apps* with two sub-rows, *Keyboard access* (**Grant Access…** runs the
+into apps* (required: **Continue** is disabled until *Keyboard access* is
+allowed or pending a log-in and *Hotkey everywhere* is on, pending a log-in, or
+not applicable on a non-GNOME desktop; the low-key **Set up later** button
+first shows what will not work and becomes **Set up later anyway** / **Go back**)
+with two sub-rows, *Keyboard access* (**Grant Access…** runs the
 same `pkexec clipnest-grant-input` flow as Settings → Permissions; on failure
 the button becomes **Try Again**; a dismissed or unavailable polkit dialog
 shows "Authorization was cancelled or not available…" with the manual
@@ -75,7 +79,7 @@ key caps, a *Change in Settings…* button that opens Settings → Shortcuts, an
 a status that flips to "It works" when the
 picker opens; a hint appears after 15 s; while the GNOME extension still needs
 a log-out it says the hotkey works after logging back in and to use the tray
-icon instead). The step list scrolls inside a ~420 px window. Return = Continue/Done, Esc or
+icon instead). When a re-login is pending (keyboard access just granted, or the extension just installed) step 3 becomes *Log out to finish setup* instead: **Log Out Now** calls `org.gnome.SessionManager.Logout` with mode 0 (GNOME shows its own confirmation; falls back to `gnome-session-quit --logout`, never `--no-prompt`), **Later** closes the window; on non-GNOME desktops there is no button, only instructions. Manual check: grant keyboard access, finish step 2, confirm the log-out step appears and the GNOME dialog opens, then cancel it. The step list scrolls inside a ~420 px window. Return = Continue/Done, Esc or
 Ctrl+W close it. "Seen" is stored (`hasSeenWelcome` in
 `~/.config/clipnest/settings.json`) the moment it is shown, so closing it any
 way, or killing the app, never re-shows it. Reopen it from the tray menu
@@ -209,6 +213,25 @@ make uninstall-linux # pkexec apt-get remove
   shows 3 lines in its row.
 - A copy that is not captured (e.g. concealed) logs a reason:
   `journalctl --user -t app.clipnest.Clipnest --since '-5min'`.
+
+### Checks for 1.6.0 snippet feedback and paused capture
+
+- Expand shortcut (default **Alt+Super+E**) with nothing selected: a desktop
+  notification "Snippet not expanded" says "Nothing is selected. Select a
+  snippet tag, then press Alt+Super+E." (your shortcut shown). The text field
+  you were typing in keeps focus.
+- Type a word that is not a snippet tag, select it, press the shortcut: the
+  notification says "No snippet uses the selected text as its tag. Check the
+  tag in the Snippets tab." and the field keeps focus.
+- Rename `/usr/bin/gdbus` and `/usr/bin/notify-send` out of the way (or test in
+  a session lacking both): the failure falls back to a terminal bell.
+- Create two snippets with the same tag (different case or surrounding
+  spaces): Save is blocked with a message naming the first snippet.
+- Tray → Pause Capture: the tray icon switches to the dimmed paused icon
+  (`app.clipnest.Clipnest-paused-symbolic`) and the tooltip reads "Capture
+  paused — copies are not being saved". Resume: normal icon, empty tooltip.
+  Pause/resume from Settings → General updates the tray the same way. Quit and
+  relaunch while paused: still paused, icon dimmed.
 
 ## 6. If something breaks
 

@@ -290,6 +290,34 @@ import Testing
       #expect(!isPaused)
     }
 
+    @Test("Paused state swaps IconName and ToolTip, and NewIcon/NewToolTip fire once per change")
+    func pausedStateSwapsIconAndEmitsSignals() throws {
+      let (tray, _) = try connectedTray()
+      var isPaused = false
+      tray.isCapturePaused = { isPaused }
+      let get = DBusMessage(
+        type: .methodCall, serial: 30, path: StatusNotifierItemName.objectPath,
+        interface: "org.freedesktop.DBus.Properties", member: "Get", sender: ":1.50")
+
+      // First poll records the baseline; nothing to announce.
+      #expect(tray.iconSignalsIfPausedChanged().isEmpty)
+      let activeReply = tray.handle(.getProperty("IconName"), message: get)
+      #expect(activeReply.body == [.variant(.string(StatusNotifierItemValue.iconName))])
+
+      isPaused = true
+      let signals = tray.iconSignalsIfPausedChanged()
+      #expect(signals.compactMap(\.member) == ["NewIcon", "NewToolTip"])
+      #expect(signals.allSatisfy { $0.type == .signal && $0.path == "/StatusNotifierItem" })
+      #expect(tray.iconSignalsIfPausedChanged().isEmpty, "no repeat while unchanged")
+      let pausedReply = tray.handle(.getProperty("IconName"), message: get)
+      #expect(pausedReply.body == [.variant(.string(StatusNotifierItemValue.pausedIconName))])
+      let tip = tray.handle(.getProperty("ToolTip"), message: get)
+      #expect(tip.body == [.variant(StatusNotifierReplies.toolTipValue(isPaused: true))])
+
+      isPaused = false
+      #expect(tray.iconSignalsIfPausedChanged().count == 2)
+    }
+
     @Test("Clicking Check for Updates… fires onCheckForUpdates, not Settings")
     func checkForUpdatesClickDispatches() throws {
       let (tray, _) = try connectedTray()

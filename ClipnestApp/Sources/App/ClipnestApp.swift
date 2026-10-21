@@ -28,17 +28,32 @@ struct ClipnestApp: App {
     MenuBarExtra {
       MenuBarContent(appDelegate: appDelegate)
     } label: {
-      Image("MenuBarIcon")
-        .renderingMode(.template)
-        .resizable()
-        .aspectRatio(contentMode: .fit)
-        .frame(width: 18, height: 18)
+      MenuBarLabel(appDelegate: appDelegate)
     }
     .menuBarExtraStyle(.menu)
 
     Settings {
       SettingsRootView(appDelegate: appDelegate)
     }
+  }
+}
+
+/// The menu-bar icon. Reads `isCaptureEnabled` (an `@Observable`) in its body,
+/// so the icon and its accessibility label flip the moment capture is paused
+/// or resumed from the menu or Settings (T-PAUSEICON1).
+private struct MenuBarLabel: View {
+  @ObservedObject var appDelegate: AppDelegate
+
+  var body: some View {
+    let isPaused = !(appDelegate.environment?.settingsStore.isCaptureEnabled ?? true)
+    let status = CaptureStatusPresentation(isPaused: isPaused)
+    Image(nsImage: MenuBarIconImage.image(isPaused: isPaused))
+      .renderingMode(.template)
+      .resizable()
+      .aspectRatio(contentMode: .fit)
+      .frame(width: 18, height: 18)
+      .accessibilityLabel(status.accessibilityLabel)
+      .help(status.accessibilityLabel)
   }
 }
 

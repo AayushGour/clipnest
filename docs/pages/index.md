@@ -31,7 +31,7 @@ permalink: /
           <source src="{{ "/assets/demos/02-ocr.mp4" | relative_url }}" type="video/mp4">
         </video>
       </div>
-      <figcaption>Copy an image and Clipnest reads its text on-device. Press ⌥⏎ to paste the text instead of the image.</figcaption>
+      <figcaption>Copy an image and Clipnest reads its text on-device (turn on in Settings → History; off by default for privacy). Press ⌥⏎ to paste the text instead of the image.</figcaption>
     </figure>
     <figure class="demo-slide" id="demo-2" role="tabpanel" aria-labelledby="demo-tab-2">
       <div class="demo-video">
@@ -109,9 +109,9 @@ No Electron, no web view. Clipnest is a small, native Swift app — SwiftUI on t
 
 <div class="feature-card" markdown="1">
 
-### Snippets that expand anywhere you type
+### Snippets you can drop into any app
 
-Save a signature, a boilerplate reply, or a command as a **snippet**, give it a short **Tag**, then type that Tag in *any* app and press a hotkey — Clipnest replaces it with the snippet's full body. On the Mac it works the same way in native Cocoa apps and in Electron/Chrome-based ones like VS Code or Slack; on Linux it works on both X11 and Wayland. If you're running a separate text expander alongside your clipboard manager today, this replaces it too. More on the [Features page]({{ "/features/" | relative_url }}).
+Save a signature, a boilerplate reply, or a command as a **snippet**, give it a short **Tag**, then type that Tag in *any* app, select it and press a hotkey — Clipnest replaces it with the snippet's full body. (Nothing expands on its own while you type; if it can't expand, Clipnest tells you why.) On the Mac it works the same way in native Cocoa apps and in Electron/Chrome-based ones like VS Code or Slack; on Linux it works on both X11 and Wayland. More on the [Features page]({{ "/features/" | relative_url }}).
 
 </div>
 

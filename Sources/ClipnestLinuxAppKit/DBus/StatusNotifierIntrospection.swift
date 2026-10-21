@@ -88,7 +88,10 @@ enum StatusNotifierIntrospection {
         <property name="\(StatusNotifierItemProperty.title)" type="s" access="read"/>
         <property name="\(StatusNotifierItemProperty.status)" type="s" access="read"/>
         <property name="\(StatusNotifierItemProperty.iconName)" type="s" access="read"/>
+        <property name="\(StatusNotifierItemProperty.toolTip)" type="(sa(iiay)ss)" access="read"/>
         <property name="\(StatusNotifierItemProperty.menu)" type="o" access="read"/>
+        <signal name="\(StatusNotifierItemSignal.newIcon)"/>
+        <signal name="\(StatusNotifierItemSignal.newToolTip)"/>
       </interface>
     """
 

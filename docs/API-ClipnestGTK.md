@@ -306,11 +306,30 @@ public final class SnippetEditorWindow: @unchecked Sendable {
   public init()
   public func show(
     mode: SnippetFormMode,
+    transientParent: OpaquePointer?,
+    tagError: @escaping (_ tag: String) -> String?,
     onSave: @escaping (_ title: String, _ body: String, _ keyword: String?) -> Void,
     onClose: @escaping () -> Void
   )
 }
+
+/// The user-visible name of the (rebindable) global expand-snippet hotkey,
+/// read live from GSettings; "the expand-snippet shortcut" when unbound.
+public enum ExpandSnippetShortcutLabel {
+  public static var current: String { get }
+}
 ```
+
+- **`tagError`** (required, since 1.6.0) — called with the current Tag text on
+  every edit and again on Save. Return `nil` when the tag is free, or the
+  message to show under the Tag field (the composition root builds it from
+  `SnippetTagValidation.conflict` / `message(forConflict:)`, naming the other
+  snippet). While it returns a message the field shows it as an error and Save
+  does nothing.
+- **Tag helper text** — when there is no error the note under the Tag field
+  reads "Type this tag in any app, select it, then press <shortcut> to expand."
+  (`SnippetExpansionCopy.tagHelperText`), with the shortcut taken from
+  `ExpandSnippetShortcutLabel.current` at `show` time.
 
 - Two fields, matching macOS exactly: **Tag** (single-line, shown as
   placeholder text inside the field — no separate label row) and **Body**
@@ -594,6 +613,20 @@ public final class WelcomeWindow {
   `WelcomeGnomeExtensionPresentation`.
 - **Observation** — no subscription: every mutation goes through the window,
   which calls `render()` straight after it.
+- **Log-out step (T-WELCOMEGRANT1)** — `Configuration.canLogOut` / `requestLogOut`
+  (real caller: `SessionLogoutClient`, `gdbus ... org.gnome.SessionManager.Logout 0`,
+  fallback `gnome-session-quit --logout`, run off the GTK thread, never
+  no-confirm). `render()` feeds `viewModel.setNeedsRelogin(...)` from the
+  keyboard row and extension row; while true the last step is
+  `WelcomeStep.logOut` ("Step 3 of 3", footer *Log Out Now* / *Later*) and the
+  *Try your hotkey* row is hidden. `WelcomeNavigation.logOut` triggers the call and
+  leaves the window open.
+- **Step 1 gating (T-WELCOMEGRANT1)** — `WelcomeViewModel.isPrimaryEnabled` is
+  false on step 1 until `WelcomeLinuxPermission.isComplete` (keyboard allowed or
+  pending re-login, extension on / pending re-login / not applicable). The
+  footer's flat secondary button reads *Set up later*; the first press shows
+  `WelcomeCopy.setUpLaterConfirmation` (primary becomes *Go back*, secondary
+  *Set up later anyway*); `render()` re-focuses when that mode flips.
 - **Keyboard** — Return activates the default widget (Continue/Done) unless a
   secondary button has focus; Esc and Ctrl+W close (`WelcomeKeyAction`).
 - **Use-after-free guard** — `isDismissed` is set on `close-request` and

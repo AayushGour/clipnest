@@ -45,6 +45,11 @@ public final class WelcomeWindow: @unchecked Sendable {
     /// Re-query the extension status (fired when the window becomes active).
     public var refreshExtensionStatus: () -> Void
     public var openShortcutsSettings: () -> Void
+    /// The desktop offers a session-manager log-out (GNOME); false = instructions only.
+    public var canLogOut: Bool
+    /// Asks the session manager to log out WITH its own confirmation. Must not
+    /// block the GTK thread (the real caller spawns it on a background queue).
+    public var requestLogOut: () -> Void
     public var onClosed: () -> Void
 
     public init(
@@ -57,6 +62,8 @@ public final class WelcomeWindow: @unchecked Sendable {
       extensionAction: @escaping (WelcomeGnomeExtensionPresentation.Action) -> Void,
       refreshExtensionStatus: @escaping () -> Void,
       openShortcutsSettings: @escaping () -> Void,
+      canLogOut: Bool,
+      requestLogOut: @escaping () -> Void,
       onClosed: @escaping () -> Void
     ) {
       self.keyboardAccess = keyboardAccess
@@ -68,6 +75,8 @@ public final class WelcomeWindow: @unchecked Sendable {
       self.extensionAction = extensionAction
       self.refreshExtensionStatus = refreshExtensionStatus
       self.openShortcutsSettings = openShortcutsSettings
+      self.canLogOut = canLogOut
+      self.requestLogOut = requestLogOut
       self.onClosed = onClosed
     }
   }
@@ -95,6 +104,7 @@ public final class WelcomeWindow: @unchecked Sendable {
   private(set) var isDismissed = false
   var hasPresented = false
   var lastFocusedStep: WelcomeStep?
+  var lastFocusedConfirming = false
 
   var rows: [WelcomeStep: StepRowWidgets] = [:]
   var primaryButton: OpaquePointer!
@@ -102,6 +112,7 @@ public final class WelcomeWindow: @unchecked Sendable {
   var permissionStep: PermissionStepWidgets!
   var openAtLoginStep: OpenAtLoginStepWidgets!
   var tryItStep: TryItStepWidgets!
+  var logOutStep: LogOutStepWidgets!
   var renderedHotkey: WelcomeHotkey?
   var hintTask: Task<Void, Never>?
   var stepScroller: OpaquePointer?
@@ -119,7 +130,10 @@ public final class WelcomeWindow: @unchecked Sendable {
       platform: .linux, hotkey: configuration.readHotkey(),
       isPermissionComplete: permission.isComplete,
       launchAtLogin: configuration.launchAtLogin,
-      launchAtLoginPreChecked: configuration.launchAtLoginPreChecked)
+      launchAtLoginPreChecked: configuration.launchAtLoginPreChecked,
+      canLogOut: configuration.canLogOut)
+    viewModel.setNeedsRelogin(
+      permission.keyboard.needsRelogin || permission.extensionContent.needsRelogin)
     viewModel.setHotkeyPendingSetup(permission.isHotkeyPendingSetup)
     window = gtk_window_new()
     buildWindow()
@@ -155,6 +169,7 @@ public final class WelcomeWindow: @unchecked Sendable {
     switch target {
     case .primaryButton: return primaryButton
     case .launchAtLoginToggle: return openAtLoginStep.toggle
+    case .secondaryButton: return skipButton
     case .permissionAction: break
     }
     return keyboardAction ? permissionStep.keyboard.button : permissionStep.extensionRow.button
@@ -198,6 +213,9 @@ public final class WelcomeWindow: @unchecked Sendable {
   private func navigate(_ result: WelcomeNavigation) {
     switch result {
     case .advanced, .stayed: render()
+    case .logOut:
+      announce(WelcomeCopy.logOutRequestedAnnouncement)
+      configuration.requestLogOut()
     case .close: gtk_window_close(window)
     }
   }

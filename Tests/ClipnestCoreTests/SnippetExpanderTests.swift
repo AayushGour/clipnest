@@ -62,55 +62,55 @@ struct SnippetExpanderTests {
     return store
   }
 
-  @Test("AX can read + match: replaces via AX, never uses the clipboard, never beeps")
+  @Test("AX can read + match: replaces via AX, never uses the clipboard, reports no failure")
   func axMatchReplacesWithoutClipboard() async throws {
     let ax = MockSelectedText()
     ax.selection = "sig"
     let clipboard = MockClipboardReplacer()
-    var beeped = false
+    var failures: [SnippetExpansionFailure] = []
     let expander = SnippetExpander(
       snippetStore: try await store(), selectedText: ax, clipboardReplacer: clipboard,
-      beep: { beeped = true })
+      feedback: { failures.append($0) })
 
     await expander.expand()
 
     #expect(ax.replacedWith == "Best, Aayush")
     #expect(clipboard.wasCalled == false)
-    #expect(beeped == false)
+    #expect(failures.isEmpty)
   }
 
-  @Test("Accessibility not granted: beeps, touches neither AX nor the clipboard")
+  @Test("Accessibility not granted: reports permissionMissing, touches neither tier")
   func notGrantedBeepsWithoutTryingEitherTier() async throws {
     let ax = MockSelectedText()
     ax.selection = "sig"
     let clipboard = MockClipboardReplacer()
-    var beeped = false
+    var failures: [SnippetExpansionFailure] = []
     let expander = SnippetExpander(
       snippetStore: try await store(), selectedText: ax, clipboardReplacer: clipboard,
-      beep: { beeped = true }, isAccessibilityGranted: { false })
+      feedback: { failures.append($0) }, isAccessibilityGranted: { false })
 
     await expander.expand()
 
     #expect(ax.replacedWith == nil)
     #expect(clipboard.wasCalled == false)
-    #expect(beeped == true)
+    #expect(failures == [.permissionMissing])
   }
 
-  @Test("AX reads but no match: beeps, does NOT fall back to the clipboard")
+  @Test("AX reads but no match: reports noMatch, does NOT fall back to the clipboard")
   func axNoMatchBeepsWithoutClipboard() async throws {
     let ax = MockSelectedText()
     ax.selection = "unknown"
     let clipboard = MockClipboardReplacer()
-    var beeped = false
+    var failures: [SnippetExpansionFailure] = []
     let expander = SnippetExpander(
       snippetStore: try await store(), selectedText: ax, clipboardReplacer: clipboard,
-      beep: { beeped = true })
+      feedback: { failures.append($0) })
 
     await expander.expand()
 
     #expect(ax.replacedWith == nil)
     #expect(clipboard.wasCalled == false)
-    #expect(beeped == true)
+    #expect(failures == [.noMatch])
   }
 
   @Test("AX can't read (Electron): falls back to the clipboard, which matches + replaces")
@@ -119,16 +119,16 @@ struct SnippetExpanderTests {
     ax.selection = nil  // AX exposes nothing (Electron/Chrome)
     let clipboard = MockClipboardReplacer()
     clipboard.simulatedSelection = "sig"  // ⌘C reads the selection
-    var beeped = false
+    var failures: [SnippetExpansionFailure] = []
     let expander = SnippetExpander(
       snippetStore: try await store(), selectedText: ax, clipboardReplacer: clipboard,
-      beep: { beeped = true })
+      feedback: { failures.append($0) })
 
     await expander.expand()
 
     #expect(clipboard.wasCalled == true)
     #expect(clipboard.pastedBody == "Best, Aayush")
-    #expect(beeped == false)
+    #expect(failures.isEmpty)
   }
 
   @Test("AX can't read and the clipboard reads nothing: beeps")
@@ -137,15 +137,15 @@ struct SnippetExpanderTests {
     ax.selection = nil
     let clipboard = MockClipboardReplacer()
     clipboard.simulatedSelection = nil
-    var beeped = false
+    var failures: [SnippetExpansionFailure] = []
     let expander = SnippetExpander(
       snippetStore: try await store(), selectedText: ax, clipboardReplacer: clipboard,
-      beep: { beeped = true })
+      feedback: { failures.append($0) })
 
     await expander.expand()
 
     #expect(clipboard.wasCalled == true)
-    #expect(beeped == true)  // clipboard read nothing → .noSelection → beep
+    #expect(failures == [.noSelection])  // clipboard read nothing
   }
 
   @Test(
@@ -156,16 +156,16 @@ struct SnippetExpanderTests {
     ax.selection = nil
     let clipboard = MockClipboardReplacer()
     clipboard.declinesTerminalTarget = true
-    var beeped = false
+    var failures: [SnippetExpansionFailure] = []
     let expander = SnippetExpander(
       snippetStore: try await store(), selectedText: ax, clipboardReplacer: clipboard,
-      beep: { beeped = true })
+      feedback: { failures.append($0) })
 
     await expander.expand()
 
     #expect(clipboard.wasCalled == true)
     #expect(clipboard.pastedBody == nil)  // nothing was ever pasted
-    #expect(beeped == true)
+    #expect(failures == [.replaceFailed])
   }
 
   @Test("AX reads + matches but the AX WRITE is refused: falls back to the clipboard")
@@ -175,16 +175,27 @@ struct SnippetExpanderTests {
     ax.replaceSucceeds = false  // AX read worked, but write refused
     let clipboard = MockClipboardReplacer()
     clipboard.simulatedSelection = "sig"
-    var beeped = false
+    var failures: [SnippetExpansionFailure] = []
     let expander = SnippetExpander(
       snippetStore: try await store(), selectedText: ax, clipboardReplacer: clipboard,
-      beep: { beeped = true })
+      feedback: { failures.append($0) })
 
     await expander.expand()
 
     #expect(clipboard.wasCalled == true)
     #expect(clipboard.pastedBody == "Best, Aayush")
-    #expect(beeped == false)
+    #expect(failures.isEmpty)
+  }
+
+  @Test("Outcome mapping: replaced/committedUnconfirmed report nothing, the rest a failure")
+  func failureMappingFromClipboardOutcome() {
+    #expect(SnippetExpansionFailure(.replaced) == nil)
+    #expect(SnippetExpansionFailure(.committedUnconfirmed) == nil)
+    #expect(SnippetExpansionFailure(.noSelection) == .noSelection)
+    #expect(SnippetExpansionFailure(.noMatch) == .noMatch)
+    #expect(SnippetExpansionFailure(.writeUnconfirmed) == .replaceFailed)
+    #expect(SnippetExpansionFailure(.copyUnconfirmed) == .replaceFailed)
+    #expect(SnippetExpansionFailure(.declinedTerminalTarget) == .replaceFailed)
   }
 
   #if !os(macOS)
