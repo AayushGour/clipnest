@@ -275,7 +275,7 @@ ID` (`:82`), `Rejects a caller-supplied custom excluded bundle ID` (`:95`).
   `ClipboardMonitor.checkNow()` (`ClipboardMonitor.swift:215-226`) — a
   rejected change is never classified or hashed, so no content from a
   privacy-filtered app is ever even briefly held in memory as a `ClipItem`.
-- **macOS: picker, item preview and snippet editor windows opt out of screen sharing/recording** (`NSWindow.sharingType = .none`, via `excludeFromScreenSharing()`), since clipboard contents may include secrets. Best effort: on macOS 15+ ScreenCaptureKit-based capture may still include them in some modes.
+- **macOS: picker, item preview, snippet editor and item editor windows opt out of screen sharing/recording** (`NSWindow.sharingType = .none`, via `excludeFromScreenSharing()`), since clipboard contents may include secrets. Best effort: on macOS 15+ ScreenCaptureKit-based capture may still include them in some modes.
 - Bundle-ID list is verified/hardcoded, not user-visible/editable yet beyond
   the `customExcludedBundleIDs` injection point.
 - **Linux (1.0.0): GNOME re-publishes a released copy without its privacy

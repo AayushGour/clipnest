@@ -193,7 +193,55 @@ A snippet is reusable text you write yourself — a signature, boilerplate reply
 
 <div class="faq-answer" markdown="1">
 
-Yes, for text, rich text and links. Click the pencil on the row (or right-click → **Edit**, or highlight it and press **⌘E**, **Ctrl+E** on Linux) to open a small editor with Bold, Italic and Underline. **Save** replaces the entry in place, keeping its position and pin, and if it is what's on your clipboard right now the clipboard gets the edited version too. On an image with recognized text you can edit that text instead; the image itself is never changed, and files can't be edited. See [Editing an item]({{ "/usage/" | relative_url }}#editing-an-item).
+Yes, for **text**, **rich text** and **links**. Click the pencil on the row, right-click it and choose **Edit**, or highlight it and press **⌘E** (**Ctrl+E** on Linux). A small editor opens with **Bold**, **Italic** and **Underline**; **Save** (or **⌘Return** / **Ctrl+Return**) stores your change and **Cancel** (or **Esc**) throws it away. VoiceOver users get an **Edit** action on the row. On the Snippets tab the same shortcut edits the highlighted snippet. See [Edit copied items]({{ "/features/" | relative_url }}#edit-copied-items) and the [how-to]({{ "/usage/" | relative_url }}#editing-an-item).
+
+</div>
+
+</details>
+
+<details class="faq-item" markdown="1">
+
+<summary markdown="1">
+
+## What can't I edit?
+
+</summary>
+
+<div class="faq-answer" markdown="1">
+
+**Files** can't be edited, and neither can an **image without recognized text**; they get no Edit action. The image itself is never changed. If OCR is on and an image has recognized text, the row's action is **Edit Recognized Text**, which corrects only that text (so search finds your correction).
+
+</div>
+
+</details>
+
+<details class="faq-item" markdown="1">
+
+<summary markdown="1">
+
+## Does editing change my clipboard, my pins, or create duplicates?
+
+</summary>
+
+<div class="faq-answer" markdown="1">
+
+**Save** replaces the entry in place: it keeps its position in the list and stays pinned if it was. If the item you edited is what is on your clipboard right now, the clipboard gets the edited version too (without adding a history entry); if something else is on the clipboard, it is left alone. If your edit makes the item identical to another entry, the two are merged into one, pinned if either was. If an item has formatting the editor can't keep, Clipnest warns "Some formatting in this item can't be kept." and lets you choose **Save Anyway** or **Go Back**.
+
+</div>
+
+</details>
+
+<details class="faq-item" markdown="1">
+
+<summary markdown="1">
+
+## Is the editor private and accessible?
+
+</summary>
+
+<div class="faq-answer" markdown="1">
+
+Yes to both. Edits are stored on your computer like everything else, with no network involved. On the Mac the editor is hidden from screen sharing and recording, like the picker (best effort). It works entirely from the keyboard (Tab and Shift+Tab move between controls, **⌘B** / **⌘I** / **⌘U** format, **⌥Tab** types a tab character) and its controls are labelled for VoiceOver and Orca. After you close the editor, the picker takes the keyboard again and Return still pastes into your app (Mac and Linux). Full key list in the [usage guide]({{ "/usage/" | relative_url }}#editing-an-item).
 
 </div>
 

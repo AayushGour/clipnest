@@ -45,9 +45,16 @@ at any time.
   a new line; **⌘Return** (Linux **Ctrl+Return**) saves; **Esc** cancels. The
   Tag and Body fields have accessible labels, and on the Mac the buttons are
   Tab stops even with "Keyboard navigation" off.
+- The item editor's text area has an accessible name, "Text", so VoiceOver and
+  Orca announce it (macOS and Linux).
 
 ### Fixed
 
+- Linux: after saving an edit, the picker kept the edited row highlighted
+  instead of losing the selection. The highlight is re-applied after any list
+  rebuild (edit save, new capture, loading more rows); the list scrolls to the
+  selection only when you change the selection, tab or search, so wheel paging
+  and live captures don't make it jump.
 - macOS: closing the snippet editor (Save, Cancel or Esc) left the picker on
   screen but ignoring the keyboard until you reopened it with the hotkey. The
   picker now takes keys again right away, as it does after the item editor.

@@ -1,7 +1,7 @@
 ---
 layout: article
 title: Features — Clipnest Clipboard Manager
-description: Full clipboard history, instant search, pinning, reusable snippets with keyword expansion, optional on-device OCR, and a global hotkey — native on macOS and Linux (Ubuntu with GNOME).
+description: Full clipboard history, instant search, pinning, reusable snippets with keyword expansion, editing copied items, optional on-device OCR, and a global hotkey — native on macOS and Linux (Ubuntu with GNOME).
 permalink: /features/
 ---
 
@@ -59,7 +59,6 @@ Clipnest is a free, open-source, native menu-bar app for macOS and, since 1.0, L
 - **Instant search** — start typing to filter your entire copy-paste history in real time, with matches highlighted (**⌘F** to jump back to the search field).
 - **Type filters** — narrow the list to just text, images, files, or links with one click.
 - **Tabs** — **History**, **Pinned**, and **Snippets**, switchable with **⌘1** / **⌘2** / **⌘3**.
-- **Edit a copied item** — click the pencil on a text, rich text, or link row (or right-click → **Edit**) to fix it in a small editor with **Bold** / **Italic** / **Underline**. **Save** replaces the entry in place, keeping its position and pin; if it's what's on your clipboard, the clipboard gets the edited version too (no extra history entry). If the item has formatting the editor can't keep, Clipnest warns first ("Some formatting in this item can't be kept."). Images with recognized text get **Edit Recognized Text**; files can't be edited.
 - **Hover previews** — hover an item (or, with **Settings -> General -> Show preview when selecting with the keyboard** on, arrow to it) and a popover shows the full content: the image at up to 40% of screen width (with any recognized text shown below it), the full scrollable text (loaded in chunks for huge clips), or a file's name, size, and path.
 {: .detail-list}
 
@@ -91,6 +90,37 @@ Clipnest is a free, open-source, native menu-bar app for macOS and, since 1.0, L
 ![Clipnest's Pinned tab, showing pinned clipboard items kept at the top]({{ "/assets/screenshot-pinned.png" | relative_url }})
 
 </div>
+
+</div>
+
+<div class="content-panel" markdown="1">
+
+<div class="content-panel-head" markdown="1">
+
+<div class="panel-icon" aria-hidden="true">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+<path d="M4 20H8L19 9C19.8 8.2 19.8 6.8 19 6L18 5C17.2 4.2 15.8 4.2 15 5L4 16V20Z"></path>
+<line x1="13.5" y1="6.5" x2="17.5" y2="10.5"></line>
+</svg>
+</div>
+
+## Edit copied items
+
+</div>
+
+Fix a typo, trim a copy, or add a bit of formatting without pasting it somewhere else first. Open any text, rich text, or link item in a small editor, change it, and **Save**; the corrected version is what you paste next.
+
+- **What you can edit** — **text**, **rich text** (with **Bold** / **Italic** / **Underline**), and **links**. An image with recognized text gets **Edit Recognized Text**, which corrects only that text so search finds your fix; the image itself is never changed. Files, and images without recognized text, can't be edited.
+- **How to open it** — click the pencil on the row, right-click → **Edit**, use the row's **Edit** action with VoiceOver, or highlight the item and press **⌘E** (**Ctrl+E** on Linux). On the Snippets tab the same key edits the highlighted snippet.
+- **Save is in place** — the entry keeps its position and stays pinned. If it's what's on your clipboard right now, the clipboard gets the edited version too (no extra history entry); anything else on the clipboard is left alone. If your edit makes it identical to another item, the two merge into one, pinned if either was.
+- **Honest about formatting** — if an item has formatting the editor can't keep, Clipnest says "Some formatting in this item can't be kept." and lets you choose **Save Anyway** or **Go Back** (Go Back has focus first, and Esc is Go Back).
+- **Fully keyboard-driven** — **Tab** / **Shift+Tab** move between controls, **⌘Return** (**Ctrl+Return**) saves, **Esc** cancels, **⌘B** / **⌘I** / **⌘U** (**Ctrl+B** / **I** / **U**) format, and **⌥Tab** (**Ctrl+Tab**) types a literal tab.
+- **Accessible** — controls are labelled for VoiceOver and Orca, the Bold / Italic / Underline buttons report their pressed state, and the snippet editor follows the same keyboard rules.
+- **Stays out of your way** — after you close the editor, the picker takes the keyboard again and Return still pastes into your app (Mac and Linux); on the Mac the editor floats without bringing Clipnest to the front. On the Mac it's hidden from screen sharing and recording like the picker. Edits are stored locally like everything else.
+- **Linux** — select text before pressing Bold / Italic / Underline; see [Linux differences](#linux-differences).
+{: .detail-list}
+
+See [Editing an item]({{ '/usage/' | relative_url }}#editing-an-item) for step-by-step instructions.
 
 </div>
 
@@ -200,7 +230,7 @@ Everything about how Clipnest behaves lives in one Settings window (**⌘,**), a
 
 </div>
 
-Arrows to move, Return to paste, Esc to dismiss, ⌘F to search, ⌘P to pin, ⌘⌫ to delete, ⌘1/2/3 for tabs, ⌘E to edit an item or snippet, ⌘, for Settings. Both global hotkeys (⌥⌘V and ⌥⌘E) are rebindable — see [Usage]({{ '/usage/' | relative_url }}) for the full shortcut reference.
+Arrows to move, Return to paste, Esc to dismiss, ⌘F to search, ⌘P to pin, ⌘⌫ to delete, ⌘1/2/3 for tabs, ⌘E to edit an item or snippet (and ⌘Return to save, Esc to cancel, in the editor), ⌘, for Settings. Both global hotkeys (⌥⌘V and ⌥⌘E) are rebindable — see [Usage]({{ '/usage/' | relative_url }}) for the full shortcut reference.
 
 </div>
 

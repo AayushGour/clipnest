@@ -166,7 +166,7 @@ Save a signature, a boilerplate reply, or a command as a **snippet**, give it a 
 </svg>
 </span>
 <h3>Edit what you copied</h3>
-<p>fix a typo or trim a copy in a small editor with Bold, Italic and Underline, then paste the corrected version. Press ⌘E (Ctrl+E on Linux) on a highlighted item.</p>
+<p>fix a typo or trim a copy in a small editor with Bold, Italic and Underline, or correct the recognized text of a screenshot, then paste the corrected version. Press ⌘E (Ctrl+E on Linux) on a highlighted item; it works fully from the keyboard and with VoiceOver or Orca. <a href="{{ "/features/" | relative_url }}#edit-copied-items">How editing works</a>.</p>
 </li>
 <li>
 <span class="box-grid-icon" aria-hidden="true">
