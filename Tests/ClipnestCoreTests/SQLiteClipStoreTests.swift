@@ -504,4 +504,67 @@ struct SQLiteClipStoreTests {
     #expect(all.count == 1)
     #expect(all.first?.contentHash == "shared-hash")
   }
+
+  // MARK: - updateContent (edit copied items)
+
+  @Test("updateContent replaces content fields and keeps position, pin and metadata")
+  func updateContentReplacesFieldsAndKeepsPositionPinAndMetadata() async throws {
+    try await withTempStore(
+      ClipStoreContractTests.updateContentReplacesFieldsAndKeepsPositionPinAndMetadata)
+  }
+
+  @Test("updateContent on an unknown id throws .notFound")
+  func updateContentUnknownIDThrowsNotFound() async throws {
+    try await withTempStore(ClipStoreContractTests.updateContentUnknownIDThrowsNotFound)
+  }
+
+  @Test("updateContent makes new text searchable and old text not")
+  func updateContentMakesNewTextSearchableAndOldTextNot() async throws {
+    try await withTempStore(ClipStoreContractTests.updateContentMakesNewTextSearchableAndOldTextNot)
+  }
+
+  @Test("updateContent keeps recognized text searchable")
+  func updateContentKeepsRecognizedTextSearchable() async throws {
+    try await withTempStore(ClipStoreContractTests.updateContentKeepsRecognizedTextSearchable)
+  }
+
+  @Test("updateContent merges with another item on hash collision")
+  func updateContentMergesOnHashCollision() async throws {
+    try await withTempStore(ClipStoreContractTests.updateContentMergesOnHashCollision)
+  }
+
+  @Test("updateContent merge pins the survivor when only the merged-away item was pinned")
+  func updateContentMergePinsSurvivorWhenOnlyMergedAwayWasPinned() async throws {
+    try await withTempStore(
+      ClipStoreContractTests.updateContentMergePinsSurvivorWhenOnlyMergedAwayWasPinned)
+  }
+
+  @Test("updateContent merge of an unpinned pair stays unpinned")
+  func updateContentMergeOfUnpinnedPairStaysUnpinned() async throws {
+    try await withTempStore(ClipStoreContractTests.updateContentMergeOfUnpinnedPairStaysUnpinned)
+  }
+
+  @Test("updateContent with an unchanged hash does not merge with itself")
+  func updateContentWithUnchangedHashDoesNotMergeWithSelf() async throws {
+    try await withTempStore(
+      ClipStoreContractTests.updateContentWithUnchangedHashDoesNotMergeWithSelf)
+  }
+
+  @Test("updateContent deletes the old blob when nothing references it")
+  func updateContentDeletesOldBlobWhenUnreferenced() async throws {
+    try await withTempBlobAwareStore(
+      ClipStoreContractTests.updateContentDeletesOldBlobWhenUnreferenced)
+  }
+
+  @Test("updateContent keeps the old blob when another item references it")
+  func updateContentKeepsOldBlobWhenAnotherItemReferencesIt() async throws {
+    try await withTempBlobAwareStore(
+      ClipStoreContractTests.updateContentKeepsOldBlobWhenAnotherItemReferencesIt)
+  }
+
+  @Test("updateContent merge does not delete a blob the survivor now uses")
+  func updateContentMergeDoesNotDeleteSharedBlob() async throws {
+    try await withTempBlobAwareStore(
+      ClipStoreContractTests.updateContentMergeDoesNotDeleteSharedBlob)
+  }
 }

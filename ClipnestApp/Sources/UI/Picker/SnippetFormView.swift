@@ -20,7 +20,18 @@
 // (`SnippetExpander`). No schema change (both fields already exist).
 // `SnippetFormMode.createFromClip(_:)` prefills **Body** with a copied
 // item's content ("Save as Snippet"); the user fills in the Tag.
+//
+// Keyboard (T-EDIT15), same rules as the item editor (`ItemEditorView`): the
+// Tag field takes the initial focus; Tab / Shift+Tab walk Tag, Body, Cancel,
+// Save and wrap (a disabled Save is skipped; `SnippetEditFocusOrder` is the
+// shared definition, the window rebuilds the key-view loop geometrically).
+// The Body is the item editor's `EditorTextView` in plain-text mode (Tab moves
+// focus, ⌥Tab types a tab, Esc cancels) and the buttons are
+// `KeyboardFocusableButton`s, so they are Tab stops even with System
+// Settings -> Keyboard navigation off. Return in the Tag saves, Return in the
+// Body is a newline, ⌘Return saves from anywhere, Esc cancels.
 
+import AppKit
 import ClipnestCore
 import ClipnestViewModels
 import SwiftUI
@@ -50,10 +61,11 @@ struct SnippetFormView: View {
   // for `.create`) seeds the initial values once, at construction; the
   // user edits these freely and nothing round-trips to the store until
   // "Save" is pressed. `tag` maps onto `Snippet.title` at save time — see
-  // the file's doc comment. `bodyText` (not `body`) to avoid colliding
-  // with SwiftUI's required `var body: some View` below.
+  // the file's doc comment. The Body's text lives in the text view; its
+  // controller mirrors it (`bodyController.plainText`).
   @State private var tag: String
-  @State private var bodyText: String
+  @StateObject private var bodyController: RichTextEditorController
+  private let initialBody: NSAttributedString
   @FocusState private var tagFocused: Bool
 
   init(
@@ -68,24 +80,31 @@ struct SnippetFormView: View {
     self.expandShortcut = expandShortcut
     self.onSave = onSave
     self.onCancel = onCancel
+    let initialTag: String
+    let initialBodyText: String
     switch mode {
     case .create:
-      _tag = State(initialValue: "")
-      _bodyText = State(initialValue: "")
+      initialTag = ""
+      initialBodyText = ""
     case .createFromClip(let prefillBody):
-      _tag = State(initialValue: "")
-      _bodyText = State(initialValue: prefillBody)
+      initialTag = ""
+      initialBodyText = prefillBody
     case .edit(let snippet):
-      _tag = State(initialValue: snippet.title)
-      _bodyText = State(initialValue: snippet.body)
+      initialTag = snippet.title
+      initialBodyText = snippet.body
     }
+    _tag = State(initialValue: initialTag)
+    initialBody = NSAttributedString(
+      string: initialBodyText, attributes: MacEditableRichText.defaultAttributes)
+    _bodyController = StateObject(
+      wrappedValue: RichTextEditorController(initialText: initialBodyText))
   }
 
   /// Both fields are required — a snippet needs a name to find it by and
   /// content to be worth pasting.
   private var isSaveDisabled: Bool {
     tag.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-      || bodyText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+      || bodyController.plainText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
       || currentTagError != nil
   }
 
@@ -93,12 +112,16 @@ struct SnippetFormView: View {
 
   var body: some View {
     VStack(alignment: .leading, spacing: 12) {
-      Text(mode.isNew ? "New Snippet" : "Edit Snippet")
+      Text(SnippetEditStrings.title(isNew: mode.isNew))
         .font(.headline)
 
-      TextField("Tag", text: $tag)
+      TextField(SnippetEditStrings.tagLabel, text: $tag)
         .textFieldStyle(.roundedBorder)
         .focused($tagFocused)
+        .accessibilityLabel(SnippetEditStrings.tagLabel)
+        .accessibilityIdentifier(SnippetEditControl.tag.rawValue)
+        // Return in the Tag saves (when enabled); in the Body it is a newline.
+        .onSubmit { if !isSaveDisabled { save() } }
 
       let note = SnippetTagValidation.fieldNote(
         error: currentTagError, expandShortcut: expandShortcut)
@@ -107,21 +130,28 @@ struct SnippetFormView: View {
         .foregroundStyle(note.isError ? Color.red : Color.secondary)
         .fixedSize(horizontal: false, vertical: true)
 
-      TextEditor(text: $bodyText)
-        .font(.body)
-        .frame(minHeight: 160)
-        .overlay {
-          RoundedRectangle(cornerRadius: 6)
-            .stroke(Color.secondary.opacity(0.3))
-        }
+      RichTextEditorView(
+        controller: bodyController, initial: initialBody, isRichText: false,
+        onCancel: onCancel, identifier: SnippetEditControl.body.rawValue,
+        accessibilityLabel: SnippetEditStrings.bodyLabel, takesInitialFocus: false
+      )
+      .frame(minHeight: 160)
+      .overlay {
+        RoundedRectangle(cornerRadius: 6)
+          .stroke(Color.secondary.opacity(0.3))
+      }
 
       HStack {
         Spacer()
-        Button("Cancel", role: .cancel, action: onCancel)
-          .keyboardShortcut(.cancelAction)
-        Button("Save", action: save)
-          .keyboardShortcut(.defaultAction)
-          .disabled(isSaveDisabled)
+        EditorButton(
+          identifier: SnippetEditControl.cancel.rawValue,
+          accessibilityLabel: ItemEditStrings.cancel, title: ItemEditStrings.cancel,
+          keyEquivalent: EditorKeyEquivalent.escape, action: onCancel)
+        EditorButton(
+          identifier: SnippetEditControl.save.rawValue,
+          accessibilityLabel: ItemEditStrings.save, title: ItemEditStrings.save,
+          isEnabled: !isSaveDisabled, keyEquivalent: EditorKeyEquivalent.returnKey,
+          activatesOnCommandReturn: true, action: save)
       }
     }
     .padding(20)
@@ -137,7 +167,7 @@ struct SnippetFormView: View {
   private func save() {
     guard !isSaveDisabled else { return }
     let trimmedTag = tag.trimmingCharacters(in: .whitespacesAndNewlines)
-    let trimmedBody = bodyText.trimmingCharacters(in: .whitespacesAndNewlines)
+    let trimmedBody = bodyController.plainText.trimmingCharacters(in: .whitespacesAndNewlines)
     // The Tag is BOTH the snippet's label (`title`) and its expansion
     // keyword (`keyword`): typing the Tag in any app, selecting it, and
     // pressing the expand hotkey (⌥⌘E) replaces it with the Body (see

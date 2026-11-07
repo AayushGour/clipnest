@@ -12,6 +12,7 @@ which constructs `PickerViewModel`/`SettingsStore` and owns their lifetime.
 - [`PickerWindow`](#pickerwindow)
 - [Row actions and the right-click context menu](#row-actions-and-the-right-click-context-menu)
 - [`SnippetEditorWindow`](#snippeteditorwindow)
+- [`ItemEditorWindow`](#itemeditorwindow)
 - [`SettingsWindow`](#settingswindow)
 - [`GTKClipboardCrashNoticeInfo` and detection](#gtkclipboardcrashnoticeinfo-and-detection)
 - [`WelcomeWindow`](#welcomewindow)
@@ -97,12 +98,13 @@ the human-readable list also shown in Settings → Shortcuts):
 | Ctrl+1 / 2 / 3 | Switch to History / Pinned / Snippets |
 | Ctrl+S | Save highlighted item as a new snippet (History/Pinned) |
 | Ctrl+N | New blank snippet (Snippets tab only) |
-| Ctrl+Shift+E | Edit the highlighted snippet (Snippets tab only) — `PickerViewModel.editHighlightedSnippet()` |
+| Ctrl+E | Edit the highlighted item (History/Pinned) or snippet (Snippets) via `PickerViewModel.editHighlighted()` |
+| Ctrl+Shift+E | Edit the highlighted snippet (Snippets tab only) — `PickerViewModel.editHighlighted()` behind a Snippets-tab guard |
 | Ctrl+] / Ctrl+[ | Next / previous type filter (`PickerKeyAction.cycleFilter(forward:)`; activates the neighbouring chip, wrapping; no-op on Snippets). Order and names come from the shared `KindFilterOptions` |
 | Ctrl+Y | Toggle the preview of the highlighted row (`PickerViewModel.togglePreviewForHighlighted()`), even when "show preview on keyboard selection" is off. Shadows GtkText's redo in the search entry |
+| Ctrl+, | Open Settings (dismisses the picker first) |
 
 Assistive technology (Orca): every list row's `GtkListBoxRow` gets an accessible label from `RowAccessibility.itemLabel` / `snippetLabel`; tab buttons ("History tab"), filter chips ("Images filter") and the per-row action buttons carry explicit accessible labels, and a filter change is announced via `GTKAccessibility.announce` (GTK >= 4.14 only). The active filter's name is also shown as text beside the icon-only chips. GTK has no custom-actions API, so the row actions are the labelled buttons.
-| Ctrl+, | Open Settings (dismisses the picker first) |
 
 ### Delete-vs-search-field parity with macOS (T-KBPARITY3)
 
@@ -232,7 +234,7 @@ Gating is pure, GTK-free, and unit-tested — `ItemRowActions`/
 
 ```swift
 public enum ItemRowAction: Equatable, Sendable {
-  case togglePin, saveAsSnippet, copyRecognizedText, delete
+  case togglePin, edit, editRecognizedText, saveAsSnippet, copyRecognizedText, delete
 }
 public struct ItemRowActionEntry: Equatable, Sendable {
   public let action: ItemRowAction
@@ -246,10 +248,15 @@ public enum ItemRowActions {
 ```
 
 - **History/Pinned row buttons** (`buttons(for:)`, rendered by
-  `PickerWindow+Rows.swift`): always Pin/Unpin and Delete; "Save as Snippet"
-  only when `item.supportsSaveAsSnippet` (`.text`/`.link`) — no dead button
-  renders for `.richText`/`.image`/`.file`. "Copy Recognized Text" never
-  appears as a button, matching `ItemRow.rowActions`.
+  `PickerWindow+Rows.swift`): always Pin/Unpin and Delete (so at most four
+  buttons in total); "Edit" (`.edit`) for `.text`/`.richText`/`.link` and
+  "Edit Recognized Text" (`.editRecognizedText`) for an `.image` with OCR text,
+  both from `ItemEditStrings.actionLabel(for:)`, so `.file` and an `.image`
+  without OCR text get none; "Save as Snippet" only when
+  `item.supportsSaveAsSnippet` (`.text`/`.link`) — no dead button renders for
+  `.richText`/`.image`/`.file`. Order: Pin/Unpin, Edit, Save as Snippet,
+  Delete. "Copy Recognized Text" never appears as a button, matching
+  `ItemRow.rowActions`.
 - **History/Pinned right-click menu** (`contextMenu(for:)`, rendered by
   `PickerWindow+ContextMenu.swift`): everything `buttons(for:)` offers, plus
   "Copy Recognized Text" when `item.hasRecognizedText` is true.
@@ -260,9 +267,12 @@ public enum ItemRowActions {
   `PickerWindow+RowActions.swift`) used by BOTH the always-visible buttons
   and the context menu, so each action is wired to `PickerViewModel` exactly
   once: `.togglePin` → `togglePin(_:)`, `.saveAsSnippet` →
-  `presentSaveAsSnippetForm(from:)`, `.copyRecognizedText` →
-  `copyRecognizedText(from:)`, `.delete`/`.edit` → `delete(_:)`/
-  `deleteSnippet(_:)`/`presentEditSnippetForm(_:)`.
+  `presentSaveAsSnippetForm(from:)`, `.edit`/`.editRecognizedText` →
+  `presentEditForm(for:)`, `.copyRecognizedText` →
+  `copyRecognizedText(from:)`, `ItemRowAction.delete` → `delete(_:)`. The
+  Snippets tab has its own `SnippetRowAction` enum: `SnippetRowAction.delete`
+  → `deleteSnippet(_:)` and `SnippetRowAction.edit` →
+  `presentEditSnippetForm(_:)`.
 - The context menu is a plain `GtkPopover` of `GtkButton`s (built fresh per
   right-click via `gtk_popover_set_child`) rather than a `GtkPopoverMenu`/
   `GMenu` model — this module has no existing `GMenu`/`GAction`
@@ -359,6 +369,59 @@ public enum ExpandSnippetShortcutLabel {
   counterpart of macOS's `panel.makeKey(); viewModel.refocusSearchField()`
   (presenting this window takes window-manager focus away from the picker,
   same as macOS's editor making itself key).
+
+## `ItemEditorWindow`
+
+The GTK4 popup behind the **Edit** / **Edit Recognized Text** row actions
+(`Sources/ClipnestGTK/Window/ItemEditorWindow.swift`, `+RichText.swift`),
+the counterpart of macOS's `ItemEditorWindow`. It is the presenter for
+`PickerViewModel`'s required `presentItemEditor` seam (no default, so a
+missing wiring is a build error).
+
+```swift
+public final class ItemEditorWindow: @unchecked Sendable {
+  public init(blobFromRuns: @escaping @Sendable ([StyledRun]) -> Data)
+  public var isVisible: Bool { get }
+  public func bringToFront()
+  public func show(
+    mode: ItemEditMode,                  // .content(item) / .recognizedText(item)
+    initial: EditableRichText,
+    transientParent: OpaquePointer?,
+    save: @escaping @MainActor (EditorOutput) async -> ItemEditOutcome,
+    onSaved: @escaping @MainActor () -> Void,
+    onClose: @escaping () -> Void
+  )
+}
+```
+
+- One `GtkTextView` over a tag table is the editor for text, rich text and
+  links. A **Bold / Italic / Underline** toolbar sits above it in content mode;
+  recognized-text mode (`ItemEditMode.recognizedText`) hides the toolbar and
+  edits plain text.
+- **Toolbar limitation:** each button toggles its style on the current
+  *selection*. With nothing selected the buttons do nothing, because the GTK
+  editor keeps no "typing style" (macOS applies an empty-selection toggle to
+  what you type next). Select the text first.
+- **Supported formatting (Linux subset):** bold, italic, underline, colour,
+  font family and font size, read from and written to the item's HTML
+  (`HTMLStyledRunCodec`, bridged by `LinuxEditableRichText`). Anything else in
+  a stored item (tables, lists, images, ...) makes the item lossy.
+- **Lossy items:** on Save the buttons are replaced by an inline "Some formatting
+  in this item can't be kept." confirmation with **Save Anyway** / **Go Back**
+  (strings from `ItemEditStrings`). An item that round-trips cleanly gets no
+  warning.
+- **Outcomes** are not decided here: `ItemEditOutcomePresentation` (shared
+  with macOS) gives the message, whether to refresh the list and whether to
+  close. `.itemNoLongerExists` shows "This item no longer exists." and the
+  popup stays open; only a clean save closes it.
+- **Wayland:** the `save` closure may write the system clipboard (when the
+  edited item is what is on the clipboard), and mutter drops a clipboard write
+  from a client without keyboard focus. The window therefore stays open and
+  focused until `save` returns, and the hide is deferred to a GLib idle.
+- **Accessibility:** GTK has no custom accessibility action here; the edit
+  affordance is a labelled row button and a labelled context-menu entry. macOS
+  additionally exposes a VoiceOver custom action.
+- There is no keyboard shortcut for Edit on either platform.
 
 ## `SettingsWindow`
 

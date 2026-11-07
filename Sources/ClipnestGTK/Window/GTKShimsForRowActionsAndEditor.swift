@@ -45,6 +45,11 @@ func gtk_widget_set_sensitive(_ widget: OpaquePointer, _ sensitive: Int32) {
 }
 
 // swift-format-ignore: AlwaysUseLowerCamelCase
+func gtk_widget_get_sensitive(_ widget: OpaquePointer) -> Int32 {
+  gtk_widget_get_sensitive(gtkPointer(widget) as UnsafeMutablePointer<GtkWidget>)
+}
+
+// swift-format-ignore: AlwaysUseLowerCamelCase
 func gtk_widget_get_visible(_ widget: OpaquePointer) -> Int32 {
   gtk_widget_get_visible(gtkPointer(widget) as UnsafeMutablePointer<GtkWidget>)
 }
@@ -80,6 +85,24 @@ func gtk_text_view_get_buffer(_ textView: OpaquePointer) -> OpaquePointer {
 // swift-format-ignore: AlwaysUseLowerCamelCase
 func gtk_text_view_set_wrap_mode(_ textView: OpaquePointer, _ mode: GtkWrapMode) {
   gtk_text_view_set_wrap_mode(gtkPointer(textView) as UnsafeMutablePointer<GtkTextView>, mode)
+}
+
+// swift-format-ignore: AlwaysUseLowerCamelCase
+func gtk_text_view_set_editable(_ textView: OpaquePointer, _ editable: Int32) {
+  gtk_text_view_set_editable(gtkPointer(textView) as UnsafeMutablePointer<GtkTextView>, editable)
+}
+
+// swift-format-ignore: AlwaysUseLowerCamelCase
+func gtk_text_view_set_accepts_tab(_ textView: OpaquePointer, _ acceptsTab: Int32) {
+  gtk_text_view_set_accepts_tab(
+    gtkPointer(textView) as UnsafeMutablePointer<GtkTextView>, acceptsTab)
+}
+
+// swift-format-ignore: AlwaysUseLowerCamelCase
+func gtk_window_set_default_widget(_ window: OpaquePointer, _ widget: OpaquePointer?) {
+  gtk_window_set_default_widget(
+    gtkPointer(window) as UnsafeMutablePointer<GtkWindow>,
+    widget.map { gtkPointer($0) as UnsafeMutablePointer<GtkWidget> })
 }
 
 // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -129,4 +152,167 @@ func gtk_text_buffer_get_text(
 // swift-format-ignore: AlwaysUseLowerCamelCase
 func gtk_gesture_click_new() -> OpaquePointer {
   gtk_gesture_click_new()!
+}
+
+// MARK: - GtkTextBuffer styling (T-EDIT9 item editor)
+//
+// `GtkTextTag` properties are set through `g_object_set_property` with an
+// explicit `GValue`, not `g_object_set`/`gtk_text_buffer_create_tag` — both are
+// C variadics, which Swift cannot call. Fundamental GTypes are
+// `ordinal << G_TYPE_FUNDAMENTAL_SHIFT`; the `G_TYPE_*` macros that compute
+// that are not imported, so the ordinals are named here once.
+
+enum GTKTextStyling {
+  private static let fundamentalShift: GType = 2
+  private static let intOrdinal: GType = 6
+  private static let stringOrdinal: GType = 16
+  private static let doubleOrdinal: GType = 15
+  /// `G_TYPE_STRING`.
+  static var stringType: GType { stringOrdinal << fundamentalShift }
+
+  /// `PANGO_WEIGHT_BOLD`, `PANGO_STYLE_ITALIC`, `PANGO_UNDERLINE_SINGLE`.
+  private static let boldWeight: Int32 = 700
+  private static let italicStyle: Int32 = 2
+  private static let singleUnderline: Int32 = 1
+
+  /// Creates a named tag in `buffer`'s tag table styled by `name` (one of
+  /// the `ItemEditorTagNames` forms), or returns the existing one. Returns
+  /// nil for a name that carries no style (unknown prefix, bad colour).
+  static func tag(named name: String, in buffer: OpaquePointer) -> OpaquePointer? {
+    let textBuffer: UnsafeMutablePointer<GtkTextBuffer> = gtkPointer(buffer)
+    let table = gtk_text_buffer_get_tag_table(textBuffer)
+    if let existing = gtk_text_tag_table_lookup(table, name) { return OpaquePointer(existing) }
+    guard let tag = gtk_text_tag_new(name) else { return nil }
+    guard configure(tag, for: name) else {
+      g_object_unref(UnsafeMutableRawPointer(tag))
+      return nil
+    }
+    gtk_text_tag_table_add(table, tag)
+    // The table holds its own reference; drop the creation reference.
+    g_object_unref(UnsafeMutableRawPointer(tag))
+    return OpaquePointer(tag)
+  }
+
+  private static func configure(_ tag: UnsafeMutablePointer<GtkTextTag>, for name: String) -> Bool {
+    switch name {
+    case ItemEditorTagNames.bold: return setInt(tag, "weight", boldWeight)
+    case ItemEditorTagNames.italic:
+      return setEnum(tag, "style", pango_style_get_type(), italicStyle)
+    case ItemEditorTagNames.underline:
+      return setEnum(tag, "underline", pango_underline_get_type(), singleUnderline)
+    default:
+      if name.hasPrefix(ItemEditorTagNames.colorPrefix) {
+        return setColor(tag, String(name.dropFirst(ItemEditorTagNames.colorPrefix.count)))
+      }
+      if name.hasPrefix(ItemEditorTagNames.familyPrefix) {
+        let family = String(name.dropFirst(ItemEditorTagNames.familyPrefix.count))
+        return setString(tag, "family", family)
+      }
+      if name.hasPrefix(ItemEditorTagNames.sizePrefix),
+        let points = Double(name.dropFirst(ItemEditorTagNames.sizePrefix.count))
+      {
+        return setDouble(tag, "size-points", points)
+      }
+      return false
+    }
+  }
+
+  private static func withValue(
+    _ tag: UnsafeMutablePointer<GtkTextTag>, _ property: String, type: GType,
+    _ fill: (UnsafeMutablePointer<GValue>) -> Void
+  ) -> Bool {
+    var value = GValue()
+    g_value_init(&value, type)
+    defer { g_value_unset(&value) }
+    fill(&value)
+    g_object_set_property(
+      gtkPointer(OpaquePointer(tag)) as UnsafeMutablePointer<GObject>, property, &value)
+    return true
+  }
+
+  private static func setInt(
+    _ tag: UnsafeMutablePointer<GtkTextTag>, _ property: String, _ v: Int32
+  ) -> Bool {
+    withValue(tag, property, type: intOrdinal << fundamentalShift) { g_value_set_int($0, v) }
+  }
+
+  /// `style` and `underline` are GObject ENUM properties: GLib registers
+  /// enum -> int transforms but not int -> enum, so a `gint` GValue would be
+  /// rejected (GLib-CRITICAL) and the tag would have no effect.
+  private static func setEnum(
+    _ tag: UnsafeMutablePointer<GtkTextTag>, _ property: String, _ type: GType, _ v: Int32
+  ) -> Bool { withValue(tag, property, type: type) { g_value_set_enum($0, v) } }
+
+  /// Test seam: the (weight, style, underline) a tag named `name` ends up
+  /// with, read back through GObject, or nil if no tag was created.
+  /// GtkTextTag/GtkTextBuffer need no display.
+  static func readBackStyle(forTagNamed name: String)
+    -> (weight: Int32, style: Int32, underline: Int32)?
+  {
+    let buffer = OpaquePointer(gtk_text_buffer_new(nil)!)
+    defer { g_object_unref(UnsafeMutableRawPointer(buffer)) }
+    guard let tag = tag(named: name, in: buffer) else { return nil }
+    func read(_ property: String, _ type: GType) -> Int32 {
+      var value = GValue()
+      g_value_init(&value, type)
+      defer { g_value_unset(&value) }
+      g_object_get_property(
+        gtkPointer(tag) as UnsafeMutablePointer<GObject>, property, &value)
+      return type == intOrdinal << fundamentalShift
+        ? g_value_get_int(&value) : g_value_get_enum(&value)
+    }
+    return (
+      read("weight", intOrdinal << fundamentalShift), read("style", pango_style_get_type()),
+      read("underline", pango_underline_get_type())
+    )
+  }
+
+  private static func setDouble(
+    _ tag: UnsafeMutablePointer<GtkTextTag>, _ property: String, _ v: Double
+  ) -> Bool {
+    withValue(tag, property, type: doubleOrdinal << fundamentalShift) { g_value_set_double($0, v) }
+  }
+
+  private static func setString(
+    _ tag: UnsafeMutablePointer<GtkTextTag>, _ property: String, _ v: String
+  ) -> Bool {
+    withValue(tag, property, type: stringOrdinal << fundamentalShift) { g_value_set_string($0, v) }
+  }
+
+  /// `foreground-rgba` is a boxed `GdkRGBA`, so it needs the boxed GType
+  /// (`gdk_rgba_get_type()`), not a fundamental ordinal.
+  private static func setColor(_ tag: UnsafeMutablePointer<GtkTextTag>, _ hex: String) -> Bool {
+    var rgba = GdkRGBA()
+    guard gdk_rgba_parse(&rgba, hex) != 0 else { return false }
+    var value = GValue()
+    g_value_init(&value, gdk_rgba_get_type())
+    defer { g_value_unset(&value) }
+    g_value_set_boxed(&value, &rgba)
+    g_object_set_property(
+      gtkPointer(OpaquePointer(tag)) as UnsafeMutablePointer<GObject>, "foreground-rgba", &value)
+    return true
+  }
+}
+
+// MARK: - Editor popups (T-EDIT14 / T-EDIT15)
+
+/// A literal tab at the cursor, replacing any selection. Used for Ctrl+Tab in
+/// the item editor and the snippet Body (both set `accepts-tab` off, so Tab
+/// moves focus).
+func gtkInsertLiteralTab(into buffer: OpaquePointer) {
+  let pointer: UnsafeMutablePointer<GtkTextBuffer> = gtkPointer(buffer)
+  gtk_text_buffer_delete_selection(pointer, 1, 1)
+  gtk_text_buffer_insert_at_cursor(pointer, "\t", 1)
+}
+
+/// Sets the accessible name Orca reads for `widget` (GTK_ACCESSIBLE_PROPERTY_LABEL).
+/// Uses the non-variadic `_value` form: Swift can't call the variadic one.
+func gtkSetAccessibleLabel(_ widget: OpaquePointer, _ label: String) {
+  var property = GTK_ACCESSIBLE_PROPERTY_LABEL
+  var value = GValue()
+  g_value_init(&value, GTKTextStyling.stringType)
+  defer { g_value_unset(&value) }
+  g_value_set_string(&value, label)
+  gtk_accessible_update_property_value(
+    widget, 1, &property, &value)
 }

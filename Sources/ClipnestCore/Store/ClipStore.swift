@@ -27,7 +27,8 @@ public enum ClipScope: Sendable, Equatable {
   case pinned
 }
 
-/// CRUD + dedup + query access to captured clipboard history.
+/// CRUD + dedup + query + edit-in-place (`updateContent`) access to captured
+/// clipboard history.
 ///
 /// Per project-context.md decision D6, the concrete implementation today is
 /// the in-memory `InMemoryClipStore`; a SwiftData-backed implementation is
@@ -87,6 +88,27 @@ public protocol ClipStore: Sendable {
   /// operation, not a scrolling list.
   func fetchImagesNeedingRecognition() async throws -> [ClipItem]
 
+  /// Replaces the content of the item `id` (edit-in-place): `kind`,
+  /// `previewText`, `contentHash`, `byteSize` and `blobPath` take `update`'s
+  /// values; everything else (`createdAt`, pin state, source app, `ocrText`)
+  /// is kept, and the search index is recomputed from the new `previewText`
+  /// plus the kept `ocrText`.
+  ///
+  /// If a DIFFERENT item already has `update.contentHash` it is deleted and
+  /// merged into this one: the survivor is pinned if either was, keeps the
+  /// earlier non-nil `pinnedAt`, and the deleted item's id is returned as
+  /// `mergedAwayID`. An update whose hash equals the item's own hash is an
+  /// in-place rewrite, never a self-merge.
+  ///
+  /// Blob cleanup runs only after the store write succeeded: the edited
+  /// item's old `blobPath` and the merged-away item's `blobPath` are deleted
+  /// unless some remaining item (the survivor included) still references them.
+  ///
+  /// Only the edit flow calls this; `Paster` and the picker UI never do.
+  /// - Throws: `ClipStoreError.notFound` if no item with that `id` exists.
+  func updateContent(_ id: UUID, with update: ClipContentUpdate) async throws
+    -> ClipContentUpdateResult
+
   /// Deletes the item with the given `id`, and its blob if it has one (via
   /// `BlobStore.delete`) — no orphaned blobs left on disk.
   /// - Throws: `ClipStoreError.notFound` if no item with that `id` exists.
@@ -117,9 +139,14 @@ public protocol ClipStore: Sendable {
 /// conformance too, and should reuse this exact cleanup policy rather than
 /// reimplementing it — this function's body/behavior is unchanged.
 public func deleteBlobs(for items: [ClipItem], using blobStore: BlobStore) throws {
+  try deleteBlobs(atPaths: items.compactMap(\.blobPath), using: blobStore)
+}
+
+/// The collect-then-throw loop behind `deleteBlobs(for:using:)` and
+/// `deleteOrphanedBlobs(candidates:stillReferenced:using:)`.
+private func deleteBlobs(atPaths blobPaths: [String], using blobStore: BlobStore) throws {
   var failedBlobPaths: [String] = []
-  for item in items {
-    guard let blobPath = item.blobPath else { continue }
+  for blobPath in blobPaths {
     do {
       try blobStore.delete(blobPath: blobPath)
     } catch {
@@ -128,5 +155,61 @@ public func deleteBlobs(for items: [ClipItem], using blobStore: BlobStore) throw
   }
   guard failedBlobPaths.isEmpty else {
     throw ClipStoreError.ioFailure(underlying: "failed to delete \(failedBlobPaths.count) blob(s)")
+  }
+}
+
+/// Deletes each blob in `candidates` (nils skipped, duplicates deleted once)
+/// unless it is in `stillReferenced` — the blobs a store write just stopped
+/// referencing. Same collect-failures-then-throw-once policy as
+/// `deleteBlobs(for:using:)` (they share one loop): never aborts mid-cleanup,
+/// never swallows a failure.
+public func deleteOrphanedBlobs(
+  candidates: [String?], stillReferenced: Set<String>, using blobStore: BlobStore
+) throws {
+  var seen = Set<String>()
+  let orphans = candidates.compactMap { $0 }.filter {
+    !stillReferenced.contains($0) && seen.insert($0).inserted
+  }
+  try deleteBlobs(atPaths: orphans, using: blobStore)
+}
+
+/// The subset of `candidates` (nils skipped) a post-commit cleanup must NOT
+/// delete: those `isReferenced` reports referenced, plus any whose check
+/// throws. The write has committed, so when we cannot tell, keeping a possibly
+/// orphaned file is the safe side; deleting a blob a committed row references
+/// is data loss.
+public func blobPathsKeptAfterCommit(
+  candidates: [String?], isReferenced: (String) throws -> Bool
+) -> Set<String> {
+  var kept = Set<String>()
+  for path in Set(candidates.compactMap { $0 }) {
+    do {
+      if try isReferenced(path) { kept.insert(path) }
+    } catch {
+      orphanCleanupLogger.error(
+        "Blob reference check after committed write failed; keeping blob: \(String(describing: error))"
+      )
+      kept.insert(path)
+    }
+  }
+  return kept
+}
+
+private let orphanCleanupLogger = ClipnestLogger(
+  subsystem: ClipnestLog.subsystem, category: "ClipStoreBlobCleanup")
+
+/// `deleteOrphanedBlobs` for use AFTER a store write has committed: the new
+/// state is already durable, so a failed blob delete is only a leaked file, not
+/// a failed operation. Logs the error description (never clipboard content) and
+/// returns normally so the caller reports success.
+public func deleteOrphanedBlobsAfterCommit(
+  candidates: [String?], stillReferenced: Set<String>, using blobStore: BlobStore
+) {
+  do {
+    try deleteOrphanedBlobs(
+      candidates: candidates, stillReferenced: stillReferenced, using: blobStore)
+  } catch {
+    orphanCleanupLogger.error(
+      "Orphaned blob cleanup after committed write failed: \(String(describing: error))")
   }
 }

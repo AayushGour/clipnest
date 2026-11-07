@@ -10,13 +10,13 @@
 // distinct from the GLOBAL snippet-expansion hotkey ⌥⌘E, which is handled by
 // the system and additionally excluded here by rejecting ⌥):
 //   ⌘]  next type filter     ⌘[  previous type filter
-//   ⌘E  edit highlighted snippet (Snippets tab)
+//   (⌘E, edit highlighted item/snippet, is handled in `PickerView.handle(_:)`
+//   via `PickerViewModel.editHighlighted()` — it works on every tab.)
 //   ⌘Y  toggle preview of the highlighted row (Quick Look's mnemonic; Space
 //       is unusable because it types into the always-focused search field)
 public enum PickerCommandShortcut: Equatable, Sendable {
   case nextFilter
   case previousFilter
-  case editSnippet
   case togglePreview
 
   /// The command for ⌘+`character` pressed with exactly the given extra
@@ -28,7 +28,6 @@ public enum PickerCommandShortcut: Equatable, Sendable {
     switch character {
     case "]": return .nextFilter
     case "[": return .previousFilter
-    case "e", "E": return .editSnippet
     case "y", "Y": return .togglePreview
     default: return nil
     }

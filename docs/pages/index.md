@@ -161,6 +161,16 @@ Save a signature, a boilerplate reply, or a command as a **snippet**, give it a 
 <li>
 <span class="box-grid-icon" aria-hidden="true">
 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+<path d="M4 20H8L19 9C19.8 8.2 19.8 6.8 19 6L18 5C17.2 4.2 15.8 4.2 15 5L4 16V20Z"></path>
+<line x1="13.5" y1="6.5" x2="17.5" y2="10.5"></line>
+</svg>
+</span>
+<h3>Edit what you copied</h3>
+<p>fix a typo or trim a copy in a small editor with Bold, Italic and Underline, or correct the recognized text of a screenshot, then paste the corrected version. Press ⌘E (Ctrl+E on Linux) on a highlighted item; it works fully from the keyboard and with VoiceOver or Orca. <a href="{{ "/features/" | relative_url }}#edit-copied-items">How editing works</a>.</p>
+</li>
+<li>
+<span class="box-grid-icon" aria-hidden="true">
+<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
 <path d="M11 3H5C3.9 3 3 3.9 3 5V11C3 11.5 3.2 12 3.6 12.4L11.6 20.4C12.4 21.2 13.6 21.2 14.4 20.4L20.4 14.4C21.2 13.6 21.2 12.4 20.4 11.6L12.4 3.6C12 3.2 11.5 3 11 3Z"></path>
 <circle cx="7.5" cy="7.5" r="1.5"></circle>
 </svg>

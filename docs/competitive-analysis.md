@@ -517,9 +517,9 @@ can't close).
 - **Klipper / GPaste**: minimal — list + remove; no per-item edit surface found.
 
 **What Clipnest does today.** `ItemRowActionContent.swift` / `SnippetRowActionContent.swift`
-(`Sources/ClipnestGTK/Window/`) implement three always-visible trailing icon buttons (pin/unpin, save-
-as-snippet, delete) **plus** a right-click `GtkPopover` context menu (`PickerWindow+ContextMenu.swift`)
-offering the same three actions plus a menu-only fourth ("Copy Recognized Text") — explicitly built as a
+(`Sources/ClipnestGTK/Window/`) implement up to four always-visible trailing icon buttons (pin/unpin, edit, save-
+as-snippet, delete; the edit button arrived with the edit-copied-item feature) **plus** a right-click `GtkPopover` context menu (`PickerWindow+ContextMenu.swift`)
+offering the same actions plus a menu-only extra ("Copy Recognized Text") — explicitly built as a
 "Linux parity pass" mirroring the macOS `ItemRow` design, with gating logic shared between both surfaces
 so no action is wired twice. This is a recent, deliberate addition (there was previously *zero*
 right-click menu in the Linux picker at all, per that file's own commit-time grep confirmation).

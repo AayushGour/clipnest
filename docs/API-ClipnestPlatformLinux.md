@@ -231,6 +231,31 @@ advanced by exactly 2 (the scalar count of `"😀Y"`), and the immediate
 `ATSPITextAccessor.replaceSelectedText`'s write re-verification (above)
 relies on.
 
+## `LinuxEditableRichText` (item editor bridge)
+
+Not part of the AT-SPI subsystem; documented here because it is the one other
+public `ClipnestPlatformLinux` type that the item editor depends on
+(`Sources/ClipnestPlatformLinux/Clipboard/LinuxEditableRichText.swift`).
+
+```swift
+public enum LinuxEditableRichText {
+  public static func load(blob: Data?, plainText: String) -> EditableRichText
+  public static func blob(from runs: [StyledRun]) -> Data
+}
+```
+
+- `load` opens a stored `.richText` blob (a `LinuxRichTextBundle`, or flat
+  `text/html` from older builds) for editing by reading only its `text/html`
+  representation through `HTMLStyledRunCodec`. It is total: a missing,
+  corrupt, RTF-only, non-UTF-8, oversized or too-deeply-nested blob falls back
+  to one plain run of `plainText`, flagged lossy. `isLossy` is also set when
+  the HTML has content outside the editor's subset (bold, italic, underline,
+  colour, font family, font size) or does not round-trip through the codec.
+- `blob(from:)` writes the edited runs back as a `LinuxRichTextBundle` with
+  exactly one freshly generated `text/html` representation, so no stale RTF
+  sits next to new HTML. The bundle pastes through
+  `GTKClipboardWriting.representationsToPublish` unchanged.
+
 ## Coverage
 
 Realistic, not aspirational — worse than macOS's Accessibility API. GTK4

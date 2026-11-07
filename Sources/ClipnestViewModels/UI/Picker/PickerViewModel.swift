@@ -9,6 +9,13 @@
 // when Accessibility is granted, clipboard-only fallback otherwise) instead
 // of writing `NSPasteboard` directly — see that method's doc comment.
 //
+// T-EDIT4 (edit copied items): the platform item editor is reached through
+// the REQUIRED `presentItemEditor` init seam (no default — a defaulted closure
+// is how `presentSnippetEditor` shipped unwired on Linux). `presentEditForm(
+// for:)` / `reloadAfterEdit()` live in `PickerViewModel+Edit.swift`; what is
+// editable is decided only by `ClipItem.supportsContentEdit` /
+// `supportsRecognizedTextEdit`.
+//
 // Plan task T23: adds `activeTab` (History/Pinned/Snippets — see
 // `TabSwitcher.swift`) and the Snippets tab's own state + CRUD. `select(_:)`
 // and `pasteSnippet(_:)` both funnel through one shared `performPaste(_:
@@ -372,7 +379,8 @@ public final class PickerViewModel: ObservableObject {
   /// flush-before-commit path (`flushPendingRowsQuery`/
   /// `flushPendingSnippetsQuery`) can always query against what's *actually
   /// in the field right now*, never a stale already-applied value.
-  private var currentSearchText = ""
+  /// Not `private` only so `PickerViewModel+Edit.swift` can re-query with it.
+  var currentSearchText = ""
 
   /// Set by the composition root once the panel exists (see
   /// `AppEnvironment`) — breaks the construction-order cycle where the
@@ -555,6 +563,14 @@ public final class PickerViewModel: ObservableObject {
   /// `hoveredItemID`'s doc comment for why.
   let showPreviewOnKeyboardSelection: @MainActor () -> Bool
 
+  /// T-EDIT4: how the composition root presents its platform item editor
+  /// (see `presentEditForm(for:)` in `PickerViewModel+Edit.swift`).
+  /// REQUIRED at init with no default, for the same reason as
+  /// `showPreviewOnKeyboardSelection`: a `{ _ in }` default is how
+  /// `presentSnippetEditor` shipped unwired on Linux. Not `private` so the
+  /// `+Edit` extension can call it.
+  let presentItemEditor: @MainActor (ItemEditMode) -> Void
+
   /// The Rows (History/Pinned) and Snippets paged-query pipelines — see this
   /// file's top "DRY follow-up" doc comment and `PagedQuery.swift`. Each
   /// owns its own paging/generation/task-lifecycle state; the observed item
@@ -590,6 +606,9 @@ public final class PickerViewModel: ObservableObject {
   ///   so a platform that forgets to wire it fails to build rather than
   ///   shipping a Settings toggle that does nothing. Tests that don't care
   ///   write `{ false }` explicitly.
+  /// - Parameter presentItemEditor: T-EDIT4 — REQUIRED, no default (see the
+  ///   stored property's doc comment). Tests that don't care write
+  ///   `{ _ in }` explicitly.
   /// - Parameter storeChanges: T-RT2 — the SAME `NotifyingClipStore.changes`
   ///   broadcaster wrapping `clipStore`, if the composition root wired one
   ///   up (`AppEnvironment`/`LinuxAppEnvironment` always do; test/preview
@@ -607,6 +626,7 @@ public final class PickerViewModel: ObservableObject {
     frontmostAppTracker: FrontmostAppTracker = FrontmostAppTracker(),
     pasteDismissOrdering: PasteDismissOrdering,
     showPreviewOnKeyboardSelection: @escaping @MainActor () -> Bool,
+    presentItemEditor: @escaping @MainActor (ItemEditMode) -> Void,
     storeChanges: ClipStoreChangeBroadcaster? = nil
   ) {
     self.clipStore = clipStore
@@ -617,6 +637,7 @@ public final class PickerViewModel: ObservableObject {
     self.frontmostAppTracker = frontmostAppTracker
     self.pasteDismissOrdering = pasteDismissOrdering
     self.showPreviewOnKeyboardSelection = showPreviewOnKeyboardSelection
+    self.presentItemEditor = presentItemEditor
     storeChangesSubscription = storeChanges?.subscribe { [weak self] change in
       Task { @MainActor in self?.handleExternalStoreChange(change) }
     }
@@ -813,7 +834,8 @@ public final class PickerViewModel: ObservableObject {
   /// fresh one — either after `Self.searchDebounce` (typing) or immediately
   /// (every other trigger). See `PagedQuery.scheduleFirstPage`'s doc
   /// comment.
-  private func scheduleRowsQuery(_ policy: SelectionPolicy, text: String, debounced: Bool) {
+  /// Not `private` only so `PickerViewModel+Edit.swift` can call it.
+  func scheduleRowsQuery(_ policy: SelectionPolicy, text: String, debounced: Bool) {
     let kind = query.kindFilter
     let scope: ClipScope = activeTab == .pinned ? .pinned : .history
     rowsQuery.scheduleFirstPage(

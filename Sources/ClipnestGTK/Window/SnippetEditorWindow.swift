@@ -31,6 +31,14 @@
 //     (`SnippetEditorWindow.show`'s `title = ...` AND `SnippetFormView
 //     .body`'s `Text(mode.isNew ? ... )` heading).
 //
+// Keyboard (T-EDIT15), same rules as `ItemEditorWindow`: Tab / Shift+Tab walk
+// Tag, Body, Cancel, Save in widget order and wrap (the insensitive Save is
+// skipped by GTK; `SnippetEditFocusOrder` documents the order). The Body does
+// not accept Tab, so Tab moves on; Ctrl+Tab types a tab. Return in the Tag
+// saves, Return in the Body is a newline, Ctrl+Return saves from anywhere,
+// Esc cancels (`EditorKeyAction`, shared with the item editor). Tag and Body
+// carry accessible labels for Orca.
+//
 // Deliberately NOT mirrored (impossible on this platform, not a missed
 // requirement): macOS's side-by-side pair placement beside `PickerPanel`
 // (`WindowPlacement.pairLayout`) — GTK4 removed `gtk_window_move` from the
@@ -99,8 +107,8 @@ public final class SnippetEditorWindow: @unchecked Sendable {
     tagNoteLabel = gtk_label_new(nil)
     bodyTextView = gtk_text_view_new()
     bodyBuffer = gtk_text_view_get_buffer(bodyTextView)
-    cancelButton = gtk_button_new_with_label("Cancel")
-    saveButton = gtk_button_new_with_label("Save")
+    cancelButton = gtk_button_new_with_label(ItemEditStrings.cancel)
+    saveButton = gtk_button_new_with_label(ItemEditStrings.save)
 
     gtk_window_set_default_size(window, Self.defaultWidth, Self.defaultHeight)
     // Clicking the titlebar close button hides rather than destroys the
@@ -156,7 +164,7 @@ public final class SnippetEditorWindow: @unchecked Sendable {
     self.tagError = tagError
     // Read at show time: the expand hotkey is rebindable in Settings.
     expandShortcut = ExpandSnippetShortcutLabel.current
-    let title = mode.isNew ? "New Snippet" : "Edit Snippet"
+    let title = SnippetEditStrings.title(isNew: mode.isNew)
     gtk_window_set_title(window, title)
     gtk_label_set_markup(headingLabel, "<b>\(PangoMarkup.escape(title))</b>")
     populateFields(for: mode)
@@ -197,7 +205,8 @@ public final class SnippetEditorWindow: @unchecked Sendable {
     // Matches `TextField("Tag", text:)` — "Tag" is placeholder text shown
     // INSIDE the field, not a separate label row (see this file's top doc
     // comment).
-    gtk_entry_set_placeholder_text(tagEntry, "Tag")
+    gtk_entry_set_placeholder_text(tagEntry, SnippetEditStrings.tagLabel)
+    gtkSetAccessibleLabel(tagEntry, SnippetEditStrings.tagLabel)
     gtk_box_append(outerBox, tagEntry)
 
     // Helper text ("what is the Tag") / duplicate-tag error, wrapped.
@@ -212,6 +221,10 @@ public final class SnippetEditorWindow: @unchecked Sendable {
     gtk_widget_set_vexpand(bodyScroller, 1)
     gtk_widget_add_css_class(bodyScroller, "snippet-body-frame")
     gtk_text_view_set_wrap_mode(bodyTextView, GTK_WRAP_WORD_CHAR)
+    // Tab moves focus on (Tag, Body, Cancel, Save); a literal tab is Ctrl+Tab,
+    // see `EditorKeyAction`.
+    gtk_text_view_set_accepts_tab(bodyTextView, 0)
+    gtkSetAccessibleLabel(bodyTextView, SnippetEditStrings.bodyLabel)
     gtk_scrolled_window_set_child(bodyScroller, bodyTextView)
     gtk_box_append(outerBox, bodyScroller)
 
@@ -223,6 +236,9 @@ public final class SnippetEditorWindow: @unchecked Sendable {
     gtk_box_append(outerBox, buttonBox)
 
     gtk_window_set_child(window, outerBox)
+    // Return outside the Body saves (Save when enabled; on a focused button
+    // GTK presses that button instead), as in the item editor.
+    gtk_window_set_default_widget(window, saveButton)
   }
 
   private func connectSignals() {
@@ -232,6 +248,17 @@ public final class SnippetEditorWindow: @unchecked Sendable {
     gtkConnect(
       bodyBuffer, signal: "changed", context: self,
       callback: unsafeBitCast(snippetFieldChangedTrampoline, to: GCallback.self))
+    // Return in the Tag saves (when valid): `GtkEntry::activate`,
+    // `void (*)(GtkEntry*, gpointer)`, the same shape as `clicked`.
+    gtkConnect(
+      tagEntry, signal: "activate", context: self,
+      callback: unsafeBitCast(snippetSaveClickedTrampoline, to: GCallback.self))
+    let keyController: OpaquePointer = gtk_event_controller_key_new()
+    gtk_event_controller_set_propagation_phase(keyController, GTK_PHASE_CAPTURE)
+    gtkConnect(
+      keyController, signal: "key-pressed", context: self,
+      callback: unsafeBitCast(snippetKeyPressedTrampoline, to: GCallback.self))
+    gtk_widget_add_controller(window, keyController)
     gtkConnect(
       cancelButton, signal: "clicked", context: self,
       callback: unsafeBitCast(snippetCancelClickedTrampoline, to: GCallback.self))
@@ -249,6 +276,25 @@ public final class SnippetEditorWindow: @unchecked Sendable {
 
   func handleCancelClicked() {
     gtk_window_close(window)
+  }
+
+  /// `GtkEventControllerKey::key-pressed` on the window (capture phase), so
+  /// Esc / Ctrl+Return work whichever widget has focus. Returns 1 when
+  /// handled. No formatting chords here (plain-text Body).
+  func handleKeyPressed(keyval: UInt32, state: UInt32) -> Int32 {
+    guard
+      let action = EditorKeyAction.action(
+        keyval: keyval, state: state,
+        focusInEditor: gtkFocusIsWithin(window: window, widget: bodyTextView),
+        isRichText: false)
+    else { return 0 }
+    switch action {
+    case .cancel: handleCancelClicked()
+    case .save: handleSaveClicked()
+    case .insertTab: gtkInsertLiteralTab(into: bodyBuffer)
+    case .toggleBold, .toggleItalic, .toggleUnderline: return 0  // unreachable: isRichText false
+    }
+    return 1
   }
 
   func handleSaveClicked() {
@@ -337,6 +383,15 @@ private let snippetSaveClickedTrampoline:
     Void = { _, data in
       guard let window = unretainedContext(data, as: SnippetEditorWindow.self) else { return }
       window.handleSaveClicked()
+    }
+
+/// `GtkEventControllerKey::key-pressed` — `gboolean (*)(controller, guint
+/// keyval, guint keycode, GdkModifierType state, gpointer)`.
+private let snippetKeyPressedTrampoline:
+  @convention(c) (OpaquePointer?, UInt32, UInt32, UInt32, UnsafeMutableRawPointer?) ->
+    Int32 = { _, keyval, _, state, data in
+      guard let window = unretainedContext(data, as: SnippetEditorWindow.self) else { return 0 }
+      return window.handleKeyPressed(keyval: keyval, state: state)
     }
 
 /// `GtkWindow::close-request` — `gboolean (*)(GtkWindow*, gpointer)`.

@@ -95,8 +95,7 @@ enum SettingsFocusCoordinator {
       in: windows.map {
         SettingsWindowCandidate(
           autosaveName: $0.frameAutosaveName, isVisible: $0.isVisible,
-          isOwnAuxiliaryWindow: $0 is NSPanel || $0 is SnippetEditorWindow
-            || $0 is WelcomeWindow)
+          isOwnAuxiliaryWindow: $0 is NSPanel || $0 is WelcomeWindow)
       })
     return index.map { windows[$0] }
   }

@@ -141,6 +141,7 @@ struct GTKPickerWindowKeyboardTests {
       .saveAsSnippet,
       .newSnippet,
       .replaceSnippet,
+      .editHighlighted,
       .openSettings,
     ]
     for action in otherActions {

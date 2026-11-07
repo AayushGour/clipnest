@@ -2,10 +2,11 @@
 //
 // Linux parity pass (routed follow-up, 2026-09-06): pure gating logic for a
 // History/Pinned row's actions — mirrors macOS `ItemRow.swift` exactly:
-// three always-visible trailing icon buttons (pin/unpin, save-as-snippet,
-// delete) PLUS a right-click context menu offering those same three actions
-// plus a fourth, menu-only action ("Copy Recognized Text"). See that file's
-// doc comment for the full history of why macOS settled on this exact split
+// always-visible trailing icon buttons (pin/unpin, edit or edit-recognized-
+// text, save-as-snippet, delete — each shown only when the item supports it)
+// PLUS a right-click context menu offering those same actions plus one
+// menu-only action ("Copy Recognized Text"). See that file's doc comment for
+// the full history of why macOS settled on this exact split
 // (T24/T42/T-OCR2/T-SET4).
 //
 // Ownership note: this task's owned-files scope is `Sources/ClipnestGTK/
@@ -27,9 +28,12 @@
 // (and every other entry's) is written exactly once, per the routing
 // instruction ("Reuse one action per behavior across both surfaces exactly
 // as macOS does — do not write the pin action twice"). Order matches macOS:
-// Pin/Unpin, [Save as Snippet if supported], [Copy Recognized Text if
-// present — context menu only], Delete.
+// Pin/Unpin, [Edit or Edit Recognized Text if supported], [Save as Snippet if
+// supported], [Copy Recognized Text if present — context menu only], Delete.
+// The edit label and gating come from `ItemEditStrings.actionLabel(for:)`
+// (the same function macOS uses) so the two platforms cannot drift.
 import ClipnestCore
+import ClipnestViewModels
 
 /// One row action a History/Pinned row can offer — shared by both the
 /// always-visible trailing buttons and the right-click context menu.
@@ -37,6 +41,8 @@ import ClipnestCore
 /// case to the matching `PickerViewModel` call.
 public enum ItemRowAction: Equatable, Sendable {
   case togglePin
+  case edit
+  case editRecognizedText
   case saveAsSnippet
   case copyRecognizedText
   case delete
@@ -69,6 +75,12 @@ public enum ItemRowActions {
       ItemRowActionEntry(
         action: .togglePin, label: item.pinned ? "Unpin" : "Pin", isDestructive: false)
     ]
+    if let editLabel = ItemEditStrings.actionLabel(for: item) {
+      entries.append(
+        ItemRowActionEntry(
+          action: item.supportsRecognizedTextEdit ? .editRecognizedText : .edit,
+          label: editLabel, isDestructive: false))
+    }
     if item.supportsSaveAsSnippet {
       entries.append(
         ItemRowActionEntry(action: .saveAsSnippet, label: "Save as Snippet", isDestructive: false)
@@ -83,8 +95,8 @@ public enum ItemRowActions {
     return entries
   }
 
-  /// The row's always-visible trailing icon buttons — exactly two or three
-  /// (pin, [save as snippet], delete), matching `ItemRow.rowActions`: no
+  /// The row's always-visible trailing icon buttons — at most four
+  /// (pin, [edit], [save as snippet], delete), matching `ItemRow.rowActions`: no
   /// dead button renders for a kind that doesn't support saving as a
   /// snippet (`.richText`/`.image`/`.file`).
   public static func buttons(for item: ClipItem) -> [ItemRowActionEntry] {

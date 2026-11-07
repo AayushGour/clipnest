@@ -191,15 +191,14 @@ public enum KeyEventMapping {
       return isControlDown ? .saveAsSnippet : nil
     case Keyval.nLower, Keyval.nUpper:
       return isControlDown ? .newSnippet : nil
-    // `Ctrl+Shift+E`, not bare `Ctrl+E`: verified at runtime (this task's own
-    // container test) that a bare `Ctrl+E` here would collide with nothing
-    // GTK/the search entry binds by default, but Shift is required anyway
-    // per this task's spec (`Ctrl+Shift+E`) — GDK reports `E`'s *shifted*
-    // keyval (`Keyval.eUpper`) plus `GDK_SHIFT_MASK` in `state` when Shift is
-    // physically held, so both are checked explicitly rather than assumed
-    // redundant.
+    // `Ctrl+Shift+E` keeps meaning `.replaceSnippet` (Snippets-tab edit); bare
+    // `Ctrl+E` (T-EDIT13) is `.editHighlighted` (edit on any tab). GDK reports
+    // `E`'s *shifted* keyval (`Keyval.eUpper`) plus `GDK_SHIFT_MASK` when Shift
+    // is held, so Shift is checked via `state`, not the keyval. Ctrl+Alt+E is
+    // unbound (nil): Alt-chords are reserved for Return's plain-text variant.
     case Keyval.eLower, Keyval.eUpper:
-      return isControlDown && isShiftDown ? .replaceSnippet : nil
+      guard isControlDown, state & altMask == 0 else { return nil }
+      return isShiftDown ? .replaceSnippet : .editHighlighted
     case Keyval.comma:
       return isControlDown ? .openSettings : nil
     // T-AUD-KBD: Ctrl+] / Ctrl+[ cycle the type filter; Ctrl+Y toggles the

@@ -275,7 +275,7 @@ ID` (`:82`), `Rejects a caller-supplied custom excluded bundle ID` (`:95`).
   `ClipboardMonitor.checkNow()` (`ClipboardMonitor.swift:215-226`) — a
   rejected change is never classified or hashed, so no content from a
   privacy-filtered app is ever even briefly held in memory as a `ClipItem`.
-- **macOS: picker, item preview and snippet editor windows opt out of screen sharing/recording** (`NSWindow.sharingType = .none`, via `excludeFromScreenSharing()`), since clipboard contents may include secrets. Best effort: on macOS 15+ ScreenCaptureKit-based capture may still include them in some modes.
+- **macOS: picker, item preview, snippet editor and item editor windows opt out of screen sharing/recording** (`NSWindow.sharingType = .none`, via `excludeFromScreenSharing()`), since clipboard contents may include secrets. Best effort: on macOS 15+ ScreenCaptureKit-based capture may still include them in some modes.
 - Bundle-ID list is verified/hardcoded, not user-visible/editable yet beyond
   the `customExcludedBundleIDs` injection point.
 - **Linux (1.0.0): GNOME re-publishes a released copy without its privacy
@@ -665,7 +665,7 @@ keyboard focus from whatever app the user was in.
 - `ClipnestApp/Sources/UI/Picker/PickerView.swift:87-500` — SwiftUI content + key handling
 - `ClipnestApp/Sources/UI/Picker/PickerViewModel.swift:166-1218` — state/data flow
 - `ClipnestApp/Sources/UI/Picker/PagedQuery.swift:49-231` — shared paged-query engine (paging/generation/task lifecycle) behind both the Rows and Snippets pipelines (review #6 DRY follow-up)
-- `ClipnestApp/Sources/UI/Picker/ItemRow.swift`, `SnippetRow.swift` — row rendering
+- `ClipnestApp/Sources/UI/Picker/ItemRow.swift`, `SnippetRow.swift` — row rendering (up to four trailing buttons on an item row: pin, edit, save as snippet, delete)
 - `ClipnestApp/Sources/UI/Picker/TabSwitcher.swift`, `TypeFilterChips.swift` — tab/kind filtering UI
 - `ClipnestApp/Sources/UI/Picker/ItemPreview.swift`, `ItemPreviewController.swift`, `ItemThumbnailCache.swift` — hover preview
 - `ClipnestApp/Sources/UI/Picker/HighlightedText.swift`, `WindowPlacement.swift`
@@ -766,10 +766,10 @@ renders a kind-specific leading icon/thumbnail (`ItemIconThumbnail`,
 `NSWorkspace` type-icon for `.file` — **never** `icon(forFile:)`, which
 triggers TCC + QuickLook generation for protected folders and was the
 original cause of a multi-second freeze), highlighted `previewText`
-(`HighlightedText`), a relative timestamp, and three always-visible trailing
-actions (pin/unpin, save-as-snippet, delete) plus a matching right-click
-context menu. `SnippetRow` (`SnippetRow.swift:34-84`) mirrors this shape for
-snippets (edit/delete instead of pin/save/delete). `ItemThumbnailCache`
+(`HighlightedText`), a relative timestamp, and up to four always-visible trailing
+actions (pin/unpin, edit, save-as-snippet, delete; each only when the item
+supports it) plus a matching right-click context menu. `SnippetRow` (`SnippetRow.swift:34-84`) mirrors this shape for
+snippets (edit/delete instead of pin/edit/save/delete). `ItemThumbnailCache`
 (`ItemThumbnailCache.swift:18-32`) is a shared `NSCache`-backed, in-memory
 thumbnail cache keyed by content-addressed `blobPath`/`fileReference` — a
 cache hit is always correct since a given key's bytes never change.
@@ -929,6 +929,43 @@ ClipnestAppTests/PickerViewModelTests.swift` — see
   waits for an activation only when the window isn't already reporting
   active. Otherwise the picker never dismissed on focus loss, and the next
   hotkey press closed it.
+
+**Editing a copied item (T-EDIT).** Text, rich text and link rows get an
+Edit action (hover pencil button, context-menu "Edit", and on macOS a
+VoiceOver custom action); an `.image` row with OCR text gets "Edit
+Recognized Text"; `.file` rows and images without OCR text get nothing. The
+gate is `ItemEditStrings.actionLabel(for:)` over `ClipItem.supportsContentEdit`
+/ `.supportsRecognizedTextEdit`. Keyboard: ⌘E (macOS) / Ctrl+E (Linux) edits the highlighted row on any tab (`PickerViewModel.editHighlighted()`); Linux Ctrl+Shift+E stays the Snippets-tab-only edit.
+- *Key files:* `ClipnestApp/Sources/UI/Picker/ItemEditorWindow.swift`,
+  `ItemEditorView.swift`, `RichTextEditorView.swift`, `ItemEditPresenter.swift`
+  (macOS); `Sources/ClipnestGTK/Window/ItemEditorWindow.swift` (+`RichText`)
+  and `Sources/ClipnestLinuxAppKit/App/LinuxItemEditPresenter.swift` (Linux);
+  `Sources/ClipnestViewModels/UI/Picker/ItemEdit/` (shared save logic).
+- *One editor:* a WYSIWYG editor for all text kinds (`NSTextView` on macOS,
+  `GtkTextView` with tags on Linux) with a Bold / Italic / Underline toolbar.
+  macOS applies an empty-selection toggle to typing; GTK needs a selection
+  (documented limitation). OCR mode is the same popup with no toolbar and
+  plain text.
+- *Save:* `ItemEditCoordinator.saveContent` re-derives kind / preview / hash /
+  size with `ClipContentDerivation` (capture's own code), writes the rich blob,
+  and calls `ClipStore.updateContent(_:with:)`, which keeps `createdAt`, pin and
+  `ocrText` (so position and pin survive). Plain text with formatting becomes
+  `.richText`; a lone URL becomes `.link` (`LinkDetection`, the same rule as
+  capture); rich text stays `.richText`. A new hash equal to another entry
+  merges the two (survivor in the edited item's spot, pinned if either was).
+  Recognized-text edits go through `setRecognizedText`.
+- *Formatting warning:* shown only when the editor cannot represent something
+  (`EditableRichText.isLossy`): "Some formatting in this item can't be kept." with
+  Save Anyway / Go Back. The Linux subset is bold, italic, underline, colour,
+  font family and size (`HTMLStyledRunCodec`).
+- *Clipboard:* at Save time, if the clipboard still hashes to the item's
+  pre-edit `contentHash`, it is rewritten with the edited content through the
+  normal write paths with the monitor's self-write suppression armed, so no
+  history entry appears; otherwise it is untouched.
+  `ClipboardSyncResult` has a third `.writeUnconfirmed` case so an unobserved
+  write never reads as a confirmed one.
+- *Item gone:* `.itemNoLongerExists` shows "This item no longer exists." and the
+  popup stays open.
 
 ---
 
@@ -1109,10 +1146,12 @@ Snippet" from a History/Pinned row, prefills Body only —
 `PickerViewModel.presentSaveAsSnippetForm(from:)`, `PickerViewModel.swift
 :1101-1104`, gated to `.text`/`.link` items only), or `.edit(Snippet)`
 (prefills both fields). The form is hosted in `SnippetEditorWindow`
-(`SnippetEditorWindow.swift:37-163`) — a real, titled, activating
-`NSWindow`, **not** a `.sheet()` on `PickerPanel`: a sheet attached to a
-`.nonactivatingPanel` inherits its inability to ever truly gain key status,
-so its fields could never receive typed input. It's positioned as a
+(`SnippetEditorWindow.swift`) — its own titled, non-activating
+`EditorPanel` (shared with the item editor), **not** a `.sheet()` on
+`PickerPanel`: a sheet attached to the picker could never receive typed
+input. Like the picker, the editor takes the keyboard without making
+Clipnest the frontmost app, so after it closes the picker is keyboard-ready
+again and a pick still pastes into the app you were in (T-EDIT19/20). It's positioned as a
 side-by-side pair with the picker via `WindowPlacement.pairLayout`
 (`WindowPlacement.swift:70-107`), which may shift the *picker's* frame
 (never resize it) so the two windows never overlap when they can both fit
