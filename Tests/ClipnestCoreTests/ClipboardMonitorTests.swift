@@ -94,6 +94,9 @@ private actor ThrowingClipStore: ClipStore {
   func setPinned(_ id: UUID, pinned: Bool) async throws { throw ClipStoreError.notFound }
   func setRecognizedText(_ id: UUID, text: String) async throws { throw ClipStoreError.notFound }
   func fetchImagesNeedingRecognition() async throws -> [ClipItem] { [] }
+  func updateContent(_ id: UUID, with update: ClipContentUpdate) async throws
+    -> ClipContentUpdateResult
+  { throw ClipStoreError.ioFailure(underlying: "simulated disk failure") }
   func delete(_ id: UUID) async throws { throw ClipStoreError.notFound }
   func clearHistory() async throws {}
   func enforceRetention(cap: RetentionCap?) async throws {}

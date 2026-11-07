@@ -32,6 +32,9 @@ public struct ClipItem: Identifiable, Codable, Equatable, Sendable {
   /// hash stays exact — never a downsampled/perceptual digest — so a
   /// fallback never risks a false dedup, only a loss of
   /// format-independence for the images it applies to.
+  ///
+  /// Editing an item's content recomputes this (and `previewText`/`byteSize`)
+  /// through `ClipContentDerivation`, the same code capture uses.
   public var contentHash: String
   public var pinned: Bool
   /// When this item was pinned — set by `ClipStore.setPinned(_:pinned:)`

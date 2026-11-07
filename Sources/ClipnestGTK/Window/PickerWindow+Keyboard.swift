@@ -276,9 +276,15 @@ extension PickerWindow {
         viewModel.presentCreateSnippetForm()
       }
     case .replaceSnippet:
-      // Edit form for the highlighted snippet (Ctrl+Shift+E). NOT macOS's
-      // global ⌥⌘E expansion hotkey — see `PickerViewModel.editHighlightedSnippet`.
-      MainActor.assumeIsolated { viewModel.editHighlightedSnippet() }
+      // Ctrl+Shift+E: the Snippets-tab-only edit (macOS's ⌥⌘E is a global
+      // expand hotkey, unrelated). Shares `editHighlighted()` with Ctrl+E;
+      // the tab guard keeps its original no-op-off-Snippets semantics.
+      MainActor.assumeIsolated {
+        guard viewModel.activeTab == .snippets else { return }
+        viewModel.editHighlighted()
+      }
+    case .editHighlighted:
+      MainActor.assumeIsolated { viewModel.editHighlighted() }
     case .cycleFilter(let forward):
       cycleKindFilter(forward: forward)
     case .togglePreview:

@@ -26,6 +26,8 @@ extension PickerWindow {
       switch action {
       case .togglePin:
         viewModel.togglePin(item)
+      case .edit, .editRecognizedText:
+        viewModel.presentEditForm(for: item)
       case .saveAsSnippet:
         viewModel.presentSaveAsSnippetForm(from: item)
       case .copyRecognizedText:

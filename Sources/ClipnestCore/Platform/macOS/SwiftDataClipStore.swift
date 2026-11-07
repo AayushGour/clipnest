@@ -916,6 +916,65 @@
       .map { $0.asClipItem() }
     }
 
+    /// See `ClipStore.updateContent(_:with:)`. The merged-away record's
+    /// deletion and the survivor's update commit in ONE `save()`, so a failure
+    /// leaves neither half applied; blobs are cleaned up only after it.
+    public func updateContent(_ id: UUID, with update: ClipContentUpdate) async throws
+      -> ClipContentUpdateResult
+    {
+      guard let record = try fetchRecord(id: id) else { throw ClipStoreError.notFound }
+      let oldBlobPath = record.blobPath
+
+      // A DIFFERENT record with the new hash is merged away; the edited
+      // record's own (possibly unchanged) hash is never a collision.
+      let newHash = update.contentHash
+      let collisionPredicate = #Predicate<ClipItemRecord> {
+        $0.contentHash == newHash && $0.id != id
+      }
+      var collisionDescriptor = FetchDescriptor<ClipItemRecord>(predicate: collisionPredicate)
+      collisionDescriptor.fetchLimit = 1
+      let mergedAway = try fetch(descriptor: collisionDescriptor).first
+      let mergedAwayID = mergedAway?.id
+      let mergedAwayBlobPath = mergedAway?.blobPath
+
+      if let mergedAway {
+        let pin = ClipContentUpdateMerge.mergedPin(
+          survivorPinned: record.pinned, survivorPinnedAt: record.pinnedAt,
+          mergedAwayPinned: mergedAway.pinned, mergedAwayPinnedAt: mergedAway.pinnedAt)
+        record.pinned = pin.pinned
+        record.pinnedAt = pin.pinnedAt
+        modelContext.delete(mergedAway)
+      }
+      record.kindRawValue = update.kind.rawValue
+      record.previewText = update.previewText
+      record.normalizedText = ClipItemRecord.computeNormalizedText(
+        previewText: update.previewText, ocrText: record.ocrText)
+      record.contentHash = update.contentHash
+      record.byteSize = update.byteSize
+      record.blobPath = update.blobPath
+      do {
+        try save()
+      } catch {
+        // Discard the half-applied merge so a later save can't commit it.
+        modelContext.rollback()
+        throw error
+      }
+
+      let candidates = [oldBlobPath, mergedAwayBlobPath]
+      // Everything after the commit is non-throwing: a failed reference
+      // check keeps the blob, and the result is built from the in-memory
+      // record.
+      let stillReferenced = blobPathsKeptAfterCommit(candidates: candidates) { blobPath in
+        let wanted: String? = blobPath
+        let referencedPredicate = #Predicate<ClipItemRecord> { $0.blobPath == wanted }
+        return try fetchCount(
+          descriptor: FetchDescriptor<ClipItemRecord>(predicate: referencedPredicate)) > 0
+      }
+      deleteOrphanedBlobsAfterCommit(
+        candidates: candidates, stillReferenced: stillReferenced, using: blobStore)
+      return ClipContentUpdateResult(item: record.asClipItem(), mergedAwayID: mergedAwayID)
+    }
+
     public func delete(_ id: UUID) async throws {
       guard let record = try fetchRecord(id: id) else { throw ClipStoreError.notFound }
       let item = record.asClipItem()
@@ -1081,11 +1140,9 @@
     var previewText: String
     /// `previewText.lowercased()`, stored so `query(...)`'s `#Predicate` can
     /// do a case-insensitive substring match with plain `.contains` (SwiftData
-    /// predicates can't call `.lowercased()` inline). "Kept in sync" only
-    /// means "set once, at construction": `previewText` is never mutated after
-    /// insert anywhere in this file today (only `insertOrBumpDuplicate` sets
-    /// it, on insert), so there is no existing update path that would need to
-    /// also update this field.
+    /// predicates can't call `.lowercased()` inline). Kept in sync
+    /// by recomputing it through `computeNormalizedText` wherever `previewText`
+    /// (`updateContent`) or `ocrText` (`setRecognizedText`) changes.
     ///
     /// Migration-crash fix: the `= ""` default is required, not decorative.
     /// This attribute was added after this entity's first release (like

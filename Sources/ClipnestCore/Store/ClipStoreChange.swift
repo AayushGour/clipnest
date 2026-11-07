@@ -17,7 +17,9 @@ public enum ClipStoreChange: Sendable, Equatable {
   /// dedup (`ClipStore.insertOrBumpDuplicate`).
   case inserted(ClipItem)
   /// An existing item's metadata changed in place — a pin toggle
-  /// (`setPinned`) or recognized text being recorded (`setRecognizedText`).
+  /// (`setPinned`), recognized text being recorded (`setRecognizedText`), or
+  /// its content being edited (`updateContent`; a merged-away item is also
+  /// reported as `.deleted`).
   case updated(UUID)
   /// A single item (and its blob, if any) was deleted (`ClipStore.delete`).
   case deleted(UUID)

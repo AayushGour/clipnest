@@ -57,6 +57,10 @@ public enum PickerKeyAction: Equatable, Sendable {
   /// See `PickerWindow+Keyboard.swift`'s dispatch case for why this is *not*
   /// the same thing as macOS's global ⌥⌘E snippet-expansion hotkey.
   case replaceSnippet
+  /// Ctrl+E — edits the highlighted row on any tab
+  /// (`PickerViewModel.editHighlighted()`): the item editor on History/Pinned,
+  /// the snippet edit form on Snippets. Mirrors macOS's ⌘E.
+  case editHighlighted
   /// Ctrl+, — opens Settings, dismissing the picker first. Dispatches to
   /// `PickerViewModel.openSettingsFromPicker()`, mirroring macOS's ⌘,.
   case openSettings

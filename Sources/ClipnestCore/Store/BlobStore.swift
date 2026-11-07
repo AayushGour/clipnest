@@ -243,6 +243,18 @@ public struct BlobStore: Sendable {
   /// (`BlobPermissionsMigration`) and storage-usage callers.
   public var blobsDirectoryURL: URL { blobsDirectory }
 
+  /// The relative `blobPath` (rooted at `"blobs/"`) that `write(_:)` stores
+  /// `data` at — content-addressed, so it is a pure function of the bytes.
+  /// Lets callers (item editing) predict a blob's path without writing it.
+  public static func blobPath(for data: Data) -> String {
+    "\(blobsDirectoryName)/\(contentHash(of: data))"
+  }
+
+  /// Whether a blob file currently exists at `blobPath`.
+  public func contains(blobPath: String) -> Bool {
+    fileManager.fileExists(atPath: fileURL(forBlobPath: blobPath).path)
+  }
+
   private var blobsDirectory: URL {
     baseDirectory.appendingPathComponent(Self.blobsDirectoryName, isDirectory: true)
   }
@@ -271,7 +283,7 @@ public struct BlobStore: Sendable {
   /// ones. A same-owner `chmod` is a cheap metadata-only change that moves
   /// no file contents, so it needs no one-time migration flag.
   public func write(_ data: Data) throws -> String {
-    let blobPath = "\(Self.blobsDirectoryName)/\(Self.contentHash(of: data))"
+    let blobPath = Self.blobPath(for: data)
     let destination = fileURL(forBlobPath: blobPath)
 
     guard !fileManager.fileExists(atPath: destination.path) else {

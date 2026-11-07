@@ -10,6 +10,49 @@ at any time.
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-07
+
+### Added
+
+- Edit a copied item (macOS and Linux). Text, rich text and link rows get an
+  **Edit** action (hover pencil button, context-menu entry; on macOS also a
+  VoiceOver action). A small editor with Bold / Italic / Underline opens, and
+  **Save** replaces the entry in place, keeping its position and pin. Images
+  with recognized text get **Edit Recognized Text**; files can't be edited.
+  If the edited item is what is on the clipboard, the clipboard gets the edited
+  version (no extra history entry). Editing an item into a duplicate of another
+  merges them. A warning ("Some formatting in this item can't be kept.") appears
+  when the editor can't represent part of an item's RTF formatting, or when
+  that formatting is missing, unreadable or too large (over 4 MiB) to edit as
+  rich text; only RTF is checked, so RTFD or HTML-only sources aren't flagged. On Linux the editor
+  handles bold, italic, underline, colour, font family and size, and its
+  toolbar needs a selection. Keyboard shortcut: **⌘E** (Linux **Ctrl+E**) edits
+  the highlighted item, or the highlighted snippet on the Snippets tab.
+- The edit popup is fully keyboard accessible (macOS and Linux). The cursor
+  starts in the text; Tab / Shift+Tab cycle Bold, Italic, Underline, the text,
+  Cancel, Save and wrap (a disabled Save is skipped); **⌥Tab** (Linux
+  **Ctrl+Tab**) types a literal tab; **⌘Return** (Linux **Ctrl+Return**) saves,
+  **Esc** cancels, **⌘B/I/U** (Linux **Ctrl+B/I/U**) format. On the Mac the
+  buttons are Tab stops even with "Keyboard navigation" off. Bold / Italic /
+  Underline report pressed state to VoiceOver / Orca and their tooltips name
+  the shortcut. On the Mac the "can't be kept" warning is now shown inside the
+  editor (it was a system alert; neither button is the default, Return presses
+  the focused one, Go Back is focused first), and error messages are announced.
+- The snippet editor is keyboard accessible too (macOS and Linux), with the
+  same rules as the item editor: Tab / Shift+Tab cycle Tag, Body, Cancel, Save
+  and wrap (a disabled Save is skipped); Tab in the Body moves on and **⌥Tab**
+  (Linux **Ctrl+Tab**) types a tab; Return in the Tag saves, in the Body it is
+  a new line; **⌘Return** (Linux **Ctrl+Return**) saves; **Esc** cancels. The
+  Tag and Body fields have accessible labels, and on the Mac the buttons are
+  Tab stops even with "Keyboard navigation" off.
+
+### Fixed
+
+- macOS: closing the snippet editor (Save, Cancel or Esc) left the picker on
+  screen but ignoring the keyboard until you reopened it with the hotkey. The
+  picker now takes keys again right away, as it does after the item editor.
+  The snippet editor no longer shows a Dock icon while it is open.
+
 ## [1.6.0] - 2026-10-21
 
 ### Added
@@ -552,7 +595,8 @@ release (0.5.0, above). None of them were ever installed by a user.
 
 - `Sendable` conformance for `NSPasteboard` access, required by Swift 6.
 
-[Unreleased]: https://github.com/AayushGour/clipnest/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/AayushGour/clipnest/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/AayushGour/clipnest/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/AayushGour/clipnest/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/AayushGour/clipnest/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/AayushGour/clipnest/compare/v1.3.0...v1.4.0

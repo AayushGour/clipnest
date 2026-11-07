@@ -21,7 +21,7 @@ own `Error` enum — see [Error handling](#error-handling).
 ## Contents
 
 - [Model](#model) — `ClipItem`, `Snippet`, `ItemKind`
-- [Store](#store) — `ClipStore`, `SnippetStore`, `BlobStore`
+- [Store](#store) — `ClipStore` (incl. `updateContent`, `ClipContentUpdate`), `SnippetStore`, `BlobStore`; edit helpers `ClipContentDerivation`, `LinkDetection`, `StyledRun`/`HTMLStyledRunCodec`, `MacEditableRichText`
 - [Clipboard](#clipboard) — `PasteboardReader`, `PrivacyFilter`, `ClipboardMonitor`
 - [Media](#media) — `ImagePixelHashing`, `CoreGraphicsImagePixelHasher`
 - [OCR](#ocr) — `TextRecognizing`, `VisionTextRecognizer`, `OCRBackfillCoordinator`
@@ -123,6 +123,8 @@ public protocol ClipStore: Sendable {
   func setPinned(_ id: UUID, pinned: Bool) async throws          // throws .notFound
   func setRecognizedText(_ id: UUID, text: String) async throws  // throws .notFound
   func fetchImagesNeedingRecognition() async throws -> [ClipItem]
+  func updateContent(_ id: UUID, with update: ClipContentUpdate) async throws
+    -> ClipContentUpdateResult                                    // throws .notFound
   func delete(_ id: UUID) async throws                            // throws .notFound
   func clearHistory() async throws
   func enforceRetention(cap: RetentionCap?) async throws
@@ -167,6 +169,50 @@ the app, since deleting an item also deletes its blob (see
   but no recognized text yet (`ocrText` `nil`/empty), newest-first. The
   work set `OCRBackfillCoordinator` (see [OCR](#ocr)) iterates; unbounded
   like `fetchAll()` — no UI pages through this directly.
+- **`updateContent(_:with:)`** — edit-in-place: replaces `kind`,
+  `previewText`, `contentHash`, `byteSize` and `blobPath` with the values in
+  a `ClipContentUpdate`; keeps `createdAt`, `pinned`/`pinnedAt`, the source
+  app and `ocrText`, and recomputes the search index (so `query` finds the
+  new text, not the old). If a *different* item already has the new
+  `contentHash`, that item is deleted and merged in: the survivor stays in
+  the edited item's spot, is pinned if either was, and keeps the earlier
+  `pinnedAt`; the deleted item's id comes back as `mergedAwayID`. The same
+  hash as the item's own is an in-place rewrite, never a merge. The old blob
+  (and a merged-away item's blob) is deleted only after the write succeeds,
+  and only if no remaining item still references it. Throws `.notFound` if
+  the item is gone. Implemented by `InMemoryClipStore`, `SwiftDataClipStore`,
+  `SQLiteClipStore` and `NotifyingClipStore` (which broadcasts `.updated`,
+  plus `.deleted(mergedAwayID)` for a merged-away item).
+
+```swift
+public struct ClipContentUpdate: Sendable, Equatable {
+  public init(derived: DerivedClipContent, blobPath: String?)
+  // kind, previewText, contentHash, byteSize, blobPath
+}
+
+public struct ClipContentUpdateResult: Sendable, Equatable {
+  public let item: ClipItem        // the surviving, updated item
+  public let mergedAwayID: UUID?   // non-nil when another entry was merged in
+}
+
+/// Single definition of how kind / previewText / contentHash / byteSize are
+/// derived from content; capture (`PasteboardReader`) and editing both use it,
+/// so an edited item is indistinguishable from a freshly captured one.
+public enum ClipContentDerivation {
+  public static func plainText(_ text: String) -> DerivedClipContent    // .link for a lone URL, else .text
+  public static func richText(blob: Data, plainText: String) -> DerivedClipContent  // .richText
+}
+
+/// "Is this one well-formed http/https/ftp/mailto link?" — shared by capture
+/// and edit, so the two never disagree.
+public enum LinkDetection {
+  public static func isLink(_ text: String) -> Bool
+}
+
+/// Deletes blobs a write just stopped referencing, unless still referenced.
+public func deleteOrphanedBlobs(
+  candidates: [String?], stillReferenced: Set<String>, using blobStore: BlobStore) throws
+```
 
 ```swift
 public enum RetentionCap: Equatable, Sendable {
@@ -223,6 +269,8 @@ public struct BlobStore: Sendable {
   public func write(_ data: Data) throws -> String   // returns the relative blobPath
   public func read(blobPath: String) throws -> Data  // throws .notFound
   public func delete(blobPath: String) throws        // idempotent — missing blob is not an error
+  public static func blobPath(for data: Data) -> String  // where write(_:) would store `data`; pure, no I/O
+  public func contains(blobPath: String) -> Bool         // does a blob file exist there now
 }
 ```
 Content-addressed disk storage for payloads too large for `ClipItem`'s
@@ -234,6 +282,36 @@ must point it at a throwaway temp directory; production code uses
 `defaultBaseDirectory()` (`~/Library/Application Support/Clipnest`).
 `BlobStoreError` is `.notFound` (read-only; `delete` never throws this) or
 `.ioFailure(underlying:)`.
+
+**Rich-text edit helpers (`Sources/ClipnestCore/RichText/`, `Platform/macOS/`).**
+`StyledRun` is one run of text with `bold`/`italic`/`underline`, `colorHex`,
+`fontFamily` and `fontSizePt`; `EditableRichText` is `[StyledRun]` plus an
+`isLossy` flag (true when the stored item holds something the editor cannot
+represent, or when a `.richText` item's blob is missing/unreadable
+(`ItemEditSource.richContentMissing`), which drives the "Some formatting in this
+item can't be kept." warning). `StyledRunMapping.flatten(_:)` / `.runs(text:spans:)` convert
+between runs and a flat string with `StyleSpan` offsets (what a text buffer
+needs). `HTMLStyledRunCodec.parse(html:)` / `.html(from:)` read and write the
+Linux editor's HTML subset (bold, italic, underline, color, font family, font
+size; anything else sets `hasUnsupportedContent`). On macOS,
+`MacEditableRichText` (`NSAttributedString` <-> RTF, `toggle(_:in:range:)` for the
+Bold/Italic/Underline traits over a non-empty range (a no-op on an empty range;
+the empty-selection "typing attributes" behaviour lives in the macOS editor view,
+`RichTextEditorView`), `hasFormatting(_:)`) does the same job; it is
+compiled only on macOS. The Linux counterpart, `LinuxEditableRichText`, lives
+in `ClipnestPlatformLinux` (see
+[`API-ClipnestPlatformLinux.md`](API-ClipnestPlatformLinux.md#linuxeditablerichtext-item-editor-bridge)).
+
+The cross-platform save logic is `ItemEditCoordinator` in `ClipnestViewModels`
+(`loadSource(for:)`, `saveContent(of:output:)`, `saveRecognizedText(of:text:)`
+returning an `ItemEditOutcome`: `.saved(item, clipboard:)`,
+`.itemNoLongerExists`, `.failed(message:)`). `ItemEditStrings` holds every
+user-facing string, so the two editors cannot drift, and
+`ItemEditOutcomePresentation` decides message / refresh / close for each
+outcome. `ClipItem.supportsContentEdit` (text, rich text, link) and
+`.supportsRecognizedTextEdit` (images with OCR text) gate every edit
+affordance; `ItemEditStrings.actionLabel(for:)` returns `nil` when there is
+none.
 
 ---
 

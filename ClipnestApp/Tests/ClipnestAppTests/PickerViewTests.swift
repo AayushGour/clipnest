@@ -93,3 +93,14 @@ struct PickerViewReturnActionTests {
     #expect(PickerView.returnAction(for: [.command, .shift]) == .ignore)
   }
 }
+
+@Suite("PickerView.isEditShortcut")
+struct PickerViewEditShortcutTests {
+  @Test("⌘E is the edit chord; ⌥⌘E (global expand hotkey) and bare E are not (T-EDIT13)")
+  func editChord() {
+    #expect(PickerView.isEditShortcut([.command]))
+    #expect(PickerView.isEditShortcut([.command, .shift]))
+    #expect(!PickerView.isEditShortcut([.command, .option]))
+    #expect(!PickerView.isEditShortcut([]))
+  }
+}

@@ -85,6 +85,8 @@ final class AppEnvironment {
   let pickerViewModel: PickerViewModel
   let pickerPanel: PickerPanel
   let snippetEditorWindow: SnippetEditorWindow
+  /// T-EDIT7: owns the one `ItemEditorWindow` + the edit coordinator.
+  let itemEditPresenter: ItemEditPresenter
   let snippetExpander: SnippetExpander
   let itemPreviewController: ItemPreviewController
 
@@ -296,6 +298,25 @@ final class AppEnvironment {
     let frontmostAppTracker = FrontmostAppTracker()
     self.frontmostAppTracker = frontmostAppTracker
 
+    // T-EDIT7: edit-copied-item wiring. The coordinator reads the live
+    // clipboard on main only; macOS `changeCount` moves synchronously on a
+    // write, so no confirmation wait is needed (`.zero`).
+    let monitor = clipboardMonitor
+    let editCoordinator = ItemEditCoordinator(
+      clipStore: clipStore,
+      blobStore: blobStore,
+      pasteboard: PlatformDefaults.pasteboard,
+      pasteboardReader: pasteboardReader,
+      readClipboardPayload: { pasteboardReader.pullRawPayload(from: NSPasteboard.general) },
+      suppressOwnPasteboardWrite: { [weak monitor] changeCount in
+        monitor?.ignore(changeCount: changeCount)
+      },
+      writeConfirmationTimeout: .zero
+    )
+    let itemEditPresenter = ItemEditPresenter(
+      coordinator: editCoordinator, window: ItemEditorWindow())
+    self.itemEditPresenter = itemEditPresenter
+
     let viewModel = PickerViewModel(
       clipStore: clipStore,
       snippetStore: snippetStore,
@@ -307,6 +328,9 @@ final class AppEnvironment {
       showPreviewOnKeyboardSelection: { [settingsStore] in
         settingsStore.showPreviewOnKeyboardSelection
       },
+      // T-EDIT7: required seam; the presenter's view model + panel are
+      // assigned below once they exist.
+      presentItemEditor: { [itemEditPresenter] mode in itemEditPresenter.present(mode) },
       // T-RT2: lets an already-open picker re-query itself when SOMETHING
       // ELSE mutates this store — Settings' "Clear All History…", or
       // background retention — without either of those call sites needing
@@ -333,6 +357,9 @@ final class AppEnvironment {
     // must stay side-effect-free so tests can build an environment without
     // a background task running.
     self.accessibilityWatcher = AccessibilityPermissionWatcher()
+
+    itemEditPresenter.viewModel = viewModel
+    itemEditPresenter.panel = panel
 
     // Set after `panel`/`clipboardMonitor`/`snippetEditorWindow` exist to
     // break the construction-order cycle: the panel's own SwiftUI content
@@ -447,9 +474,7 @@ final class AppEnvironment {
           }
         },
         onClose: { [weak panel, weak viewModel] in
-          guard let panel, panel.isVisible else { return }
-          panel.makeKey()
-          viewModel?.refocusSearchField()
+          panel?.rekeyAfterEditorClose { viewModel?.refocusSearchField() }
         }
       )
     }
@@ -459,7 +484,6 @@ final class AppEnvironment {
     // doesn't get recaptured as a new external copy on the next poll. See
     // `PickerViewModel.suppressOwnPasteboardWrite`'s and
     // `ClipboardMonitor.ignore(changeCount:)`'s doc comments.
-    let monitor = clipboardMonitor
     viewModel.suppressOwnPasteboardWrite = { [weak monitor] changeCount in
       monitor?.ignore(changeCount: changeCount)
     }

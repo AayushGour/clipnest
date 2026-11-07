@@ -90,8 +90,9 @@
 // T-AUD-VO / T-AUD-KBD (design audit): rows are single VoiceOver elements with
 // spoken labels + custom actions (`RowAccessibilityModifier`); arrow-key
 // highlight moves are announced (`announceHighlightedRow`, because focus stays
-// in the search field); new chords ⌘]/⌘[ (cycle type filter), ⌘E (edit snippet)
-// and ⌘Y (toggle preview) are decoded by the pure `PickerCommandShortcut`.
+// in the search field); new chords ⌘]/⌘[ (cycle type filter) and ⌘Y (toggle
+// preview) are decoded by the pure `PickerCommandShortcut`; ⌘E (edit the
+// highlighted item/snippet) is matched via `isEditShortcut`.
 // macOS manual checks (never compiled/run off-Mac): row preferences may not
 // propagate out of a `List`, and the popover is not repositioned on mouse-wheel
 // scrolling.
@@ -265,6 +266,11 @@ struct PickerView: View {
       guard viewModel.activeTab == .snippets else { return .ignored }
       viewModel.presentCreateSnippetForm()
       return .handled
+    // ⌘E edits the highlighted row (T-EDIT13). ⌥⌘E is the GLOBAL snippet-expand
+    // hotkey, so Option must not be held.
+    case KeyEquivalent("e") where Self.isEditShortcut(press.modifiers):
+      viewModel.editHighlighted()
+      return .handled
     case KeyEquivalent("1") where press.modifiers.contains(.command):
       viewModel.activeTab = .history
       return .handled
@@ -279,7 +285,7 @@ struct PickerView: View {
     }
   }
 
-  /// T-AUD-KBD: maps ⌘] / ⌘[ / ⌘E / ⌘Y (the pure table in
+  /// T-AUD-KBD: maps ⌘] / ⌘[ / ⌘Y (the pure table in
   /// `PickerCommandShortcut`, unit-tested) from a `KeyPress`.
   private static func commandShortcut(for press: KeyPress) -> PickerCommandShortcut? {
     guard let character = press.characters.first else { return nil }
@@ -301,10 +307,6 @@ struct PickerView: View {
         step: command == .nextFilter ? 1 : -1)
       viewModel.query.kindFilter = next
       PickerAnnouncer.announce(KindFilterOptions.accessibilityLabel(for: next))
-      return .handled
-    case .editSnippet:
-      guard viewModel.activeTab == .snippets else { return .ignored }
-      viewModel.editHighlightedSnippet()
       return .handled
     case .togglePreview:
       viewModel.togglePreviewForHighlighted()
@@ -333,6 +335,12 @@ struct PickerView: View {
       else { return }
       PickerAnnouncer.announce(RowAccessibility.snippetLabel(for: snippet))
     }
+  }
+
+  /// Whether `modifiers` is the in-picker Edit chord: ⌘ held, ⌥ not (⌥⌘E is
+  /// the global snippet-expand hotkey). `internal` for `PickerViewTests`.
+  static func isEditShortcut(_ modifiers: EventModifiers) -> Bool {
+    modifiers.contains(.command) && !modifiers.contains(.option)
   }
 
   /// The action a Return keystroke should trigger. `internal` (not
@@ -648,6 +656,7 @@ struct PickerView: View {
             onTogglePin: { viewModel.togglePin(item) },
             onSaveAsSnippet: { viewModel.presentSaveAsSnippetForm(from: item) },
             onDelete: { viewModel.delete(item) },
+            onEdit: { viewModel.presentEditForm(for: item) },
             onCopyRecognizedText: { viewModel.copyRecognizedText(from: item) },
             onHover: { hovering in viewModel.hoverItem(hovering ? item.id : nil) },
             isSelected: viewModel.selectedItemID == item.id,

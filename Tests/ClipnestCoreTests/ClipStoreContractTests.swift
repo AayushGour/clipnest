@@ -757,4 +757,226 @@ enum ClipStoreContractTests {
 
     #expect(results.isEmpty)
   }
+
+  // MARK: - updateContent (edit copied items)
+
+  private static func makeUpdate(
+    kind: ItemKind = .text, previewText: String = "new text", contentHash: String = "new-hash",
+    byteSize: Int = 8, blobPath: String? = nil
+  ) -> ClipContentUpdate {
+    ClipContentUpdate(
+      derived: DerivedClipContent(
+        kind: kind, previewText: previewText, contentHash: contentHash, byteSize: byteSize),
+      blobPath: blobPath)
+  }
+
+  static func updateContentReplacesFieldsAndKeepsPositionPinAndMetadata(
+    makeStore: () async throws -> any ClipStore
+  ) async throws {
+    let store = try await makeStore()
+    let createdAt = Date(timeIntervalSince1970: 1_000)
+    let pinnedAt = Date(timeIntervalSince1970: 2_000)
+    let original = try await store.insertOrBumpDuplicate(
+      ClipItem(
+        createdAt: createdAt, kind: .text, previewText: "old text", contentHash: "old-hash",
+        pinned: true, pinnedAt: pinnedAt, sourceAppName: "Notes",
+        sourceBundleID: "com.apple.Notes", byteSize: 8, ocrText: "x"))
+    _ = try await store.insertOrBumpDuplicate(makeItem(contentHash: "other"))
+
+    let result = try await store.updateContent(
+      original.id,
+      with: makeUpdate(
+        kind: .link, previewText: "https://example.com", contentHash: "new-hash", byteSize: 19,
+        blobPath: "blobs/abc"))
+
+    #expect(result.mergedAwayID == nil)
+    let all = try await store.fetchAll()
+    #expect(all.count == 2)
+    let updated = try #require(all.first { $0.id == original.id })
+    #expect(updated == result.item)
+    #expect(updated.kind == .link)
+    #expect(updated.previewText == "https://example.com")
+    #expect(updated.contentHash == "new-hash")
+    #expect(updated.byteSize == 19)
+    #expect(updated.blobPath == "blobs/abc")
+    #expect(updated.createdAt == createdAt)
+    #expect(updated.pinned)
+    #expect(updated.pinnedAt == pinnedAt)
+    #expect(updated.sourceAppName == "Notes")
+    #expect(updated.sourceBundleID == "com.apple.Notes")
+    #expect(updated.ocrText == "x")
+  }
+
+  static func updateContentUnknownIDThrowsNotFound(
+    makeStore: () async throws -> any ClipStore
+  ) async throws {
+    let store = try await makeStore()
+
+    await #expect(throws: ClipStoreError.notFound) {
+      try await store.updateContent(UUID(), with: makeUpdate())
+    }
+  }
+
+  static func updateContentMakesNewTextSearchableAndOldTextNot(
+    makeStore: () async throws -> any ClipStore
+  ) async throws {
+    let store = try await makeStore()
+    let item = try await store.insertOrBumpDuplicate(
+      makeItem(contentHash: "old-hash", previewText: "old text"))
+
+    _ = try await store.updateContent(item.id, with: makeUpdate(previewText: "new text"))
+
+    let found = try await store.query(
+      text: "new", kind: nil, scope: .history, offset: 0, limit: 10)
+    let stale = try await store.query(
+      text: "old", kind: nil, scope: .history, offset: 0, limit: 10)
+    #expect(found.map(\.id) == [item.id])
+    #expect(stale.isEmpty)
+  }
+
+  static func updateContentKeepsRecognizedTextSearchable(
+    makeStore: () async throws -> any ClipStore
+  ) async throws {
+    let store = try await makeStore()
+    let item = try await store.insertOrBumpDuplicate(
+      makeItem(contentHash: "old-hash", previewText: "Image", kind: .image))
+    try await store.setRecognizedText(item.id, text: "Invoice 4471")
+
+    _ = try await store.updateContent(item.id, with: makeUpdate(previewText: "edited"))
+
+    let byOCR = try await store.query(
+      text: "invoice", kind: nil, scope: .history, offset: 0, limit: 10)
+    #expect(byOCR.map(\.id) == [item.id])
+  }
+
+  static func updateContentMergesOnHashCollision(
+    makeStore: () async throws -> any ClipStore
+  ) async throws {
+    let store = try await makeStore()
+    let earlier = Date(timeIntervalSince1970: 1_000)
+    let later = Date(timeIntervalSince1970: 2_000)
+    let edited = try await store.insertOrBumpDuplicate(
+      makeItem(contentHash: "a-hash", pinned: true, pinnedAt: later))
+    let other = try await store.insertOrBumpDuplicate(
+      makeItem(contentHash: "b-hash", pinned: true, pinnedAt: earlier))
+
+    let result = try await store.updateContent(
+      edited.id, with: makeUpdate(contentHash: "b-hash"))
+
+    let all = try await store.fetchAll()
+    #expect(all.count == 1)
+    #expect(result.item.id == edited.id)
+    #expect(all.first?.id == edited.id)
+    #expect(result.item.pinned)
+    #expect(result.item.pinnedAt == earlier)
+    #expect(all.first?.pinnedAt == earlier)
+    #expect(result.mergedAwayID == other.id)
+  }
+
+  static func updateContentMergePinsSurvivorWhenOnlyMergedAwayWasPinned(
+    makeStore: () async throws -> any ClipStore
+  ) async throws {
+    let store = try await makeStore()
+    let pinnedAt = Date(timeIntervalSince1970: 1_000)
+    let edited = try await store.insertOrBumpDuplicate(makeItem(contentHash: "a-hash"))
+    _ = try await store.insertOrBumpDuplicate(
+      makeItem(contentHash: "b-hash", pinned: true, pinnedAt: pinnedAt))
+
+    let result = try await store.updateContent(
+      edited.id, with: makeUpdate(contentHash: "b-hash"))
+
+    #expect(result.item.pinned)
+    #expect(result.item.pinnedAt == pinnedAt)
+  }
+
+  static func updateContentMergeOfUnpinnedPairStaysUnpinned(
+    makeStore: () async throws -> any ClipStore
+  ) async throws {
+    let store = try await makeStore()
+    let edited = try await store.insertOrBumpDuplicate(makeItem(contentHash: "a-hash"))
+    _ = try await store.insertOrBumpDuplicate(makeItem(contentHash: "b-hash"))
+
+    let result = try await store.updateContent(
+      edited.id, with: makeUpdate(contentHash: "b-hash"))
+
+    #expect(!result.item.pinned)
+    #expect(result.item.pinnedAt == nil)
+    #expect(result.mergedAwayID != nil)
+  }
+
+  static func updateContentWithUnchangedHashDoesNotMergeWithSelf(
+    makeStore: () async throws -> any ClipStore
+  ) async throws {
+    let store = try await makeStore()
+    let item = try await store.insertOrBumpDuplicate(
+      makeItem(contentHash: "same-hash", previewText: "old text"))
+
+    let result = try await store.updateContent(
+      item.id, with: makeUpdate(previewText: "rewritten", contentHash: "same-hash"))
+
+    let all = try await store.fetchAll()
+    #expect(all.count == 1)
+    #expect(all.first?.previewText == "rewritten")
+    #expect(result.mergedAwayID == nil)
+    #expect(result.item.id == item.id)
+  }
+
+  static func updateContentDeletesOldBlobWhenUnreferenced(
+    makeStore: (BlobStore) async throws -> any ClipStore
+  ) async throws {
+    let (blobStore, baseDirectory) = makeTempBlobStore()
+    defer { try? FileManager.default.removeItem(at: baseDirectory) }
+    let store = try await makeStore(blobStore)
+    let oldBlob = try blobStore.write(Data("old rich".utf8))
+    let newBlob = try blobStore.write(Data("new rich".utf8))
+    let item = try await store.insertOrBumpDuplicate(
+      makeItem(contentHash: "old-hash", kind: .richText, blobPath: oldBlob))
+
+    _ = try await store.updateContent(
+      item.id, with: makeUpdate(kind: .richText, blobPath: newBlob))
+
+    #expect(!blobStore.contains(blobPath: oldBlob))
+    #expect(blobStore.contains(blobPath: newBlob))
+  }
+
+  static func updateContentKeepsOldBlobWhenAnotherItemReferencesIt(
+    makeStore: (BlobStore) async throws -> any ClipStore
+  ) async throws {
+    let (blobStore, baseDirectory) = makeTempBlobStore()
+    defer { try? FileManager.default.removeItem(at: baseDirectory) }
+    let store = try await makeStore(blobStore)
+    let sharedBlob = try blobStore.write(Data("shared".utf8))
+    let edited = try await store.insertOrBumpDuplicate(
+      makeItem(contentHash: "a-hash", blobPath: sharedBlob))
+    _ = try await store.insertOrBumpDuplicate(
+      makeItem(contentHash: "b-hash", blobPath: sharedBlob))
+
+    _ = try await store.updateContent(edited.id, with: makeUpdate(blobPath: nil))
+
+    #expect(blobStore.contains(blobPath: sharedBlob))
+  }
+
+  static func updateContentMergeDoesNotDeleteSharedBlob(
+    makeStore: (BlobStore) async throws -> any ClipStore
+  ) async throws {
+    let (blobStore, baseDirectory) = makeTempBlobStore()
+    defer { try? FileManager.default.removeItem(at: baseDirectory) }
+    let store = try await makeStore(blobStore)
+    let oldBlob = try blobStore.write(Data("old rich".utf8))
+    let sharedBlob = try blobStore.write(Data("new rich".utf8))
+    let edited = try await store.insertOrBumpDuplicate(
+      makeItem(contentHash: "a-hash", kind: .richText, blobPath: oldBlob))
+    // The other item's rich contentHash IS its blob's hash, so after the edit
+    // both would point at the very same file.
+    _ = try await store.insertOrBumpDuplicate(
+      makeItem(contentHash: "b-hash", kind: .richText, blobPath: sharedBlob))
+
+    let result = try await store.updateContent(
+      edited.id, with: makeUpdate(kind: .richText, contentHash: "b-hash", blobPath: sharedBlob))
+
+    #expect(result.mergedAwayID != nil)
+    #expect(result.item.blobPath == sharedBlob)
+    #expect(blobStore.contains(blobPath: sharedBlob))
+    #expect(!blobStore.contains(blobPath: oldBlob))
+  }
 }

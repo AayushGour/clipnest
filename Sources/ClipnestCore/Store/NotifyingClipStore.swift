@@ -38,6 +38,12 @@ import Foundation
 /// once the underlying call actually succeeds; a thrown error means nothing
 /// changed, so nothing is broadcast (and the error propagates unchanged to
 /// the caller).
+///
+/// Mutations and what they broadcast: `insertOrBumpDuplicate` → `.inserted`;
+/// `setPinned`/`setRecognizedText` → `.updated`; `updateContent` →
+/// `.updated(id)` then, if it merged another item away, `.deleted(mergedAwayID)`;
+/// `delete` → `.deleted`; `clearHistory` → `.clearedAll`; `enforceRetention`
+/// (with a cap) → `.retentionApplied`.
 public final class NotifyingClipStore: ClipStore {
   private let wrapped: any ClipStore
 
@@ -82,6 +88,17 @@ public final class NotifyingClipStore: ClipStore {
 
   public func fetchImagesNeedingRecognition() async throws -> [ClipItem] {
     try await wrapped.fetchImagesNeedingRecognition()
+  }
+
+  public func updateContent(_ id: UUID, with update: ClipContentUpdate) async throws
+    -> ClipContentUpdateResult
+  {
+    let result = try await wrapped.updateContent(id, with: update)
+    changes.send(.updated(id))
+    if let mergedAwayID = result.mergedAwayID {
+      changes.send(.deleted(mergedAwayID))
+    }
+    return result
   }
 
   public func delete(_ id: UUID) async throws {

@@ -39,4 +39,25 @@ extension ClipItem {
   public var supportsSaveAsSnippet: Bool {
     kind == .text || kind == .link
   }
+
+  /// Whether the main content of this item can be edited in place — `.text`,
+  /// `.richText`, and `.link`. Never `.image` or `.file`: there is no text
+  /// to edit, so no edit affordance (button, menu entry,
+  /// accessibility action) may be offered for them. Single definition
+  /// gating the "Edit" action via `ItemEditStrings.actionLabel(for:)`,
+  /// `PickerViewModel.presentEditForm(for:)`, the macOS `ItemRow` and the GTK
+  /// `ItemRowActionContent`.
+  public var supportsContentEdit: Bool {
+    kind == .text || kind == .richText || kind == .link
+  }
+
+  /// Whether the recognized (OCR) text of this item can be edited — exactly
+  /// `hasRecognizedText`. `.file` items and `.image` items without
+  /// non-empty `ocrText` get no edit affordance at all. Gates the "Edit
+  /// Recognized Text" action at the same call sites as `supportsContentEdit`
+  /// (`ItemEditStrings.actionLabel(for:)`, `PickerViewModel.presentEditForm(for:)`,
+  /// macOS `ItemRow`, GTK `ItemRowActionContent`).
+  public var supportsRecognizedTextEdit: Bool {
+    hasRecognizedText
+  }
 }

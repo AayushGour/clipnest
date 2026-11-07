@@ -322,6 +322,7 @@ extension PickerWindow {
   private static func iconName(for action: ItemRowAction) -> String {
     switch action {
     case .togglePin: return "view-pin"
+    case .edit, .editRecognizedText: return "document-edit"
     case .saveAsSnippet: return "list-add"
     case .copyRecognizedText: return "edit-find"
     case .delete: return "edit-delete"

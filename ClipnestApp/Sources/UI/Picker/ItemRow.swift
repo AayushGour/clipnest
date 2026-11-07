@@ -27,12 +27,19 @@
 // highlighting on `previewText` via `HighlightedText` (item 5).
 //
 // T42 (2026-08-10): reversed the T23 restriction above — the trailing
-// controls are now three always-visible icon buttons (pin/unpin, convert to
-// snippet, delete). The new middle button reuses the exact same
-// `onSaveAsSnippet` action and `supportsSaveAsSnippet` gating the context
-// menu's "Save as Snippet" item already had; a `.richText`/`.image`/`.file`
-// row still shows only two buttons (pin, delete) since there's no dead
-// button rendered for kinds that don't support it.
+// controls became three always-visible icon buttons (pin/unpin, convert to
+// snippet, delete; the T-EDIT7 pencil below makes it up to four). The new
+// middle button reuses the exact same `onSaveAsSnippet` action and
+// `supportsSaveAsSnippet` gating the context menu's "Save as Snippet" item
+// already had; a row whose kind doesn't support it gets no dead button
+// rendered.
+//
+// T-EDIT7 (2026-11-06): a pencil button ("Edit", or "Edit Recognized Text"
+// on an `.image` with OCR text) joins the trailing controls between pin and
+// save-as-snippet, so a row now shows up to FOUR buttons (pin/unpin, edit,
+// save as snippet, delete) — each only when the item supports it, gated on
+// `ItemEditStrings.actionLabel(for:)`. A `.file` row, or an `.image` without
+// OCR text, still shows just pin and delete.
 //
 // Rich per-kind previews: the leading slot used to be a fixed SF Symbol for
 // every kind (`Self.iconName(for:)`). `.image`/`.file` rows now render an
@@ -43,16 +50,16 @@
 // underline) so a link is visually distinguishable from plain text at a
 // glance, not just by its icon. `.text`/`.richText` are unchanged.
 //
-// Routed follow-up (2026-08-10): the three trailing row actions (pin,
-// convert-to-snippet, delete) now use `ExpandingIconButton` (see
+// Routed follow-up (2026-08-10): the trailing row actions (then pin,
+// convert-to-snippet, delete; the edit pencil was added later) now use `ExpandingIconButton` (see
 // `UI/Components/ExpandingIconButton.swift`) instead of the old,
 // icon-only `RowActionButton` (now deleted — this file was its last
 // caller alongside `SnippetRow.swift`, migrated in the same pass; see
-// that file's own note). Each button reveals its label (Pin/Unpin, Save
-// as Snippet, Delete) sliding in next to the icon on hover instead of
+// that file's own note). Each button reveals its label (Pin/Unpin, Edit,
+// Save as Snippet, Delete) sliding in next to the icon on hover instead of
 // relying solely on the `.help` tooltip — same interaction the type-filter
 // chips got first. `isActive` is left at its default `false` for all
-// three: none of these is a "selected among alternatives" control the way
+// of them: none of these is a "selected among alternatives" control the way
 // a filter chip is — pinned state keeps communicating itself exactly as
 // before, via the icon glyph alone (`pin` vs `pin.fill`) plus the dynamic
 // title, not via `ExpandingIconButton`'s active-tint styling. Row height
@@ -75,9 +82,10 @@ import UniformTypeIdentifiers
 
 /// Renders one `ClipItem`: a kind-specific leading icon/thumbnail, its
 /// `previewText` (single line, truncated, with search matches highlighted),
-/// a relative "time ago" timestamp, and three always-visible trailing
-/// actions (pin/unpin, convert to snippet, delete) plus a right-click
-/// context menu offering those same three actions.
+/// a relative "time ago" timestamp, and up to four always-visible trailing
+/// actions (pin/unpin, edit, convert to snippet, delete) plus a right-click
+/// context menu offering those same actions (and "Copy Recognized Text" when
+/// the item has OCR text).
 struct ItemRow: View {
   let item: ClipItem
   /// The active search query, for match highlighting (`HighlightedText`) —
@@ -90,6 +98,10 @@ struct ItemRow: View {
   let onTogglePin: () -> Void
   let onSaveAsSnippet: () -> Void
   let onDelete: () -> Void
+  /// T-EDIT7: opens the edit-copied-item popup. Only reachable through the
+  /// three surfaces gated on `editLabel` (row button, context menu,
+  /// VoiceOver action).
+  let onEdit: () -> Void
   /// T-OCR2: context-menu-only action, only offered `if hasRecognizedText`
   /// — copies the item's OCR text without selecting/pasting the row. See
   /// `PickerViewModel.copyRecognizedText(from:)`.
@@ -124,6 +136,14 @@ struct ItemRow: View {
     item.hasRecognizedText
   }
 
+  /// T-EDIT7: the one label feeding the edit button, context-menu entry and
+  /// VoiceOver action; `nil` (no affordance at all) when the item can't be
+  /// edited. The rule lives in `ItemEditStrings.actionLabel(for:)`, which
+  /// reads only the `ClipItem` predicates.
+  private var editLabel: String? {
+    ItemEditStrings.actionLabel(for: item)
+  }
+
   var body: some View {
     HStack(spacing: 10) {
       leadingContent
@@ -148,12 +168,16 @@ struct ItemRow: View {
     .contentShape(Rectangle())
     .onTapGesture(perform: onSelect)
     .onHover { onHover($0) }
+    .modifier(EditAccessibilityAction(label: editLabel, action: onEdit))
     .contextMenu {
       Button(
         item.pinned ? "Unpin" : "Pin",
         systemImage: item.pinned ? "pin.slash" : "pin",
         action: onTogglePin
       )
+      if let editLabel {
+        Button(editLabel, systemImage: "pencil", action: onEdit)
+      }
       if item.supportsSaveAsSnippet {
         Button("Save as Snippet", systemImage: "text.badge.plus", action: onSaveAsSnippet)
       }
@@ -205,12 +229,13 @@ struct ItemRow: View {
     return actions
   }
 
-  /// Up to three always-visible trailing actions. The pin button's icon
+  /// Up to four always-visible trailing actions. The pin button's icon
   /// alone communicates pinned state (`pin.fill` vs `pin`) — there's no
-  /// separate badge anymore. The convert-to-snippet button only renders
-  /// `if item.supportsSaveAsSnippet`, so a `.richText`/`.image`/`.file` row
-  /// shows exactly two buttons (pin, delete) rather than a third that would
-  /// silently no-op.
+  /// separate badge anymore. The edit button renders only when `editLabel`
+  /// is non-nil, and the convert-to-snippet button only
+  /// `if item.supportsSaveAsSnippet`, so a `.file` row (or an `.image`
+  /// without OCR text) shows exactly two buttons (pin, delete) rather than
+  /// dead ones that would silently no-op.
   private var rowActions: some View {
     HStack(spacing: 8) {
       ExpandingIconButton(
@@ -218,6 +243,9 @@ struct ItemRow: View {
         title: item.pinned ? "Unpin" : "Pin",
         action: onTogglePin
       )
+      if let editLabel {
+        ExpandingIconButton(systemName: "pencil", title: editLabel, action: onEdit)
+      }
       if item.supportsSaveAsSnippet {
         ExpandingIconButton(
           systemName: "text.badge.plus", title: "Save as Snippet", action: onSaveAsSnippet)
@@ -234,7 +262,7 @@ struct ItemRow: View {
   /// T-OCR2: an `.image` row with recognized text gets a small
   /// `text.viewfinder` badge overlaid on its thumbnail's bottom-trailing
   /// corner — purely an indicator (not a fourth always-visible button; the
-  /// row's three trailing buttons stay exactly pin/save/delete, see
+  /// row's trailing buttons stay pin/edit/save/delete, see
   /// `rowActions`'s doc comment). Tapping it does nothing special — the
   /// badge only signals "this image has recognized text"; copying it lives
   /// in the context menu (`onCopyRecognizedText`) and ⌥⏎ (see
@@ -264,6 +292,23 @@ struct ItemRow: View {
       Image(systemName: item.kind.sfSymbolName)
         .foregroundStyle(.secondary)
         .frame(width: 18)
+    }
+  }
+}
+
+/// T-EDIT7: adds the row's single VoiceOver custom action, only when the item
+/// is editable (`label != nil`). A modifier because `accessibilityAction` has
+/// no conditional form; a non-editable row gets no accessibility actions.
+private struct EditAccessibilityAction: ViewModifier {
+  let label: String?
+  let action: () -> Void
+
+  @ViewBuilder
+  func body(content: Content) -> some View {
+    if let label {
+      content.accessibilityAction(named: Text(label), action)
+    } else {
+      content
     }
   }
 }

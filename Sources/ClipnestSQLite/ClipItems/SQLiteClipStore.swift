@@ -161,6 +161,46 @@ public actor SQLiteClipStore: ClipStore {
     }
   }
 
+  public func updateContent(_ id: UUID, with update: ClipContentUpdate) async throws
+    -> ClipContentUpdateResult
+  {
+    try run {
+      guard let existing = try fetchRow(id: id) else { throw ClipStoreError.notFound }
+      // A different row with the new hash is merged away; the edited row's
+      // own (possibly unchanged) hash is never a collision.
+      let mergedAway = try fetchRow(contentHash: update.contentHash).flatMap {
+        $0.id == id ? nil : $0
+      }
+      let pin = ClipContentUpdateMerge.mergedPin(
+        survivorPinned: existing.pinned, survivorPinnedAt: existing.pinnedAt,
+        mergedAwayPinned: mergedAway?.pinned ?? false, mergedAwayPinnedAt: mergedAway?.pinnedAt)
+      let normalizedText = ClipItemNormalization.computeNormalizedText(
+        previewText: update.previewText, ocrText: existing.ocrText)
+
+      // Delete the other row first: `content_hash` is UNIQUE, so the update
+      // would otherwise collide with it.
+      try connection.withTransaction {
+        if let mergedAway { try execDelete(id: mergedAway.id) }
+        try execUpdateContent(
+          id: id, update: update, normalizedText: normalizedText, pinned: pin.pinned,
+          pinnedAt: pin.pinnedAt)
+      }
+
+      // Post-commit: nothing below may throw, or a caller would treat the
+      // committed edit as failed and delete its new blob.
+      let stillReferenced = referencedBlobPaths(
+        among: [existing.blobPath, mergedAway?.blobPath])
+      deleteOrphanedBlobsAfterCommit(
+        candidates: [existing.blobPath, mergedAway?.blobPath],
+        stillReferenced: stillReferenced, using: blobStore)
+
+      var updated = existing.asClipItem.applying(update)
+      updated.pinned = pin.pinned
+      updated.pinnedAt = pin.pinnedAt
+      return ClipContentUpdateResult(item: updated, mergedAwayID: mergedAway?.id)
+    }
+  }
+
   public func delete(_ id: UUID) async throws {
     try run {
       guard let existing = try fetchRow(id: id) else { throw ClipStoreError.notFound }
@@ -349,6 +389,35 @@ public actor SQLiteClipStore: ClipStore {
     try statement.step()
   }
 
+  private func execUpdateContent(
+    id: UUID, update: ClipContentUpdate, normalizedText: String, pinned: Bool, pinnedAt: Date?
+  ) throws {
+    let statement = try connection.prepare(Self.updateContentSQL)
+    defer { statement.finalizeStatement() }
+    try statement.bind(text: update.kind.rawValue, at: 1)
+    try statement.bind(text: update.previewText, at: 2)
+    try statement.bind(text: normalizedText, at: 3)
+    try statement.bind(text: update.contentHash, at: 4)
+    try statement.bind(int64: Int64(update.byteSize), at: 5)
+    try statement.bindNullableText(update.blobPath, at: 6)
+    try statement.bind(bool: pinned, at: 7)
+    try statement.bindNullableDouble(pinnedAt.map(\.timeIntervalSinceReferenceDate), at: 8)
+    try statement.bind(text: id.uuidString, at: 9)
+    try statement.step()
+  }
+
+  /// The subset of `blobPaths` (nils skipped) that at least one remaining row
+  /// still references.
+  /// A failed check counts as referenced (kept), so this never throws.
+  private func referencedBlobPaths(among blobPaths: [String?]) -> Set<String> {
+    blobPathsKeptAfterCommit(candidates: blobPaths) { blobPath in
+      let statement = try connection.prepare(Self.countByBlobPathSQL)
+      defer { statement.finalizeStatement() }
+      try statement.bind(text: blobPath, at: 1)
+      return try statement.step() == .row && statement.columnInt64(at: 0) > 0
+    }
+  }
+
   private func execDelete(id: UUID) throws {
     let statement = try connection.prepare(Self.deleteByIDSQL)
     defer { statement.finalizeStatement() }
@@ -444,6 +513,18 @@ public actor SQLiteClipStore: ClipStore {
 
   private static let updateRecognizedTextSQL =
     "UPDATE \(ClipItemsSchema.tableName) SET \(ClipItemsSchema.Column.ocrText) = ?, \(ClipItemsSchema.Column.normalizedText) = ? WHERE \(ClipItemsSchema.Column.id) = ?;"
+
+  private static let updateContentSQL = """
+    UPDATE \(ClipItemsSchema.tableName) SET
+      \(ClipItemsSchema.Column.kindRawValue) = ?, \(ClipItemsSchema.Column.previewText) = ?,
+      \(ClipItemsSchema.Column.normalizedText) = ?, \(ClipItemsSchema.Column.contentHash) = ?,
+      \(ClipItemsSchema.Column.byteSize) = ?, \(ClipItemsSchema.Column.blobPath) = ?,
+      \(ClipItemsSchema.Column.pinned) = ?, \(ClipItemsSchema.Column.pinnedAt) = ?
+    WHERE \(ClipItemsSchema.Column.id) = ?;
+    """
+
+  private static let countByBlobPathSQL =
+    "SELECT COUNT(*) FROM \(ClipItemsSchema.tableName) WHERE \(ClipItemsSchema.Column.blobPath) = ?;"
 
   private static let deleteByIDSQL =
     "DELETE FROM \(ClipItemsSchema.tableName) WHERE \(ClipItemsSchema.Column.id) = ?;"
