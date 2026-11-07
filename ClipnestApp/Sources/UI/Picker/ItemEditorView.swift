@@ -65,7 +65,7 @@ struct ItemEditorView: View {
 
       RichTextEditorView(
         controller: controller, initial: initial, isRichText: !isRecognizedText,
-        onCancel: onCancel
+        onCancel: onCancel, accessibilityLabel: ItemEditStrings.textLabel
       )
       .frame(minHeight: 200)
       .overlay {

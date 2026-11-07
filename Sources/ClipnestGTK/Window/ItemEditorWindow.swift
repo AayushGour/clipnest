@@ -197,6 +197,7 @@ public final class ItemEditorWindow: @unchecked Sendable {
     // Tab moves focus on (Bold ... editor, Cancel, Save); a literal tab is
     // Ctrl+Tab, see `EditorKeyAction`.
     gtk_text_view_set_accepts_tab(textView, 0)
+    gtkSetAccessibleLabel(textView, ItemEditStrings.textLabel)
     gtk_scrolled_window_set_child(scroller, textView)
     gtk_box_append(outerBox, scroller)
 

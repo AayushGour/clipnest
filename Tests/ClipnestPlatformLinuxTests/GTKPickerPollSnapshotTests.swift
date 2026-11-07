@@ -90,4 +90,23 @@ struct GTKPickerPollSnapshotTests {
     let aspects = PickerPollSnapshot.changedAspects(from: .initial, to: next)
     #expect(aspects == [.searching, .focus])
   }
+
+  @Test("A row-list rebuild re-applies the selection even when the selected id is unchanged")
+  func rebuiltListsResyncSelection() {
+    // Edit-save: same selected id, rows rebuilt (listBox selection is lost).
+    #expect(PickerPollSnapshot.needsSelectionSync(aspects: [.rows]))
+    #expect(PickerPollSnapshot.needsSelectionSync(aspects: [.snippets]))
+    #expect(PickerPollSnapshot.needsSelectionSync(aspects: [.selection]))
+    #expect(!PickerPollSnapshot.needsSelectionSync(aspects: [.focus, .preview, .searching]))
+    #expect(!PickerPollSnapshot.needsSelectionSync(aspects: []))
+  }
+
+  @Test("Scroll follows selection moves and list replacement, never an append-only rows change")
+  func scrollDecision() {
+    #expect(!PickerPollSnapshot.needsScroll(aspects: [.rows], canAppend: true))
+    #expect(!PickerPollSnapshot.needsScroll(aspects: [.snippets], canAppend: true))
+    #expect(PickerPollSnapshot.needsScroll(aspects: [.selection], canAppend: true))
+    #expect(PickerPollSnapshot.needsScroll(aspects: [.rows, .selection], canAppend: true))
+    #expect(PickerPollSnapshot.needsScroll(aspects: [.rows], canAppend: false))
+  }
 }

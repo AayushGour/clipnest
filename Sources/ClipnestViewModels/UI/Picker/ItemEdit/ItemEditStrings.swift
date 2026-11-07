@@ -14,6 +14,8 @@ public enum ItemEditStrings {
   public static let goBack = "Go Back"
   public static let editActionLabel = "Edit"
   public static let editRecognizedTextActionLabel = "Edit Recognized Text"
+  /// Accessible name of the editor's text area (VoiceOver / Orca).
+  public static let textLabel = "Text"
   public static let boldLabel = "Bold"
   public static let italicLabel = "Italic"
   public static let underlineLabel = "Underline"

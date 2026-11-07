@@ -96,7 +96,7 @@ struct RichTextEditorView: NSViewRepresentable {
   /// Esc while the caret is in the editor.
   let onCancel: () -> Void
   /// Accessibility identifier / label of the text view (the snippet editor
-  /// passes its Body's; the item editor keeps the defaults).
+  /// passes its Body's; the item editor passes `ItemEditStrings.textLabel`).
   var identifier = ItemEditControl.editor.rawValue
   var accessibilityLabel: String?
   /// False when another control owns the initial focus (the snippet's Tag).

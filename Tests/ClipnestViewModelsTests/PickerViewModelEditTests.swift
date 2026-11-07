@@ -174,4 +174,39 @@ struct PickerViewModelEditTests {
     #expect(viewModel.rows[indexAfter].pinned)
     #expect(viewModel.rows.contains { $0.id == first.id })
   }
+
+  @Test("Highlight stays on the edited item after reload, and on the survivor after a merge")
+  func highlightSurvivesReloadAndMerge() async throws {
+    let (directory, blobStore) = makeTempBlobStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let store = InMemoryClipStore(blobStore: blobStore)
+    _ = try await store.insertOrBumpDuplicate(makeClipItem(previewText: "a"))
+    let target = try await store.insertOrBumpDuplicate(
+      makeClipItem(previewText: "b"))
+    let other = try await store.insertOrBumpDuplicate(
+      makeClipItem(
+        previewText: "c", contentHash: ClipContentDerivation.plainText("c").contentHash))
+
+    let viewModel = makeTestPickerViewModel(clipStore: store, blobStore: blobStore)
+    viewModel.willShow()
+    await waitUntil { viewModel.rows.count == 3 }
+    viewModel.selectedItemID = target.id
+
+    // Plain edit: same id stays highlighted.
+    _ = try await store.updateContent(
+      target.id,
+      with: ClipContentUpdate(derived: ClipContentDerivation.plainText("b2"), blobPath: nil))
+    viewModel.reloadAfterEdit()
+    await waitUntil { viewModel.rows.contains { $0.previewText == "b2" } }
+    #expect(viewModel.highlightedItem?.id == target.id)
+
+    // Merge: edit into "c"'s content; the edited item survives, highlighted.
+    let result = try await store.updateContent(
+      target.id,
+      with: ClipContentUpdate(derived: ClipContentDerivation.plainText("c"), blobPath: nil))
+    #expect(result.mergedAwayID == other.id)
+    viewModel.reloadAfterEdit()
+    await waitUntil { viewModel.rows.count == 2 }
+    #expect(viewModel.highlightedItem?.id == target.id)
+  }
 }

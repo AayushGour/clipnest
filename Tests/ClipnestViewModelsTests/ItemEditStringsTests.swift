@@ -36,4 +36,9 @@ struct ItemEditStringsTests {
     #expect(ItemEditStrings.italicLabel == "Italic")
     #expect(ItemEditStrings.underlineLabel == "Underline")
   }
+
+  @Test("The editor text area has a non-empty accessible label")
+  func textLabel() {
+    #expect(ItemEditStrings.textLabel == "Text")
+  }
 }
