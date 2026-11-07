@@ -42,6 +42,7 @@ struct GTKPickerKeyActionTests {
       .saveAsSnippet,
       .newSnippet,
       .replaceSnippet,
+      .editHighlighted,
       .openSettings,
     ]
     for action in nonTextEditingActions {

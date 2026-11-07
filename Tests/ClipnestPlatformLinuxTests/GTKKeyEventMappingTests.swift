@@ -218,6 +218,17 @@ struct GTKKeyEventMappingTests {
     #expect(KeyEventMapping.action(keyval: Self.sLower, state: 0) == nil)
   }
 
+  @Test("Ctrl+E edits the highlighted row; bare E and Ctrl+Alt+E do nothing (T-EDIT13)")
+  func ctrlEEditsHighlighted() {
+    #expect(
+      KeyEventMapping.action(keyval: Self.eLower, state: Self.controlMask) == .editHighlighted)
+    #expect(
+      KeyEventMapping.action(keyval: Self.eUpper, state: Self.controlMask) == .editHighlighted)
+    #expect(KeyEventMapping.action(keyval: Self.eLower, state: 0) == nil)
+    #expect(
+      KeyEventMapping.action(keyval: Self.eLower, state: Self.controlMask | Self.altMask) == nil)
+  }
+
   @Test("Ctrl+N opens the new-snippet form; plain N does nothing")
   func ctrlNOpensNewSnippetForm() {
     #expect(KeyEventMapping.action(keyval: Self.nLower, state: Self.controlMask) == .newSnippet)
@@ -226,7 +237,7 @@ struct GTKKeyEventMappingTests {
   }
 
   @Test(
-    "Ctrl+Shift+E replaces/edits the highlighted snippet; Ctrl+E alone and Shift+E alone do nothing"
+    "Ctrl+Shift+E replaces/edits the highlighted snippet; Shift+E alone does nothing"
   )
   func ctrlShiftEReplacesSnippet() {
     #expect(
@@ -235,7 +246,6 @@ struct GTKKeyEventMappingTests {
     #expect(
       KeyEventMapping.action(keyval: Self.eUpper, state: Self.controlMask | Self.shiftMask)
         == .replaceSnippet)
-    #expect(KeyEventMapping.action(keyval: Self.eLower, state: Self.controlMask) == nil)
     #expect(KeyEventMapping.action(keyval: Self.eLower, state: Self.shiftMask) == nil)
     #expect(KeyEventMapping.action(keyval: Self.eLower, state: 0) == nil)
   }

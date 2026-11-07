@@ -1,3 +1,14 @@
+clipnest (1.7.0) jammy; urgency=medium
+
+  * feat: edit a copied item — text, rich text, links and recognized
+    (OCR) text open in a small editor; saving replaces the entry in
+    place. Ctrl+E edits the highlighted item (or snippet).
+  * feat: the item editor and the snippet editor are fully keyboard
+    accessible (Tab/Shift+Tab, Ctrl+Return saves, Esc cancels,
+    Ctrl+Tab inserts a tab, Ctrl+B/I/U format rich text).
+
+ -- Aayush Gour <ag14906@gmail.com>  Sat, 07 Nov 2026 00:00:00 +0000
+
 clipnest (1.6.0) jammy; urgency=medium
 
   * feat: the Welcome window now requires the permissions to be set up

@@ -30,7 +30,9 @@ func makeTestPickerViewModel(
   paster: Paster? = nil,
   pasteDismissOrdering: PasteDismissOrdering = .dismissBeforeWrite,
   // Explicit in the factory (test code): selection preview OFF unless a test opts in.
-  showPreviewOnKeyboardSelection: @escaping @MainActor () -> Bool = { false }
+  showPreviewOnKeyboardSelection: @escaping @MainActor () -> Bool = { false },
+  // Explicit in the factory (test code): the editor presenter does nothing unless a test opts in.
+  presentItemEditor: @escaping @MainActor (ItemEditMode) -> Void = { _ in }
 ) -> PickerViewModel {
   PickerViewModel(
     clipStore: clipStore,
@@ -46,6 +48,7 @@ func makeTestPickerViewModel(
     frontmostAppTracker: FrontmostAppTracker(provider: FakeFrontmostAppReferenceProviding()),
     pasteDismissOrdering: pasteDismissOrdering,
     showPreviewOnKeyboardSelection: showPreviewOnKeyboardSelection,
+    presentItemEditor: presentItemEditor,
     storeChanges: storeChanges
   )
 }

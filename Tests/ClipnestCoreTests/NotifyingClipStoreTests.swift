@@ -102,6 +102,49 @@ struct NotifyingClipStoreTests {
     #expect(recorded.all.isEmpty)
   }
 
+  @Test("updateContent broadcasts .updated(id), then .deleted(mergedAwayID) when it merged")
+  func updateContentBroadcastsUpdatedThenDeletedOnMerge() async throws {
+    let (store, _, directory) = makeSUT()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let edited = try await store.insertOrBumpDuplicate(
+      ClipStoreContractTests.makeItem(contentHash: "hash-a"))
+    let other = try await store.insertOrBumpDuplicate(
+      ClipStoreContractTests.makeItem(contentHash: "hash-b"))
+    let (recorded, subscription) = recordChanges(from: store)
+    defer { subscription.cancel() }
+
+    let merged = try await store.updateContent(
+      edited.id, with: Self.makeUpdate(contentHash: "hash-b"))
+    #expect(merged.mergedAwayID == other.id)
+    #expect(recorded.all == [.updated(edited.id), .deleted(other.id)])
+
+    let plain = try await store.updateContent(
+      edited.id, with: Self.makeUpdate(contentHash: "hash-c"))
+    #expect(plain.mergedAwayID == nil)
+    #expect(recorded.all.suffix(1) == [.updated(edited.id)])
+  }
+
+  @Test("updateContent on a missing id propagates .notFound and broadcasts nothing")
+  func updateContentFailureBroadcastsNothing() async throws {
+    let (store, _, directory) = makeSUT()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let (recorded, subscription) = recordChanges(from: store)
+    defer { subscription.cancel() }
+
+    await #expect(throws: ClipStoreError.notFound) {
+      try await store.updateContent(UUID(), with: Self.makeUpdate(contentHash: "hash-x"))
+    }
+
+    #expect(recorded.all.isEmpty)
+  }
+
+  private static func makeUpdate(contentHash: String) -> ClipContentUpdate {
+    ClipContentUpdate(
+      derived: DerivedClipContent(
+        kind: .text, previewText: "edited", contentHash: contentHash, byteSize: 6),
+      blobPath: nil)
+  }
+
   @Test("clearHistory broadcasts .clearedAll")
   func clearHistoryBroadcastsClearedAll() async throws {
     let (store, _, directory) = makeSUT()

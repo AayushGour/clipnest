@@ -96,8 +96,6 @@ public struct PasteboardReader: Sendable {
     }
   }
 
-  private static let validLinkSchemes: Set<String> = ["http", "https", "ftp", "mailto"]
-
   /// Pasteboard types checked for image bytes, in priority order: `.png`
   /// first, `.tiff` only as a fallback when no `.png` representation is
   /// offered. Both are still checked (not just one) because different apps
@@ -480,12 +478,14 @@ public struct PasteboardReader: Sendable {
     _ rtfData: Data,
     fallbackPlainText: String?
   ) -> Classification {
-    let previewText = plainTextPreview(forRTF: rtfData, fallbackPlainText: fallbackPlainText)
+    let derived = ClipContentDerivation.richText(
+      blob: rtfData,
+      plainText: plainTextPreview(forRTF: rtfData, fallbackPlainText: fallbackPlainText))
     return Classification(
-      kind: .richText,
-      previewText: previewText,
-      contentHash: BlobStore.contentHash(of: rtfData),
-      byteSize: rtfData.count,
+      kind: derived.kind,
+      previewText: derived.previewText,
+      contentHash: derived.contentHash,
+      byteSize: derived.byteSize,
       rawData: rtfData
     )
   }
@@ -501,33 +501,21 @@ public struct PasteboardReader: Sendable {
     -> String
   {
     if let plainString = fallbackPlainText {
-      return plainString.trimmingCharacters(in: .whitespacesAndNewlines)
+      return plainString
     }
     if let flattened = richTextFlattener.plainText(fromRTF: rtfData) {
-      return flattened.trimmingCharacters(in: .whitespacesAndNewlines)
+      return flattened
     }
     return "Rich Text"
   }
 
   private func readPlainText(_ text: String) -> Classification {
-    let previewText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-    let data = Data(text.utf8)
-    let kind: ItemKind = isLink(previewText) ? .link : .text
+    let derived = ClipContentDerivation.plainText(text)
     return Classification(
-      kind: kind,
-      previewText: previewText,
-      contentHash: BlobStore.contentHash(of: data),
-      byteSize: data.count
+      kind: derived.kind,
+      previewText: derived.previewText,
+      contentHash: derived.contentHash,
+      byteSize: derived.byteSize
     )
-  }
-
-  private func isLink(_ text: String) -> Bool {
-    guard !text.isEmpty, !text.contains(where: \.isWhitespace) else { return false }
-    guard let url = URL(string: text), let scheme = url.scheme?.lowercased() else {
-      return false
-    }
-    guard Self.validLinkSchemes.contains(scheme) else { return false }
-    if scheme == "mailto" { return true }
-    return !(url.host?.isEmpty ?? true)
   }
 }

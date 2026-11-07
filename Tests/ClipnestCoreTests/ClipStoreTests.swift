@@ -321,4 +321,84 @@ struct ClipStoreTests {
       InMemoryClipStore()
     }
   }
+
+  // MARK: - updateContent (edit copied items)
+
+  @Test("updateContent replaces content fields and keeps position, pin and metadata")
+  func updateContentReplacesFieldsAndKeepsPositionPinAndMetadata() async throws {
+    try await ClipStoreContractTests.updateContentReplacesFieldsAndKeepsPositionPinAndMetadata {
+      InMemoryClipStore()
+    }
+  }
+
+  @Test("updateContent on an unknown id throws .notFound")
+  func updateContentUnknownIDThrowsNotFound() async throws {
+    try await ClipStoreContractTests.updateContentUnknownIDThrowsNotFound {
+      InMemoryClipStore()
+    }
+  }
+
+  @Test("updateContent makes new text searchable and old text not")
+  func updateContentMakesNewTextSearchableAndOldTextNot() async throws {
+    try await ClipStoreContractTests.updateContentMakesNewTextSearchableAndOldTextNot {
+      InMemoryClipStore()
+    }
+  }
+
+  @Test("updateContent keeps recognized text searchable")
+  func updateContentKeepsRecognizedTextSearchable() async throws {
+    try await ClipStoreContractTests.updateContentKeepsRecognizedTextSearchable {
+      InMemoryClipStore()
+    }
+  }
+
+  @Test("updateContent merges with another item on hash collision")
+  func updateContentMergesOnHashCollision() async throws {
+    try await ClipStoreContractTests.updateContentMergesOnHashCollision {
+      InMemoryClipStore()
+    }
+  }
+
+  @Test("updateContent merge pins the survivor when only the merged-away item was pinned")
+  func updateContentMergePinsSurvivorWhenOnlyMergedAwayWasPinned() async throws {
+    try await ClipStoreContractTests.updateContentMergePinsSurvivorWhenOnlyMergedAwayWasPinned {
+      InMemoryClipStore()
+    }
+  }
+
+  @Test("updateContent merge of an unpinned pair stays unpinned")
+  func updateContentMergeOfUnpinnedPairStaysUnpinned() async throws {
+    try await ClipStoreContractTests.updateContentMergeOfUnpinnedPairStaysUnpinned {
+      InMemoryClipStore()
+    }
+  }
+
+  @Test("updateContent with an unchanged hash does not merge with itself")
+  func updateContentWithUnchangedHashDoesNotMergeWithSelf() async throws {
+    try await ClipStoreContractTests.updateContentWithUnchangedHashDoesNotMergeWithSelf {
+      InMemoryClipStore()
+    }
+  }
+
+  @Test("updateContent deletes the old blob when nothing references it")
+  func updateContentDeletesOldBlobWhenUnreferenced() async throws {
+    try await ClipStoreContractTests.updateContentDeletesOldBlobWhenUnreferenced { blobStore in
+      InMemoryClipStore(blobStore: blobStore)
+    }
+  }
+
+  @Test("updateContent keeps the old blob when another item references it")
+  func updateContentKeepsOldBlobWhenAnotherItemReferencesIt() async throws {
+    try await ClipStoreContractTests.updateContentKeepsOldBlobWhenAnotherItemReferencesIt {
+      blobStore in
+      InMemoryClipStore(blobStore: blobStore)
+    }
+  }
+
+  @Test("updateContent merge does not delete a blob the survivor now uses")
+  func updateContentMergeDoesNotDeleteSharedBlob() async throws {
+    try await ClipStoreContractTests.updateContentMergeDoesNotDeleteSharedBlob { blobStore in
+      InMemoryClipStore(blobStore: blobStore)
+    }
+  }
 }

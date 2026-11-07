@@ -187,6 +187,22 @@ A snippet is reusable text you write yourself — a signature, boilerplate reply
 
 <summary markdown="1">
 
+## Can I edit something I already copied?
+
+</summary>
+
+<div class="faq-answer" markdown="1">
+
+Yes, for text, rich text and links. Click the pencil on the row (or right-click → **Edit**, or highlight it and press **⌘E**, **Ctrl+E** on Linux) to open a small editor with Bold, Italic and Underline. **Save** replaces the entry in place, keeping its position and pin, and if it is what's on your clipboard right now the clipboard gets the edited version too. On an image with recognized text you can edit that text instead; the image itself is never changed, and files can't be edited. See [Editing an item]({{ "/usage/" | relative_url }}#editing-an-item).
+
+</div>
+
+</details>
+
+<details class="faq-item" markdown="1">
+
+<summary markdown="1">
+
 ## How much clipboard history does Clipnest keep?
 
 </summary>

@@ -107,6 +107,35 @@ public actor InMemoryClipStore: ClipStore {
       .sorted { $0.createdAt > $1.createdAt }
   }
 
+  public func updateContent(_ id: UUID, with update: ClipContentUpdate) async throws
+    -> ClipContentUpdateResult
+  {
+    guard let existing = itemsByID[id] else { throw ClipStoreError.notFound }
+    var survivor = existing.applying(update)
+
+    // A different item with the new hash is merged away. The edited item's
+    // own (possibly unchanged) hash never counts as a collision.
+    var mergedAway: ClipItem?
+    if let other = itemsByID.values.first(where: {
+      $0.id != id && $0.contentHash == update.contentHash
+    }) {
+      let pin = ClipContentUpdateMerge.mergedPin(
+        survivorPinned: survivor.pinned, survivorPinnedAt: survivor.pinnedAt,
+        mergedAwayPinned: other.pinned, mergedAwayPinnedAt: other.pinnedAt)
+      survivor.pinned = pin.pinned
+      survivor.pinnedAt = pin.pinnedAt
+      itemsByID.removeValue(forKey: other.id)
+      mergedAway = other
+    }
+    itemsByID[id] = survivor
+
+    let stillReferenced = Set(itemsByID.values.compactMap(\.blobPath))
+    deleteOrphanedBlobsAfterCommit(
+      candidates: [existing.blobPath, mergedAway?.blobPath],
+      stillReferenced: stillReferenced, using: blobStore)
+    return ClipContentUpdateResult(item: survivor, mergedAwayID: mergedAway?.id)
+  }
+
   public func delete(_ id: UUID) async throws {
     guard let item = itemsByID.removeValue(forKey: id) else { throw ClipStoreError.notFound }
     try deleteBlobs(for: [item], using: blobStore)

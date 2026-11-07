@@ -131,15 +131,15 @@ extension PickerWindow {
   }
 
   private func reconcile(aspects: Set<PickerPollAspect>, snapshot: PickerPollSnapshot) {
+    // Safe to try an incremental append only when NEITHER the active tab
+    // NOR the search text also changed since the last reconcile — see
+    // `PickerWindow+Rows.swift`'s `updateRows`/`updateSnippetRows` doc
+    // comments for why those are exactly the two things that make an
+    // append meaningless even before checking the arrays' actual shape.
+    let canAppend =
+      lastSnapshot.activeTab == snapshot.activeTab
+      && lastSnapshot.queryText == snapshot.queryText
     if aspects.contains(.rows) || aspects.contains(.snippets) {
-      // Safe to try an incremental append only when NEITHER the active tab
-      // NOR the search text also changed since the last reconcile — see
-      // `PickerWindow+Rows.swift`'s `updateRows`/`updateSnippetRows` doc
-      // comments for why those are exactly the two things that make an
-      // append meaningless even before checking the arrays' actual shape.
-      let canAppend =
-        lastSnapshot.activeTab == snapshot.activeTab
-        && lastSnapshot.queryText == snapshot.queryText
       switch snapshot.activeTab {
       case .history, .pinned:
         updateRows(snapshot.rows, searchText: snapshot.queryText, canAppend: canAppend)
@@ -148,13 +148,19 @@ extension PickerWindow {
           snapshot.snippetRows, searchText: snapshot.queryText, canAppend: canAppend)
       }
     }
-    if aspects.contains(.selection) {
+    if PickerPollSnapshot.needsSelectionSync(aspects: aspects) {
+      // A rebuild drops GTK's selection, so it is re-applied; it only scrolls
+      // when the selection moved or the list was replaced (tab/search), never
+      // for a pagination append or capture that must keep the user's scroll.
+      let scroll = PickerPollSnapshot.needsScroll(aspects: aspects, canAppend: canAppend)
       switch snapshot.activeTab {
       case .history, .pinned:
-        syncListBoxSelection(toIndex: renderedRows.firstIndex { $0.id == snapshot.selectedItemID })
+        syncListBoxSelection(
+          toIndex: renderedRows.firstIndex { $0.id == snapshot.selectedItemID }, scroll: scroll)
       case .snippets:
         syncListBoxSelection(
-          toIndex: renderedSnippets.firstIndex { $0.id == snapshot.selectedSnippetID })
+          toIndex: renderedSnippets.firstIndex { $0.id == snapshot.selectedSnippetID },
+          scroll: scroll)
       }
     }
     // T-RT5: recomputed on EVERY reconcile, unconditionally — not gated on

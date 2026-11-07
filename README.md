@@ -226,7 +226,7 @@ Clipnest shows a short **Welcome** window once (also the first time after you up
 | Pin / unpin | <kbd>⌘</kbd><kbd>P</kbd> |
 | Save history item as snippet *(text/link items only)* | <kbd>⌘</kbd><kbd>S</kbd> |
 | New snippet (Snippets tab) | <kbd>⌘</kbd><kbd>N</kbd> |
-| Edit highlighted snippet (Snippets tab) | <kbd>⌘</kbd><kbd>E</kbd> |
+| Edit highlighted item / snippet *(not files or images without recognized text)* | <kbd>⌘</kbd><kbd>E</kbd> (Linux: <kbd>Ctrl</kbd><kbd>E</kbd>) |
 | Next / previous type filter (History, Pinned) | <kbd>⌘</kbd><kbd>]</kbd> / <kbd>⌘</kbd><kbd>[</kbd> |
 | Show / hide preview of the highlighted item | <kbd>⌘</kbd><kbd>Y</kbd> |
 | Delete entry | <kbd>⌘</kbd><kbd>⌫</kbd> |
@@ -290,11 +290,12 @@ Shown at launch if the history database is unreadable and automatic recovery did
 - 🅰 **Paste without formatting** — **⌥Return** only differs from plain **Return** where there's actually something to strip: on **rich text** items it pastes the plain-text form instead of the formatted one, and on an **image row with recognized text** (see OCR below) it pastes that recognized text instead of the image. On plain text, links, files, and images with no recognized text, ⌥Return pastes exactly what Return does — there's nothing richer to strip.
 - 🔍 **On-device text recognition (OCR), off by default** — let Clipnest read the text in your screenshots so you can find them by what they say, not just when you copied them. Turn it on in Settings → History; see [Privacy](#privacy-first) for the trade-off before you do.
 - 👁 **Hover previews** — hover over an item (or, with **Settings -> General -> "Show preview when selecting with the keyboard"** on, arrow to it) and a popover shows the full content: the image at up to 40% of screen width (with any recognized text shown below it), the full scrollable text (loaded in chunks for huge clips), or a file's name, size, and path.
+- ✏️ **Edit a copied item** — fix a typo or trim a copy without pasting it elsewhere first: click the pencil on a text, rich text, or link row (or right-click → **Edit**) and a small editor with Bold / Italic / Underline opens. **Save** replaces the entry in place, keeping its position and pin; if it's what's on your clipboard right now, the clipboard gets the edited version too. On an image with recognized text the action is **Edit Recognized Text**. Files can't be edited.
 - 📌 **Pin your favorites** — keep the items you reuse most pinned to the top, always a keystroke away.
 - 🧠 **Smart de-duplication** — copy the same thing twice and it won't clutter your history.
 - ✂️ **Snippets** — save reusable text (a signature, boilerplate, a command) with a **Tag**, and paste it from the Snippets tab or **insert it into any app by its Tag** (type it, select it, press the expand shortcut — see below). Turn a text or link history item into a snippet with **⌘S** — the only kinds ⌘S applies to, since those are the only ones with a plain-text body to seed one from.
 - ⚙️ **A real Settings window** — General, History, Apps, Shortcuts, and Permissions tabs to tune Clipnest to how you work (see below). Open it from the menu-bar icon → *Settings…*, or with **⌘,**.
-- ⌨️ **Keyboard-first** — arrows to move, Return to paste, Esc to dismiss, ⌘F to search, ⌘P to pin, ⌘⌫ to delete, ⌘1/2/3 for tabs, ⌘[ / ⌘] to cycle the type filter, ⌘E to edit a snippet, ⌘Y to preview, ⌘, for Settings. **VoiceOver** reads each row as one labelled item ("Text, pinned, 2 minutes ago: …") with Pin, Delete, Save as Snippet, Paste as plain text and Edit as actions.
+- ⌨️ **Keyboard-first** — arrows to move, Return to paste, Esc to dismiss, ⌘F to search, ⌘P to pin, ⌘⌫ to delete, ⌘1/2/3 for tabs, ⌘[ / ⌘] to cycle the type filter, ⌘E to edit an item or snippet, ⌘Y to preview, ⌘, for Settings. **VoiceOver** reads each row as one labelled item ("Text, pinned, 2 minutes ago: …") with Pin, Delete, Save as Snippet, Paste as plain text and Edit as actions.
 - 🪶 **Featherweight & native** — pure Swift/SwiftUI, a few MB, sips almost no memory, feels like part of macOS. Lives in the menu bar with no Dock icon day-to-day (opening Settings briefly shows one — see [Settings](#settings)).
 - 🔒 **Private by design** — everything stays on your Mac. See [Privacy](#privacy-first).
 
@@ -372,6 +373,7 @@ On another system it stops unless you set `CLIPNEST_FORCE=1`. It needs `curl`, `
 - **First run:** the Welcome window sets up pasting into other apps (keyboard access plus the GNOME extension; **Continue** unlocks when set up) and ends with a **Log out to finish setup** step (Log Out Now / Later) when a re-login is pending. Until you log out and back in, Clipnest copies your choice and you press Ctrl+V yourself.
 - **Tray icon:** Open Clipnest, Pause Capture, Settings…, Check for Updates…, Getting Started…, Quit. While paused the tray icon switches to a paused icon with a "Capture paused" tooltip.
 - **Start at login** is off by default, as on the Mac; **OCR** is off by default too (Settings → History).
+- **Editing an item** works as on the Mac, with two differences: the Bold / Italic / Underline buttons act on the current selection only (select text first), and the editor handles bold, italic, underline, colour, font family and font size, so anything else in a rich-text item (tables, lists) triggers the "Some formatting in this item can't be kept." warning on save. GTK has no custom accessibility action, so Edit is a labelled button and menu entry.
 - **Snippet expansion** that can't happen posts a desktop notification instead of a beep.
 
 </details>

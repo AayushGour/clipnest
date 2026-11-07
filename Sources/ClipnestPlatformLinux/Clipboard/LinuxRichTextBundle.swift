@@ -92,7 +92,12 @@ public struct LinuxRichTextBundle: Sendable, Equatable {
     guard let count = Self.readUInt32(from: bytes, at: &cursor) else { return nil }
 
     var representations: [Representation] = []
-    representations.reserveCapacity(Int(count))
+    // `count` is attacker-controlled: never reserve more than the remaining
+    // bytes could possibly hold (each representation needs at least its
+    // 2-byte mime length + 4-byte data length).
+    let minRepresentationSize = 6
+    representations.reserveCapacity(
+      min(Int(count), (bytes.count - cursor) / minRepresentationSize))
     for _ in 0..<count {
       guard let mimeLength = Self.readUInt16(from: bytes, at: &cursor),
         let mimeBytes = Self.consume(Int(mimeLength), from: bytes, at: &cursor),

@@ -104,12 +104,16 @@ public enum LinuxClipboardConstants {
     "image/bmp",
   ]
 
+  /// The HTML rich-text MIME type — the only representation Clipnest's Linux
+  /// editor can read or regenerate (see `LinuxEditableRichText`).
+  public static let htmlMimeType = "text/html"
+
   /// `text/html` first — the dominant Linux rich-text clipboard format,
   /// unlike macOS where RTF is primary (see `ClipMediaType`'s doc comment).
   /// `application/rtf` before `text/rtf`: the IANA-registered media type
   /// ahead of the older, non-standard alias some apps still emit.
   public static let richTextMimePriority = [
-    "text/html",
+    htmlMimeType,
     "application/rtf",
     "text/rtf",
   ]

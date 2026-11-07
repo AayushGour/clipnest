@@ -178,11 +178,15 @@ public protocol ClipStore: Sendable {
   func query(text: String, kind: ItemKind?, scope: ClipScope,
              offset: Int, limit: Int) async throws -> [ClipItem]              // real filter+sort+page
   func setPinned(_ id: UUID, pinned: Bool) async throws
+  func updateContent(_ id: UUID, with update: ClipContentUpdate) async throws
+    -> ClipContentUpdateResult                                                // edit-in-place; merges on a duplicate hash
   func delete(_ id: UUID) async throws
   func clearHistory() async throws
   func enforceRetention(cap: RetentionCap?) async throws
 }
 ```
+
+(The listing omits `setRecognizedText` and `fetchImagesNeedingRecognition`; see [`docs/API.md`](API.md#clipstore-protocol) for the full set.) `updateContent(_:with:)` backs the **edit a copied item** flow: `ItemEditCoordinator` (`ClipnestViewModels`, shared by macOS and Linux) re-derives the content fields through `ClipContentDerivation` (the same code capture uses), writes the rich blob, calls `updateContent`, and then rewrites the system clipboard only if it still held the pre-edit item. Both platforms' editors (`ItemEditorWindow` in `ClipnestApp` and in `ClipnestGTK`) hand it an `EditorOutput`; the store keeps the item's position, pin state and `createdAt`.
 
 > **Note on the picker's query path:** `PickerViewModel` calls
 > `ClipStore.query(...)`/`SnippetStore.query(...)` exclusively — funneled
@@ -249,12 +253,12 @@ This is the largest area of the App target. Responsibilities split cleanly betwe
 | `TabSwitcher` | `UI/Picker/TabSwitcher.swift:16-60` | The `PickerTab` enum (`.history`/`.pinned`/`.snippets`) + segmented control. |
 | `TypeFilterChips` | `UI/Picker/TypeFilterChips.swift:41-82` | Icon-only `ItemKind?` filter chips bound to `SearchQuery.kindFilter`. |
 | `HighlightedText` | `UI/Picker/HighlightedText.swift:19-40` | Renders `SearchHighlighter` match ranges as a styled `AttributedString`. |
-| `WindowPlacement` | `UI/Picker/WindowPlacement.swift:28-108` | Pure `CGRect`/`CGPoint` geometry (screen-clamping, picker/editor side-by-side layout) — no live `NSWindow` dependency, shared by `PickerPanel` and `SnippetEditorWindow`. |
+| `WindowPlacement` | `UI/Picker/WindowPlacement.swift:28-108` | Pure `CGRect`/`CGPoint` geometry (screen-clamping, picker/editor side-by-side layout) — no live `NSWindow` dependency, shared by `PickerPanel` and the editor panels. |
 | `ExpandingIconButton` | `UI/Components/ExpandingIconButton.swift:63-125` | Reusable hover-expanding icon+label button; every row action and filter chip uses it. |
 
 **`PickerPanel`** is a borderless `.nonactivatingPanel` (`NSPanel`) — AppKit lets such a panel become key (to accept keyboard input) **without** activating its owning app, so `NSWorkspace.frontmostApplication` keeps reporting whatever app the user was in (`UI/Picker/PickerPanel.swift:11-25`). `show(at:)` therefore only calls `orderFrontRegardless()` + `makeKey()`, never `NSApp.activate`/`makeKeyAndOrderFront` (`UI/Picker/PickerPanel.swift:170-175`). This is the mechanism that lets a later synthesized ⌘V land in the previously-frontmost app instead of Clipnest itself.
 
-**`SnippetEditorWindow`** is the deliberate exception: it's a real, titled, activating `NSWindow`, because a `.sheet()` on a non-activating panel can never truly receive key input (documented at `UI/Picker/SnippetEditorWindow.swift:1-27`). It lays itself out beside the picker as a non-overlapping pair via `WindowPlacement.pairLayout`, moving the *picker's* frame (never its size) when needed (`UI/Picker/SnippetEditorWindow.swift:144-157`; `UI/Picker/WindowPlacement.swift:70-107`).
+**`SnippetEditorWindow`** and **`ItemEditorWindow`** are separate titled panels rather than `.sheet()`s on the picker (a sheet on the picker can never receive key input — `UI/Picker/SnippetEditorWindow.swift:1-27`). Both subclass `EditorPanel` (`UI/Picker/EditorPanel.swift`), which is itself `.nonactivatingPanel`: the editor becomes key and takes typed input while the user's app stays frontmost. They must never activate Clipnest — the earlier activating versions left Clipnest frontmost (the next pick failed the paste-target check) or, via the `.regular`↔`.accessory` policy flip, deactivated the app after the picker was re-keyed, leaving it deaf to the keyboard (T-EDIT19/T-EDIT20). On close, `PickerPanel.rekeyAfterEditorClose` hands key back to the picker one run-loop turn later. The editors lay themselves out beside the picker as a non-overlapping pair via `WindowPlacement.pairLayout`, moving the *picker's* frame (never its size) when needed (`positionRelativeToPicker` in `UI/Picker/NSWindow+PickerPlacement.swift`; `UI/Picker/WindowPlacement.swift`).
 
 **`PickerViewModel`** is the busiest type in the App target. It owns:
 - Two independent windowed query pipelines (`rows: [ClipItem]` for History/Pinned, `snippetRows: [Snippet]` for Snippets), each with its own paging (`pageSize = 75`, `UI/Picker/PickerViewModel.swift:174`), 400ms search debounce (`UI/Picker/PickerViewModel.swift:180`), and a generation counter guaranteeing only the most-recently-started query can ever land in published state — as of the review #6 DRY follow-up, that paging/generation state is no longer duplicated per pipeline: it lives once in `PagedQuery<Element>` (`PagedQuery.generation`/`beginNewGeneration()`, `UI/Picker/PagedQuery.swift:73, 111-117`), and `PickerViewModel` just holds one instance per pipeline, `rowsQuery`/`snippetsQuery` (`UI/Picker/PickerViewModel.swift:365-366`).

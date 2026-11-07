@@ -59,6 +59,7 @@ Clipnest is a free, open-source, native menu-bar app for macOS and, since 1.0, L
 - **Instant search** — start typing to filter your entire copy-paste history in real time, with matches highlighted (**⌘F** to jump back to the search field).
 - **Type filters** — narrow the list to just text, images, files, or links with one click.
 - **Tabs** — **History**, **Pinned**, and **Snippets**, switchable with **⌘1** / **⌘2** / **⌘3**.
+- **Edit a copied item** — click the pencil on a text, rich text, or link row (or right-click → **Edit**) to fix it in a small editor with **Bold** / **Italic** / **Underline**. **Save** replaces the entry in place, keeping its position and pin; if it's what's on your clipboard, the clipboard gets the edited version too (no extra history entry). If the item has formatting the editor can't keep, Clipnest warns first ("Some formatting in this item can't be kept."). Images with recognized text get **Edit Recognized Text**; files can't be edited.
 - **Hover previews** — hover an item (or, with **Settings -> General -> Show preview when selecting with the keyboard** on, arrow to it) and a popover shows the full content: the image at up to 40% of screen width (with any recognized text shown below it), the full scrollable text (loaded in chunks for huge clips), or a file's name, size, and path.
 {: .detail-list}
 
@@ -199,7 +200,7 @@ Everything about how Clipnest behaves lives in one Settings window (**⌘,**), a
 
 </div>
 
-Arrows to move, Return to paste, Esc to dismiss, ⌘F to search, ⌘P to pin, ⌘⌫ to delete, ⌘1/2/3 for tabs, ⌘, for Settings. Both global hotkeys (⌥⌘V and ⌥⌘E) are rebindable — see [Usage]({{ '/usage/' | relative_url }}) for the full shortcut reference.
+Arrows to move, Return to paste, Esc to dismiss, ⌘F to search, ⌘P to pin, ⌘⌫ to delete, ⌘1/2/3 for tabs, ⌘E to edit an item or snippet, ⌘, for Settings. Both global hotkeys (⌥⌘V and ⌥⌘E) are rebindable — see [Usage]({{ '/usage/' | relative_url }}) for the full shortcut reference.
 
 </div>
 
@@ -252,6 +253,7 @@ Everything stays on your computer — no servers, no sync, no telemetry, no acco
 - **Auto-paste permission.** Auto-paste needs a one-time grant that adds you to a dedicated `clipnest-input` group, which can create a virtual keyboard and nothing else. **Log out and back in once after granting it**; until then Clipnest copies your choice and you press Ctrl+V yourself.
 - **Terminals.** Pasting into GNOME Terminal and other VTE terminals uses Ctrl+Shift+V automatically.
 - **Password managers.** Copies marked as secret (`x-kde-passwordManagerHint`, used by KeePassXC and others) are never stored. On Wayland, Clipnest can't tell which app made a copy, so Settings → Apps exclusions apply only to X11/XWayland apps; the secret marker works everywhere.
+- **Editing an item.** The Bold / Italic / Underline buttons act on the current selection only, so select text first (on the Mac an empty-selection press applies to what you type next). The editor handles bold, italic, underline, colour, font family and font size; anything else triggers the formatting warning on save. GTK has no custom accessibility action, so Edit is a labelled button and context-menu entry.
 - **Ubuntu 22.04** ships GTK 4.6, which has an upstream clipboard bug that can, rarely, make Clipnest quit. It's fixed in GTK 4.10+ (Ubuntu 24.04). Your history is never affected.
 {: .detail-list}
 

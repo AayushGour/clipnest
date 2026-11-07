@@ -162,6 +162,28 @@ Press **⌘⌫** (macOS) or **Ctrl+Delete** (Linux) — plain Delete/Backspace n
 
 Choose **Pause Capture** from the menu-bar icon (Linux: the tray icon), or switch on **Pause clipboard capture** in **Settings → General**, to stop Clipnest saving what you copy. While capture is paused the status icon shows it: dimmed with a pause mark (macOS menu bar; Linux tray). On macOS VoiceOver reads it as "Clipnest — capture paused"; on Linux the tray tooltip reads "Capture paused — copies are not being saved". Pause persists across relaunch, and pausing or resuming from Settings updates the icon too. Choose **Pause Capture** again to resume.
 
+### Editing an item
+
+Fix a typo, trim a copy, or add formatting without pasting it somewhere else first. Click the pencil icon on a row, or right-click → **Edit**. Or highlight a row and press **⌘E** (Linux: **Ctrl+E**); on the Snippets tab this edits the highlighted snippet. It does nothing on files and on images without recognized text. (With VoiceOver, use the row's **Edit** action.) It works on **text**, **rich text** and **links**; **files** have no Edit action.
+
+- A small editor opens (beside the picker on the Mac; on Linux GNOME decides where the window goes). One editor handles all three kinds, with **Bold**, **Italic** and **Underline** buttons. On the Mac, pressing a button with nothing selected applies it to what you type next. On Linux, select text first; the buttons do nothing with an empty selection.
+- **Save** replaces the entry in place: it keeps its place in the list and stays pinned if it was. **Cancel** changes nothing. Save is disabled while the editor is empty.
+- Adding formatting to plain text turns it into rich text. A link that is still a single URL stays a link; if it picks up formatting, or stops being one URL, it becomes rich text or plain text. Rich text stays rich text even if you remove all of its formatting.
+- If the item contains formatting the editor can't represent, Clipnest warns "Some formatting in this item can't be kept." when you save. Choose **Save Anyway** or **Go Back**. The same warning appears when a rich item's stored formatting is missing or unreadable (the editor then opens its plain text). Nothing is warned about when the item survives the round trip untouched. On the Mac only RTF formatting is checked (RTFD or HTML-only sources aren't flagged), and a rich item over 4 MiB opens as plain text with the warning. The Linux editor handles bold, italic, underline, colour, font family and font size; anything else (tables, lists, images) triggers the warning.
+- If your edit makes the item identical to another entry, the two are merged into one: it takes the edited item's spot and is pinned if either was.
+- If the item you edited is what's on the clipboard right now, Save also puts the edited version on the clipboard, without adding a history entry. If something else is on the clipboard, it's left alone. Either way, pasting from Clipnest gives you the edited version.
+- If the item was deleted while you were editing (for example by Clear History), Save shows "This item no longer exists." and the editor stays open so you can copy your text out.
+
+**Using the editor from the keyboard.** (The snippet editor follows the same rules — see [Keyboard in the snippet editor](#creating-a-snippet).) The editor works without a mouse, including with VoiceOver (macOS) or Orca (Linux). It opens with the cursor in the text.
+
+- **Tab / Shift+Tab** move between the controls and wrap around: Bold, Italic, Underline, the text, Cancel, Save. Recognized-text editing has no formatting buttons. A disabled Save (empty text) is skipped. The focused control shows a focus ring. On the Mac this works even with System Settings → Keyboard → "Keyboard navigation" off.
+- Tab does **not** type a tab character in the text. To type one, press **⌥Tab** (Linux: **Ctrl+Tab**).
+- **Space** presses the focused button. **Return** saves when the cursor is not in the text (in the text it starts a new line). On Linux, Return on a focused button presses that button instead. **⌘Return** (Linux **Ctrl+Return**) saves from anywhere. **Esc** cancels from anywhere.
+- **⌘B / ⌘I / ⌘U** (Linux **Ctrl+B / I / U**) toggle bold, italic and underline in the text. The three buttons show as pressed when the selection already has that style, and their tooltips name the shortcut.
+- The "can't be kept" warning appears in the editor: **Go Back** gets focus first, **Esc** is Go Back, and there is no default button, so Return presses whichever of Go Back / Save Anyway has focus. Error messages such as "This item no longer exists." are announced by VoiceOver on the Mac (Orca does not announce them on Linux yet; the message is shown in the editor).
+
+For an **image with recognized text**, the row's action reads **Edit Recognized Text**. It opens the same popup with no formatting buttons and edits only the recognized text, so search finds your correction. The image itself is never changed, and images without recognized text have no Edit action.
+
 ### Hovering for a full preview
 
 Hover your pointer over any row and a preview panel appears beside the picker after a brief pause. To get the same preview while moving through the list with the arrow keys, turn on **"Show preview when selecting with the keyboard"** in **Settings -> General** (off by default). A row under the pointer always takes priority over the keyboard-selected one:
@@ -180,6 +202,7 @@ Once an image has recognized text:
 - It becomes part of that item's searchable content, alongside everything else.
 - **⌥Return** pastes the recognized text as plain text instead of the image (plain **Return** still pastes the image itself).
 - Right-click an image row → **Copy Recognized Text** copies just the text to your clipboard without dismissing the picker.
+- Right-click an image row → **Edit Recognized Text** (or click the pencil) lets you correct the recognized text; see [Editing an item](#editing-an-item).
 - **Settings → History** also has a one-off **Recognize Text in Existing Images** button that runs recognition over images you captured before turning the toggle on — it doesn't run automatically on old items otherwise.
 
 <div class="notice" markdown="1">
@@ -205,6 +228,12 @@ Snippets are text you write yourself — a signature, a boilerplate reply, a she
 - From any item on the History/Pinned tabs, press **⌘S** (or right-click → **Save as Snippet**) to open the editor with the Body already filled in from that clip — you just add a Tag. (This only works for text and link items.)
 
 A small editor window opens beside the picker. Fill in the Tag and Body and click **Save** (or Cancel to discard). Both fields are required.
+
+**Keyboard in the snippet editor.** It works without a mouse, including with VoiceOver or Orca (the fields are labelled **Tag** and **Body**), and follows the same rules as the item editor above. The cursor starts in the Tag.
+
+- **Tab / Shift+Tab** move between Tag, Body, Cancel and Save and wrap around; a disabled Save (empty Tag or Body) is skipped. The focused control shows a focus ring, also on the Mac with "Keyboard navigation" off.
+- Tab does **not** type a tab character in the Body. To type one, press **⌥Tab** (Linux: **Ctrl+Tab**).
+- **Return** in the Tag saves (when both fields are filled in); in the Body it starts a new line. **Space** presses the focused button; on a focused button Return presses that button. **⌘Return** (Linux **Ctrl+Return**) saves from anywhere. **Esc** cancels from anywhere.
 
 ### Editing or deleting a snippet
 
@@ -297,6 +326,7 @@ Opening Settings briefly shows a Dock icon while that window is focused — Clip
 | Focus the search field | `⌘F` | `Ctrl+F` |
 | Pin / unpin highlighted item | `⌘P` | `Ctrl+P` |
 | Save highlighted item as a snippet | `⌘S` | `Ctrl+S` |
+| Edit highlighted item / snippet | `⌘E` | `Ctrl+E` |
 | New snippet *(Snippets tab)* | `⌘N` | `Ctrl+N` |
 | Edit highlighted snippet *(Snippets tab)* | `⌘E` | `Ctrl+Shift+E` |
 | Next / previous type filter *(History, Pinned)* | `⌘]` / `⌘[` | `Ctrl+]` / `Ctrl+[` |
@@ -307,6 +337,9 @@ Opening Settings briefly shows a Dock icon while that window is focused — Clip
 | Switch to Snippets tab | `⌘3` | `Ctrl+3` |
 | Open Settings | `⌘,` | `Ctrl+,` |
 | Close the picker | `Esc` (or the × button at the right of the header) | `Esc` (or the × button) |
+| *In the item or snippet editor:* save / cancel | `⌘Return` / `Esc` | `Ctrl+Return` / `Esc` |
+| *In the item or snippet editor:* type a tab character | `⌥Tab` | `Ctrl+Tab` |
+| *In the editor:* bold / italic / underline | `⌘B` / `⌘I` / `⌘U` | `Ctrl+B` / `Ctrl+I` / `Ctrl+U` |
 
 The two **global** shortcuts above — **Open/toggle the picker** and **Expand a snippet by Tag** — are rebindable from **Settings → Shortcuts** (**⌘,**): click a shortcut field and press your preferred key combination; it takes effect immediately (see [Settings window](#8-settings-window)). The shortcuts *inside* the picker (search, pin, delete, switch tabs, and so on, listed in the table above) are fixed and aren't currently customizable.
 

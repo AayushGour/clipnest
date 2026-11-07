@@ -322,6 +322,7 @@ extension PickerWindow {
   private static func iconName(for action: ItemRowAction) -> String {
     switch action {
     case .togglePin: return "view-pin"
+    case .edit, .editRecognizedText: return "document-edit"
     case .saveAsSnippet: return "list-add"
     case .copyRecognizedText: return "edit-find"
     case .delete: return "edit-delete"
@@ -389,7 +390,10 @@ extension PickerWindow {
   /// (including a change GTK itself didn't originate, e.g. arrow-key
   /// navigation, which mutates `viewModel` directly — see
   /// `PickerWindow+Keyboard.swift`).
-  func syncListBoxSelection(toIndex index: Int?) {
+  ///
+  /// `scroll: false` re-applies the highlight only (GTK drops it when the
+  /// rows are rebuilt) without moving the user's scroll position.
+  func syncListBoxSelection(toIndex index: Int?, scroll: Bool = true) {
     guard let index else {
       pendingScrollRowIndex = nil
       gtk_list_box_unselect_all(listBox)
@@ -397,6 +401,7 @@ extension PickerWindow {
     }
     guard let row = gtk_list_box_get_row_at_index(listBox, index.gtkInt32) else { return }
     gtk_list_box_select_row(listBox, row)
+    guard scroll else { return }
     // T-KBSCROLL1: arrow keys move the selection through the view model while
     // keyboard focus stays in the search entry, so GTK never scrolls the row
     // into view itself. Every selection change (arrow keys, wrap-around, a

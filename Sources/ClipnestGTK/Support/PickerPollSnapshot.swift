@@ -118,6 +118,22 @@ public enum PickerPollAspect: Equatable, Sendable {
 }
 
 extension PickerPollSnapshot {
+  /// Whether the list's selection highlight must be (re)applied. A rebuilt
+  /// list (`.rows`/`.snippets`) drops GTK's own selection, so it must be
+  /// re-applied even when the view model's selected id did not change —
+  /// e.g. after an item edit, where the same item keeps its id.
+  public static func needsSelectionSync(aspects: Set<PickerPollAspect>) -> Bool {
+    !aspects.isDisjoint(with: [.selection, .rows, .snippets])
+  }
+
+  /// Whether re-applying the selection should also scroll it into view. A
+  /// rows-only change that kept the same tab and search text (pagination
+  /// append, a capture landing, an edit-save rebuild) must NOT move the
+  /// user's scroll position; a selection change or a tab/search change must.
+  public static func needsScroll(aspects: Set<PickerPollAspect>, canAppend: Bool) -> Bool {
+    aspects.contains(.selection) || !canAppend
+  }
+
   /// Which aspects differ between `old` and `new` — the poll loop's entire
   /// decision of what to redraw. Comparing `rows`/`snippetRows` by full
   /// array equality is intentional and cheap at this scale: `PickerViewModel

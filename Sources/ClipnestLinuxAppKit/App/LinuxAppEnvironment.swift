@@ -125,7 +125,7 @@ final class LinuxAppEnvironment {
   /// second reader, in `ClipnestLinuxAppKit` alongside this file — the
   /// existing source of truth, so `--version` never grows a second
   /// hardcoded copy of the version string.
-  nonisolated static let installedVersion = "1.6.0"
+  nonisolated static let installedVersion = "1.7.0"
 
   /// Resolves this process's own absolute executable path for
   /// `AutostartDesktopFile.setEnabled(_:executablePath:)`'s `.desktop`
@@ -436,6 +436,25 @@ final class LinuxAppEnvironment {
       monitor?.resume()
     }
 
+    // T-EDIT9: edited text is written back to the clipboard when it still
+    // holds the pre-edit item. The write is awaited for the same timeout as a
+    // paste (`.writeBeforeDismiss`) because mutter can drop it silently; the
+    // monitor ignores our own write so it is not re-captured as a new entry.
+    let editCoordinator = ItemEditCoordinator(
+      clipStore: clipStore, blobStore: blobStore, pasteboard: sharedWriter,
+      pasteboardReader: pasteboardReader,
+      readClipboardPayload: {
+        pasteboardReader.pullRawPayload(
+          from: LinuxPasteboard(isOwnedByThisProcess: { sharedWriter.isOwnedByThisProcess }))
+      },
+      suppressOwnPasteboardWrite: { [weak monitor] changeCount in
+        monitor?.ignore(changeCount: changeCount)
+      },
+      writeConfirmationTimeout: PasteDismissOrdering.defaultConfirmationTimeout)
+    let itemEditPresenter = LinuxItemEditPresenter(
+      coordinator: editCoordinator,
+      window: ItemEditorWindow(blobFromRuns: { LinuxEditableRichText.blob(from: $0) }))
+
     let viewModel = PickerViewModel(
       clipStore: clipStore, snippetStore: snippetStore, pasteboard: sharedWriter,
       blobStore: blobStore, paster: paster, frontmostAppTracker: frontmostAppTracker,
@@ -446,6 +465,9 @@ final class LinuxAppEnvironment {
       showPreviewOnKeyboardSelection: { [settingsStore] in
         settingsStore.showPreviewOnKeyboardSelection
       },
+      // T-EDIT9: required seam; the presenter's view model + picker window
+      // are assigned below once they exist.
+      presentItemEditor: { [itemEditPresenter] mode in itemEditPresenter.present(mode) },
       // T-RT2: lets an already-open picker re-query itself when SOMETHING
       // ELSE mutates this store — a Settings "Clear All History…", or
       // background retention — without either of those call sites needing
@@ -489,6 +511,8 @@ final class LinuxAppEnvironment {
     // routed bug report's one-time "copied — press Ctrl+V" notice only for
     // the former, only on `.clipboardOnly`, only once per process.
     viewModel.dismiss = { [weak pickerWindow] in pickerWindow?.dismissAfterPasteAttempt() }
+    itemEditPresenter.viewModel = viewModel
+    itemEditPresenter.pickerWindow = pickerWindow
     viewModel.suppressOwnPasteboardWrite = { [weak monitor] changeCount in
       monitor?.ignore(changeCount: changeCount)
     }

@@ -195,11 +195,12 @@ struct PickerCommandShortcutTests {
       character: character, command: command, option: option, control: control, shift: shift)
   }
 
-  @Test("the four chords")
+  @Test("the three chords")
   func chords() {
     #expect(command("]") == .nextFilter)
     #expect(command("[") == .previousFilter)
-    #expect(command("e") == .editSnippet)
+    // ⌘E (edit) is handled by `PickerView` directly, not this table.
+    #expect(command("e") == nil)
     #expect(command("y") == .togglePreview)
   }
 
