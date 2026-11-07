@@ -37,7 +37,7 @@ import Testing
       #expect(!Rich.hasFormatting(loaded.attributed))
     }
 
-    @Test func boldRangeMakesHasFormattingTrue_removingItMakesItFalse() {
+    @Test func boldRangeMakesHasFormattingTrueAndRemovingItMakesItFalse() {
       let s = plain("hello world")
       Rich.toggle(.bold, in: s, range: NSRange(location: 0, length: 5))
       #expect(Rich.hasFormatting(s))
